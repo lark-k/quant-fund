@@ -1,0 +1,36 @@
+:root {
+  color-scheme: dark;
+  --bg: #071015;
+  --bg-2: #0a141a;
+  --surface: #101b22;
+  --surface-2: #13222b;
+  --surface-3: #172a34;
+  --line: #233842;
+  --line-soft: #1a2b34;
+  --text: #dce8ee;
+  --muted: #7f93a1;
+  --muted-2: #5f7280;
+  --blue: #3c9cff;
+  --cyan: #21c7d9;
+  --green: #2fd17c;
+  --red: #ff514b;
+  --amber: #ffb84d;
+  --purple: #8c7cff;
+  --radius: 8px;
+  --shadow: 0 18px 42px rgba(0, 0, 0, 0.28);
+}
+
+.el-popper,
+.el-select__popper,
+.el-picker__popper {
+  --el-bg-color-overlay: #101b22;
+  --el-border-color-light: #233842;
+  --el-text-color-primary: #dce8ee;
+  --el-text-color-regular: #aebdc6;
+}
+
+.el-message {
+  --el-message-bg-color: #101b22;
+  --el-message-border-color: #2c4654;
+  --el-message-text-color: #dce8ee;
+}

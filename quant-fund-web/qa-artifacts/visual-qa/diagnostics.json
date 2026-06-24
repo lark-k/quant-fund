@@ -1,0 +1,436 @@
+{
+  "baseUrl": "http://127.0.0.1:5176",
+  "capturedAt": "2026-06-24T16:08:05.283Z",
+  "consoleErrors": [],
+  "results": [
+    {
+      "viewport": {
+        "name": "desktop",
+        "width": 1440,
+        "height": 1024
+      },
+      "route": "/dashboard",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\desktop-dashboard.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/dashboard",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "desktop",
+        "width": 1440,
+        "height": 1024
+      },
+      "route": "/holdings",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\desktop-holdings.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/holdings",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "desktop",
+        "width": 1440,
+        "height": 1024
+      },
+      "route": "/holding-edit",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\desktop-holding-edit.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/holding-edit",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "desktop",
+        "width": 1440,
+        "height": 1024
+      },
+      "route": "/fund-detail",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\desktop-fund-detail.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/fund-detail",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "desktop",
+        "width": 1440,
+        "height": 1024
+      },
+      "route": "/ai-analysis",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\desktop-ai-analysis.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/ai-analysis",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "desktop",
+        "width": 1440,
+        "height": 1024
+      },
+      "route": "/profit-analysis",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\desktop-profit-analysis.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/profit-analysis",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "desktop",
+        "width": 1440,
+        "height": 1024
+      },
+      "route": "/profit-calendar",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\desktop-profit-calendar.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/profit-calendar",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "desktop",
+        "width": 1440,
+        "height": 1024
+      },
+      "route": "/trades",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\desktop-trades.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/trades",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "desktop",
+        "width": 1440,
+        "height": 1024
+      },
+      "route": "/strategy-config",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\desktop-strategy-config.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/strategy-config",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "desktop",
+        "width": 1440,
+        "height": 1024
+      },
+      "route": "/system-config",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\desktop-system-config.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/system-config",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "desktop",
+        "width": 1440,
+        "height": 1024
+      },
+      "route": "/profile",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\desktop-profile.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/profile",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "tablet",
+        "width": 1024,
+        "height": 900
+      },
+      "route": "/dashboard",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\tablet-dashboard.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/dashboard",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "tablet",
+        "width": 1024,
+        "height": 900
+      },
+      "route": "/holdings",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\tablet-holdings.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/holdings",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "tablet",
+        "width": 1024,
+        "height": 900
+      },
+      "route": "/holding-edit",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\tablet-holding-edit.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/holding-edit",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "tablet",
+        "width": 1024,
+        "height": 900
+      },
+      "route": "/fund-detail",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\tablet-fund-detail.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/fund-detail",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "tablet",
+        "width": 1024,
+        "height": 900
+      },
+      "route": "/ai-analysis",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\tablet-ai-analysis.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/ai-analysis",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "tablet",
+        "width": 1024,
+        "height": 900
+      },
+      "route": "/profit-analysis",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\tablet-profit-analysis.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/profit-analysis",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "tablet",
+        "width": 1024,
+        "height": 900
+      },
+      "route": "/profit-calendar",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\tablet-profit-calendar.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/profit-calendar",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "tablet",
+        "width": 1024,
+        "height": 900
+      },
+      "route": "/trades",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\tablet-trades.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/trades",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "tablet",
+        "width": 1024,
+        "height": 900
+      },
+      "route": "/strategy-config",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\tablet-strategy-config.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/strategy-config",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "tablet",
+        "width": 1024,
+        "height": 900
+      },
+      "route": "/system-config",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\tablet-system-config.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/system-config",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "tablet",
+        "width": 1024,
+        "height": 900
+      },
+      "route": "/profile",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\tablet-profile.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/profile",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "mobile",
+        "width": 390,
+        "height": 844
+      },
+      "route": "/dashboard",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\mobile-dashboard.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/dashboard",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "mobile",
+        "width": 390,
+        "height": 844
+      },
+      "route": "/holdings",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\mobile-holdings.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/holdings",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "mobile",
+        "width": 390,
+        "height": 844
+      },
+      "route": "/holding-edit",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\mobile-holding-edit.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/holding-edit",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "mobile",
+        "width": 390,
+        "height": 844
+      },
+      "route": "/fund-detail",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\mobile-fund-detail.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/fund-detail",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "mobile",
+        "width": 390,
+        "height": 844
+      },
+      "route": "/ai-analysis",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\mobile-ai-analysis.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/ai-analysis",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "mobile",
+        "width": 390,
+        "height": 844
+      },
+      "route": "/profit-analysis",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\mobile-profit-analysis.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/profit-analysis",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "mobile",
+        "width": 390,
+        "height": 844
+      },
+      "route": "/profit-calendar",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\mobile-profit-calendar.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/profit-calendar",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "mobile",
+        "width": 390,
+        "height": 844
+      },
+      "route": "/trades",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\mobile-trades.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/trades",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "mobile",
+        "width": 390,
+        "height": 844
+      },
+      "route": "/strategy-config",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\mobile-strategy-config.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/strategy-config",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "mobile",
+        "width": 390,
+        "height": 844
+      },
+      "route": "/system-config",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\mobile-system-config.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/system-config",
+      "horizontalOverflow": 0,
+      "truncations": []
+    },
+    {
+      "viewport": {
+        "name": "mobile",
+        "width": 390,
+        "height": 844
+      },
+      "route": "/profile",
+      "screenshotPath": "D:\\code\\personal\\quant-fund\\quant-fund-web\\qa-artifacts\\visual-qa\\mobile-profile.png",
+      "title": "QuantFund - AI Fund Quant Dashboard",
+      "url": "/profile",
+      "horizontalOverflow": 0,
+      "truncations": []
+    }
+  ]
+}

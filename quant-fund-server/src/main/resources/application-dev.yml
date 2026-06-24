@@ -1,0 +1,18 @@
+spring:
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: ${QUANTFUND_DB_URL:jdbc:mysql://localhost:3306/quant_fund?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true}
+    username: ${QUANTFUND_DB_USERNAME:root}
+    password: ${QUANTFUND_DB_PASSWORD:root}
+  data:
+    redis:
+      host: ${QUANTFUND_REDIS_HOST:localhost}
+      port: ${QUANTFUND_REDIS_PORT:6379}
+      password: ${QUANTFUND_REDIS_PASSWORD:}
+      database: ${QUANTFUND_REDIS_DATABASE:0}
+      timeout: 5s
+
+logging:
+  level:
+    root: info
+    com.lk.quantfund: debug

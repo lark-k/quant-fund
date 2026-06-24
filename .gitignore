@@ -1,0 +1,30 @@
+# 系统
+.DS_Store
+Thumbs.db
+# IDE
+.idea/
+.vscode/
+*.swp
+# 日志
+*.log
+logs/
+# Java后端
+target/
+build/
+.gradle/
+.m2/
+*.class
+# Vue前端
+node_modules/
+dist/
+.vite/
+.nuxt/
+# 环境敏感
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+# 临时缓存
+tmp/
+.cache/

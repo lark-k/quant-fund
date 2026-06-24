@@ -1,0 +1,77 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /
+
+spring:
+  application:
+    name: QuantFund
+  config:
+    import: optional:file:.env[.properties],optional:file:quant-fund-server/.env[.properties],optional:file:../quant-fund-server/.env[.properties]
+  profiles:
+    active: dev
+  jackson:
+    time-zone: Asia/Shanghai
+    date-format: yyyy-MM-dd HH:mm:ss
+
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      id-type: auto
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+springdoc:
+  api-docs:
+    enabled: true
+    path: /v3/api-docs
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui.html
+
+knife4j:
+  enable: true
+  setting:
+    language: zh_cn
+
+sa-token:
+  token-name: Authorization
+  timeout: 2592000
+  active-timeout: -1
+  is-concurrent: true
+  is-share: false
+  token-style: uuid
+  is-log: false
+
+quantfund:
+  ai:
+    enabled: ${DEEPSEEK_ENABLED:true}
+    mock-enabled: ${DEEPSEEK_MOCK_ENABLED:false}
+    provider: deepseek
+    model: ${DEEPSEEK_MODEL:deepseek-v4-flash}
+    base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
+    api-key: ${DEEPSEEK_API_KEY:sk-851aa1a94fca458489612d5dad13077f}
+    timeout-ms: ${DEEPSEEK_TIMEOUT_MS:15000}
+    max-tokens: ${DEEPSEEK_MAX_TOKENS:3000}
+    reasoning-enabled: ${DEEPSEEK_REASONING_ENABLED:false}
+  fund-data-source:
+    timeout-ms: 5000
+    refresh-interval-seconds: 120
+    manual-refresh-cooldown-seconds: 10
+    mock-fallback-enabled: ${QUANTFUND_FUND_MOCK_FALLBACK_ENABLED:false}
+    east-money-enabled: true
+    east-money-search-url: https://fundsuggest.eastmoney.com/FundSearch/api/FundSearchAPI.ashx
+    east-money-estimate-url: https://fundgz.1234567.com.cn/js/{fundCode}.js
+    east-money-historical-nav-url: https://api.fund.eastmoney.com/f10/lsjz
+    east-money-fund-detail-url: https://fund.eastmoney.com/pingzhongdata/{fundCode}.js
+    east-money-fund-archive-url: https://fundf10.eastmoney.com/FundArchivesDatas.aspx
+    east-money-quote-url: https://push2.eastmoney.com/api/qt/ulist.np/get
+  scheduler:
+    enabled: ${QUANTFUND_SCHEDULER_ENABLED:true}
+    holidays: ${QUANTFUND_TRADING_HOLIDAYS:2026-01-01,2026-02-16,2026-02-17,2026-02-18,2026-02-19,2026-02-20,2026-04-06,2026-05-01,2026-05-04,2026-05-05,2026-06-19,2026-09-25,2026-10-01,2026-10-02,2026-10-05,2026-10-06,2026-10-07}
+    batch-delay-max-millis: ${QUANTFUND_SCHEDULER_BATCH_DELAY_MAX_MILLIS:800}
+    ai-focus-holding-limit: ${QUANTFUND_SCHEDULER_AI_FOCUS_HOLDING_LIMIT:200}

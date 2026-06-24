@@ -1,0 +1,156 @@
+import { http, USE_MOCK } from './http'
+import { mockApi } from './mock'
+import type {
+  AiAnalysisReport,
+  DashboardOverview,
+  DataSourceConfig,
+  DataSourceConfigRequest,
+  ApiCallLog,
+  ApiCallLogQuery,
+  FundBasicInfo,
+  FundEstimate,
+  FundHolding,
+  FundNavPoint,
+  FundPeerRank,
+  FundSearchResult,
+  FundSearchMode,
+  FundStockHolding,
+  FundTheme,
+  HoldingCreateRequest,
+  HoldingUpdateRequest,
+  MarketIndex,
+  OperationLog,
+  OperationLogQuery,
+  PageResponse,
+  PortfolioAccount,
+  PortfolioAccountRequest,
+  ProfitAnalysis,
+  ProfitCalendar,
+  RiskProfile,
+  RiskProfileRequest,
+  StrategyConfig,
+  StrategyConfigRequest,
+  StrategySignal,
+  TradeRecord,
+  TradeRecordRequest
+} from '@/types/domain'
+
+export const quantApi = {
+  dashboard(): Promise<DashboardOverview> {
+    return USE_MOCK ? mockApi.dashboard() : http.get('/dashboard/overview')
+  },
+  marketReadings(): Promise<MarketIndex[]> {
+    return USE_MOCK ? mockApi.marketReadings() : http.get('/dashboard/market-readings')
+  },
+  holdings(): Promise<FundHolding[]> {
+    return USE_MOCK ? mockApi.holdings() : http.get('/holdings')
+  },
+  portfolios(): Promise<PortfolioAccount[]> {
+    return USE_MOCK ? mockApi.portfolios() : http.get('/portfolios')
+  },
+  createPortfolio(request: PortfolioAccountRequest): Promise<PortfolioAccount> {
+    return USE_MOCK ? mockApi.createPortfolio(request) : http.post('/portfolios', request)
+  },
+  createHolding(request: HoldingCreateRequest): Promise<FundHolding> {
+    return USE_MOCK ? mockApi.createHolding(request) : http.post('/holdings', request)
+  },
+  updateHolding(id: number, request: HoldingUpdateRequest): Promise<FundHolding> {
+    return USE_MOCK ? mockApi.updateHolding(id, request) : http.put(`/holdings/${id}`, request)
+  },
+  deleteHolding(id: number): Promise<void> {
+    return USE_MOCK ? mockApi.deleteHolding(id) : http.delete(`/holdings/${id}`)
+  },
+  recalculateHolding(id: number): Promise<FundHolding> {
+    return USE_MOCK ? mockApi.recalculateHolding(id) : http.post(`/holdings/${id}/recalculate`)
+  },
+  syncOfficialNav(): Promise<FundHolding[]> {
+    return USE_MOCK ? mockApi.syncOfficialNav() : http.post('/holdings/sync-official-nav')
+  },
+  strategies(): Promise<StrategySignal[]> {
+    return USE_MOCK ? mockApi.strategies() : http.get('/strategies/signals')
+  },
+  aiHistory(): Promise<AiAnalysisReport[]> {
+    return USE_MOCK ? mockApi.aiHistory() : http.get('/ai-analysis/history')
+  },
+  profit(): Promise<ProfitAnalysis> {
+    return USE_MOCK ? mockApi.profit() : http.get('/analytics/profit')
+  },
+  calendar(): Promise<ProfitCalendar> {
+    return USE_MOCK ? mockApi.calendar() : http.get('/analytics/profit-calendar')
+  },
+  trades(): Promise<TradeRecord[]> {
+    return USE_MOCK ? mockApi.trades() : http.get('/trades')
+  },
+  dataSources(): Promise<DataSourceConfig[]> {
+    return USE_MOCK ? mockApi.dataSources() : http.get('/system/data-sources')
+  },
+  saveDataSource(request: DataSourceConfigRequest): Promise<DataSourceConfig> {
+    return USE_MOCK ? mockApi.saveDataSource(request) : http.post('/system/data-sources', request)
+  },
+  updateDataSource(id: number, request: DataSourceConfigRequest): Promise<DataSourceConfig> {
+    return USE_MOCK ? mockApi.updateDataSource(id, request) : http.put(`/system/data-sources/${id}`, request)
+  },
+  operationLogs(query: OperationLogQuery = {}): Promise<PageResponse<OperationLog>> {
+    return USE_MOCK ? mockApi.operationLogs(query) : http.get('/system/operation-logs', { params: query })
+  },
+  apiCallLogs(query: ApiCallLogQuery = {}): Promise<PageResponse<ApiCallLog>> {
+    return USE_MOCK ? mockApi.apiCallLogs(query) : http.get('/system/api-call-logs', { params: query })
+  },
+  strategyConfigs(): Promise<StrategyConfig[]> {
+    return USE_MOCK ? mockApi.strategyConfigs() : http.get('/strategies/configs')
+  },
+  riskProfile(): Promise<RiskProfile> {
+    return USE_MOCK ? mockApi.riskProfile() : http.get('/strategies/risk-profile')
+  },
+  saveRiskProfile(request: RiskProfileRequest): Promise<RiskProfile> {
+    return USE_MOCK ? mockApi.saveRiskProfile(request) : http.put('/strategies/risk-profile', request)
+  },
+  saveStrategyConfig(request: StrategyConfigRequest): Promise<StrategyConfig> {
+    return USE_MOCK ? mockApi.saveStrategyConfig(request) : http.put('/strategies/configs', request)
+  },
+  fundBasicInfo(fundCode: string): Promise<FundBasicInfo> {
+    return USE_MOCK ? mockApi.fundBasicInfo(fundCode) : http.get(`/funds/${fundCode}`)
+  },
+  searchFunds(keyword: string, mode: FundSearchMode = 'FUZZY'): Promise<FundSearchResult[]> {
+    return USE_MOCK ? mockApi.searchFunds(keyword, mode) : http.get('/funds/search', { params: { keyword, mode } })
+  },
+  async fundNav(fundCode: string): Promise<FundNavPoint[]> {
+    if (USE_MOCK) return mockApi.fundNav(fundCode)
+    type RawFundNavPoint = FundNavPoint & {
+      navDate?: string
+      unitNav?: number
+      sourceName?: string
+    }
+    const points = await http.get(`/funds/${fundCode}/nav`) as unknown as RawFundNavPoint[]
+    return points.map((point) => ({
+      ...point,
+      date: point.date || point.navDate || '',
+      nav: point.nav ?? point.unitNav ?? 0,
+      accumulatedNav: point.accumulatedNav ?? 0,
+      dailyGrowthRate: point.dailyGrowthRate ?? 0
+    })).filter((point) => point.date && point.nav > 0)
+  },
+  fundEstimate(fundCode: string): Promise<FundEstimate> {
+    return USE_MOCK
+      ? mockApi.refreshEstimate(fundCode)
+      : http.get(`/funds/${fundCode}/estimate`, { validateStatus: (status) => status < 500 })
+  },
+  heavyStocks(fundCode: string): Promise<FundStockHolding[]> {
+    return USE_MOCK ? mockApi.heavyStocks(fundCode) : http.get(`/funds/${fundCode}/heavy-stocks`)
+  },
+  themes(fundCode: string): Promise<FundTheme[]> {
+    return USE_MOCK ? mockApi.themes(fundCode) : http.get(`/funds/${fundCode}/themes`)
+  },
+  peerRank(fundCode: string): Promise<FundPeerRank> {
+    return USE_MOCK ? mockApi.peerRank(fundCode) : http.get(`/funds/${fundCode}/peer-rank`)
+  },
+  refreshEstimate(fundCode: string): Promise<FundEstimate> {
+    return USE_MOCK ? mockApi.refreshEstimate(fundCode) : http.post(`/funds/${fundCode}/refresh-estimate`)
+  },
+  generateAiAnalysis(holdingId: number): Promise<AiAnalysisReport> {
+    return USE_MOCK ? mockApi.generateAiAnalysis(holdingId) : http.post(`/ai-analysis/holdings/${holdingId}`)
+  },
+  createTrade(request: TradeRecordRequest): Promise<TradeRecord> {
+    return USE_MOCK ? mockApi.createTrade(request) : http.post('/trades', request)
+  }
+}
