@@ -24,11 +24,17 @@ import com.lk.quantfund.mapper.FundInfoMapper;
 import com.lk.quantfund.mapper.FundNavDailyMapper;
 import com.lk.quantfund.scheduler.TradingCalendarService;
 import com.lk.quantfund.service.FundQueryService;
+import com.lk.quantfund.service.MarketDataService;
+import com.lk.quantfund.vo.market.MarketIndexDailyVO;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.function.Function;
 import org.slf4j.Logger;
@@ -51,6 +57,7 @@ public class FundQueryServiceImpl implements FundQueryService {
     private final FundNavDailyMapper fundNavDailyMapper;
     private final FundEstimateIntradayMapper fundEstimateIntradayMapper;
     private final TradingCalendarService tradingCalendarService;
+    private final MarketDataService marketDataService;
 
     public FundQueryServiceImpl(List<FundDataSourceAdapter> adapters,
                                 StringRedisTemplate redisTemplate,
@@ -59,7 +66,8 @@ public class FundQueryServiceImpl implements FundQueryService {
                                 FundInfoMapper fundInfoMapper,
                                 FundNavDailyMapper fundNavDailyMapper,
                                 FundEstimateIntradayMapper fundEstimateIntradayMapper,
-                                TradingCalendarService tradingCalendarService) {
+                                TradingCalendarService tradingCalendarService,
+                                MarketDataService marketDataService) {
         this.adapters = adapters.stream()
                 .sorted(Comparator.comparingInt(FundDataSourceAdapter::priority))
                 .toList();
@@ -70,6 +78,7 @@ public class FundQueryServiceImpl implements FundQueryService {
         this.fundNavDailyMapper = fundNavDailyMapper;
         this.fundEstimateIntradayMapper = fundEstimateIntradayMapper;
         this.tradingCalendarService = tradingCalendarService;
+        this.marketDataService = marketDataService;
     }
 
     @Override
@@ -131,7 +140,7 @@ public class FundQueryServiceImpl implements FundQueryService {
                             return result;
                         });
         points.forEach(this::saveNavPoint);
-        return points;
+        return attachIndexReturnRates(points, startDate, endDate);
     }
 
     @Override
@@ -296,6 +305,90 @@ public class FundQueryServiceImpl implements FundQueryService {
         );
     }
 
+    private List<FundNavPointDTO> attachIndexReturnRates(List<FundNavPointDTO> points, LocalDate startDate, LocalDate endDate) {
+        if (points.isEmpty()) {
+            return points;
+        }
+        IndexMatch index = indexMatch(points.getFirst().fundCode());
+        LocalDate actualStart = startDate != null ? startDate : points.stream()
+                .map(FundNavPointDTO::navDate)
+                .min(LocalDate::compareTo)
+                .orElse(LocalDate.now().minusDays(365));
+        LocalDate actualEnd = endDate != null ? endDate : points.stream()
+                .map(FundNavPointDTO::navDate)
+                .max(LocalDate::compareTo)
+                .orElse(LocalDate.now());
+        List<MarketIndexDailyVO> history;
+        try {
+            history = marketDataService.historicalIndex(index.code(), actualStart, actualEnd);
+        } catch (Exception exception) {
+            return points;
+        }
+        if (history.size() < 2 || history.getFirst().closePrice() == null || history.getFirst().closePrice().compareTo(BigDecimal.ZERO) <= 0) {
+            return points;
+        }
+        BigDecimal baseClose = history.getFirst().closePrice();
+        Map<LocalDate, BigDecimal> indexRateByDate = new LinkedHashMap<>();
+        for (MarketIndexDailyVO point : history) {
+            if (point.tradeDate() != null && point.closePrice() != null) {
+                indexRateByDate.put(point.tradeDate(), point.closePrice().subtract(baseClose).multiply(new BigDecimal("100.0000")).divide(baseClose, 4, RoundingMode.HALF_UP));
+            }
+        }
+        return points.stream()
+                .map(point -> new FundNavPointDTO(
+                        point.fundCode(),
+                        point.navDate(),
+                        point.unitNav(),
+                        point.accumulatedNav(),
+                        point.dailyGrowthRate(),
+                        point.sourceName(),
+                        indexRateByDate.get(point.navDate()),
+                        index.code(),
+                        index.name()
+                ))
+                .toList();
+    }
+
+    private IndexMatch indexMatch(String fundCode) {
+        FundInfo info = fundInfoMapper == null || fundCode == null ? null : fundInfoMapper.selectOne(new LambdaQueryWrapper<FundInfo>()
+                .eq(FundInfo::getFundCode, fundCode)
+                .last("LIMIT 1"));
+        String text = "";
+        if (info != null) {
+            text = safe(info.getTrackingIndex()) + safe(info.getFundName()) + safe(info.getFundType());
+        }
+        text += safe(fundCode);
+        if (text.contains("纳斯达克") || text.contains("纳指") || text.contains("NASDAQ") || text.contains("NDX")) {
+            return new IndexMatch("NDX", "纳斯达克");
+        }
+        if (text.contains("标普500") || text.contains("标普") || text.contains("S&P") || text.contains("SPX")) {
+            return new IndexMatch("SPX", "标普500");
+        }
+        if (text.contains("恒生") || text.contains("港股") || text.contains("香港") || text.contains("H股")) {
+            return new IndexMatch("HSI", "恒生指数");
+        }
+        if (text.contains("中证白酒") || text.contains("白酒") || "161725".equals(fundCode)) {
+            return new IndexMatch("399997", "中证白酒");
+        }
+        if (text.contains("电网设备") || text.contains("特高压") || "025833".equals(fundCode)) {
+            return new IndexMatch("931994", "中证电网设备");
+        }
+        if (text.contains("中证500") || text.contains("500")) {
+            return new IndexMatch("000905", "中证500");
+        }
+        if (text.contains("创业板") || text.contains("创业")) {
+            return new IndexMatch("399006", "创业板指");
+        }
+        if (text.contains("上证") && !text.contains("沪深300")) {
+            return new IndexMatch("000001", "上证指数");
+        }
+        return new IndexMatch("000300", "沪深300");
+    }
+
+    private String safe(String value) {
+        return value == null ? "" : value;
+    }
+
     private void saveFundInfo(FundBasicInfoDTO info) {
         FundInfo entity = fundInfoMapper.selectOne(new LambdaQueryWrapper<FundInfo>()
                 .eq(FundInfo::getFundCode, info.fundCode())
@@ -365,5 +458,8 @@ public class FundQueryServiceImpl implements FundQueryService {
         entity.setUpdateTime(now);
         entity.setDeleted(0);
         fundEstimateIntradayMapper.insert(entity);
+    }
+
+    private record IndexMatch(String code, String name) {
     }
 }

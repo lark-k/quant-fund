@@ -1,12 +1,12 @@
 package com.lk.quantfund.service.valuation;
 
 import com.lk.quantfund.datasource.model.FundThemeDTO;
+import com.lk.quantfund.scheduler.MarketType;
+import com.lk.quantfund.scheduler.TradingCalendarService;
 import com.lk.quantfund.service.FundQueryService;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.time.DayOfWeek;
 import java.time.LocalDateTime;
-import java.time.LocalTime;
 import java.util.Comparator;
 import java.util.List;
 import org.springframework.stereotype.Service;
@@ -19,9 +19,11 @@ public class FundValuationService {
     private static final BigDecimal HUNDRED = new BigDecimal("100.0000");
 
     private final FundQueryService fundQueryService;
+    private final TradingCalendarService tradingCalendarService;
 
-    public FundValuationService(FundQueryService fundQueryService) {
+    public FundValuationService(FundQueryService fundQueryService, TradingCalendarService tradingCalendarService) {
         this.fundQueryService = fundQueryService;
+        this.tradingCalendarService = tradingCalendarService;
     }
 
     public FundValuationResult estimate(String fundCode, String fundName, String fundType, BigDecimal fundEstimateRate) {
@@ -145,34 +147,13 @@ public class FundValuationService {
 
     public String marketStatus(String fundName, String fundType) {
         LocalDateTime now = LocalDateTime.now();
-        DayOfWeek day = now.getDayOfWeek();
-        if (day == DayOfWeek.SATURDAY || day == DayOfWeek.SUNDAY) {
-            return "非交易日";
-        }
-        LocalTime time = now.toLocalTime();
-        if (isHongKongTrading(time) && isHongKongRelated(fundName, fundType)) {
-            return "港股交易中";
-        }
-        if (isAStockTrading(time)) {
-            return "A股交易中";
+        if (isHongKongRelated(fundName, fundType)) {
+            return tradingCalendarService.marketSession(MarketType.HONG_KONG, now);
         }
         if (isUsRelated(fundName, fundType)) {
-            return "海外市场参考";
+            return tradingCalendarService.marketSession(MarketType.US, now);
         }
-        if (time.isAfter(LocalTime.of(15, 0)) && isHongKongTrading(time) && isHongKongRelated(fundName, fundType)) {
-            return "港股交易中";
-        }
-        return time.isBefore(LocalTime.of(9, 30)) ? "未开盘" : "已收盘";
-    }
-
-    private boolean isAStockTrading(LocalTime time) {
-        return (!time.isBefore(LocalTime.of(9, 30)) && !time.isAfter(LocalTime.of(11, 30)))
-                || (!time.isBefore(LocalTime.of(13, 0)) && !time.isAfter(LocalTime.of(15, 0)));
-    }
-
-    private boolean isHongKongTrading(LocalTime time) {
-        return (!time.isBefore(LocalTime.of(9, 30)) && time.isBefore(LocalTime.of(12, 0)))
-                || (!time.isBefore(LocalTime.of(13, 0)) && !time.isAfter(LocalTime.of(16, 0)));
+        return tradingCalendarService.marketSession(MarketType.A_SHARE, now);
     }
 
     private boolean isHongKongRelated(String fundName, String fundType) {
@@ -192,11 +173,10 @@ public class FundValuationService {
         if (name.contains("恒生科技")) return "恒生科技";
         if (name.contains("电网设备") || name.contains("特高压")) return "中证电网设备";
         if (name.contains("电网") || name.contains("电力设备")) return "电网设备";
-        if (name.contains("广发远见")) return "光纤/算力租赁/存储芯片";
+        if (name.contains("广发远见")) return "光模块/算力租赁/存储芯片";
         if (name.contains("财通成长") || name.contains("PCB")) return "PCB/CPO";
-        if (name.contains("华夏恒生科技") || name.contains("恒生科技")) return "恒生科技";
         if (name.contains("CPO") || name.contains("光模块")) return "CPO";
-        if (name.contains("光纤") || name.contains("光通信")) return "光纤";
+        if (name.contains("光通信")) return "光通信";
         if (name.contains("算力") || name.contains("租赁")) return "算力租赁";
         if (name.contains("存储") || name.contains("存储芯片")) return "存储芯片";
         if (name.contains("PCB")) return "PCB";

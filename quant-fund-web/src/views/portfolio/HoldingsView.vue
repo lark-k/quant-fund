@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { quantApi } from '@/api/quant'
-import type { FundHolding, FundSearchMode, FundSearchResult, PortfolioAccount } from '@/types/domain'
+import { SIMULATED_TRADE_NOTICE, type ClearHoldingRequest, type FundHolding, type FundSearchMode, type FundSearchResult, type PortfolioAccount } from '@/types/domain'
 import DisclaimerBar from '@/components/common/DisclaimerBar.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import { money, percent, signed, toneClass } from '@/utils/format'
@@ -20,6 +20,14 @@ const loading = ref(false)
 const searching = ref(false)
 const addingCode = ref('')
 const deletingId = ref<number>()
+const clearingId = ref<number>()
+const clearDialogOpen = ref(false)
+const clearTarget = ref<FundHolding>()
+const clearForm = ref<ClearHoldingRequest>({
+  tradeAmount: 0,
+  tradeFee: 0,
+  remark: `清仓自动生成的模拟卖出流水，${SIMULATED_TRADE_NOTICE}`
+})
 const router = useRouter()
 
 const fundTypeFilters = [
@@ -34,9 +42,44 @@ onMounted(loadInitialData)
 
 const filtered = computed(() => holdings.value.filter((item) => {
   const keywordHit = !keyword.value || item.fundName.includes(keyword.value) || item.fundCode.includes(keyword.value)
-  const typeHit = activeType.value === 'ALL' || item.fundType.includes(activeType.value)
+  const typeHit = activeType.value === 'ALL' || holdingMatchesType(item, activeType.value)
   return keywordHit && typeHit
 }))
+
+function holdingMatchesType(item: FundHolding, filterType: string) {
+  return inferHoldingType(item) === filterType
+}
+
+function inferHoldingType(item: FundHolding) {
+  const text = `${item.fundName || ''} ${item.fundType || ''}`.toUpperCase()
+  if (text.includes('ETF')) return 'ETF'
+  if (hasAny(text, ['BOND', 'FIXED_INCOME', '债', '固收', '纯债', '短债', '转债'])) return 'BOND'
+  if (hasAny(text, ['INDEX', '指数', '增强', '联接', '沪深300', '中证', '创业板', '科创板', '恒生', '纳斯达克', '标普'])) return 'INDEX'
+  if (hasAny(text, [
+    'ACTIVE',
+    'MIXED',
+    'QDII',
+    '混合',
+    '股票',
+    '智选',
+    '精选',
+    '成长',
+    '优选',
+    '远见',
+    '价值',
+    '优势',
+    '创新',
+    '核心',
+    '行业',
+    '主题',
+    '灵活配置'
+  ])) return 'ACTIVE'
+  return 'UNKNOWN'
+}
+
+function hasAny(text: string, tokens: string[]) {
+  return tokens.some((token) => text.includes(token.toUpperCase()))
+}
 
 async function loadInitialData() {
   loading.value = true
@@ -86,6 +129,12 @@ function relatedThemeText(theme?: string | null) {
   return theme && theme !== '主动权益' ? theme : '重仓板块待同步'
 }
 
+function updatedBadgeText(date?: string | null) {
+  if (!date) return '已更新'
+  const today = new Date().toISOString().slice(0, 10)
+  return date === today ? '已更新' : `已更新至 ${date.slice(5)}`
+}
+
 function navText(value: number | null | undefined) {
   return value === null || value === undefined ? '--' : value.toFixed(4)
 }
@@ -123,8 +172,10 @@ async function ensureAccount() {
 }
 
 async function addFund(result: FundSearchResult) {
-  if (holdings.value.some((item) => item.fundCode === result.fundCode)) {
-    ElMessage.info('该基金已在自选/持仓中')
+  const existing = holdings.value.find((item) => item.fundCode === result.fundCode)
+  if (existing) {
+    ElMessage.info('该基金已在自选/持仓中，可继续完善持有信息')
+    router.push({ path: '/holding-edit', query: { holdingId: existing.id, fundCode: existing.fundCode } })
     return
   }
   addingCode.value = result.fundCode
@@ -146,14 +197,15 @@ async function addFund(result: FundSearchResult) {
       watchFocus: true
     })
     holdings.value = [saved, ...holdings.value]
-    ElMessage.success('已加入自选/持仓，可继续填写份额、成本或收益')
+    ElMessage.success('已加入持仓，请继续填写持有金额/收益或份额/成本')
+    router.push({ path: '/holding-edit', query: { holdingId: saved.id, fundCode: saved.fundCode } })
   } finally {
     addingCode.value = ''
   }
 }
 
 async function deleteHolding(item: FundHolding) {
-  await ElMessageBox.confirm(`确认删除 ${item.fundName} 的持有记录？`, '删除持仓', {
+  await ElMessageBox.confirm(`确认删除 ${item.fundName} 的持有记录？删除后不再展示该持仓；如只是已经卖完，请使用清仓。`, '删除持仓', {
     type: 'warning',
     confirmButtonText: '删除',
     cancelButtonText: '取消'
@@ -165,6 +217,51 @@ async function deleteHolding(item: FundHolding) {
     ElMessage.success('持仓已删除')
   } finally {
     deletingId.value = undefined
+  }
+}
+
+function clearRemark(tradeFee: number) {
+  const feeText = tradeFee > 0 ? `，手续费 ${tradeFee.toFixed(2)}` : ''
+  return `清仓自动生成的模拟卖出流水${feeText}，${SIMULATED_TRADE_NOTICE}`
+}
+
+function openClearDialog(item: FundHolding) {
+  clearTarget.value = item
+  clearForm.value = {
+    tradeAmount: Number(item.holdingAmount.toFixed(2)),
+    tradeFee: 0,
+    remark: clearRemark(0)
+  }
+  clearDialogOpen.value = true
+}
+
+function syncClearRemark() {
+  clearForm.value.remark = clearRemark(Number(clearForm.value.tradeFee || 0))
+}
+
+async function saveClearHolding() {
+  const item = clearTarget.value
+  if (!item) return
+  const tradeAmount = Number(clearForm.value.tradeAmount)
+  const tradeFee = Number(clearForm.value.tradeFee || 0)
+  if (!Number.isFinite(tradeAmount) || tradeAmount < 0 || !Number.isFinite(tradeFee) || tradeFee < 0) {
+    ElMessage.warning('请填写有效的到账金额和手续费')
+    return
+  }
+  const request: ClearHoldingRequest = {
+    tradeAmount,
+    tradeFee,
+    remark: clearForm.value.remark || clearRemark(tradeFee)
+  }
+  clearingId.value = item.id
+  try {
+    const saved = await quantApi.clearHolding(item.id, request)
+    holdings.value = holdings.value.map((holding) => holding.id === saved.id ? saved : holding)
+    clearDialogOpen.value = false
+    clearTarget.value = undefined
+    ElMessage.success('持仓已清仓，历史记录已保留')
+  } finally {
+    clearingId.value = undefined
   }
 }
 
@@ -256,7 +353,15 @@ function openEdit(item: FundHolding) {
           <tbody>
             <tr v-for="item in filtered" :key="item.id" class="clickable-row" @click="openDetail(item)">
               <td>{{ item.fundCode }}</td>
-              <td>{{ item.fundName }}</td>
+              <td>
+                <div class="holding-name-cell">
+                  <span>{{ item.fundName }}</span>
+                  <div class="holding-meta-row">
+                    <strong v-if="item.officialNavUpdated" class="updated-badge">{{ updatedBadgeText(item.officialNavDate) }}</strong>
+                    <strong class="holding-amount-badge">￥{{ money(item.holdingAmount) }}</strong>
+                  </div>
+                </div>
+              </td>
               <td :class="toneClass(item.dailyProfit)">{{ signed(item.dailyProfit) }}</td>
               <td>
                 <div class="metric-pair">
@@ -276,6 +381,9 @@ function openEdit(item: FundHolding) {
                 <div class="table-actions">
                   <button class="ghost-button table-button" @click.stop="openDetail(item)">详情</button>
                   <button class="primary-button table-button" @click.stop="openEdit(item)">编辑</button>
+                  <button class="ghost-button table-button" :disabled="clearingId === item.id" @click.stop="openClearDialog(item)">
+                    {{ clearingId === item.id ? '清仓中' : '清仓' }}
+                  </button>
                   <button class="ghost-button table-button danger-button" :disabled="deletingId === item.id" @click.stop="deleteHolding(item)">
                     {{ deletingId === item.id ? '删除中' : '删除' }}
                   </button>
@@ -288,6 +396,26 @@ function openEdit(item: FundHolding) {
         <EmptyState v-else title="暂无匹配持仓" description="可以先在上方搜索基金并加入持仓。" />
       </div>
     </section>
+    <el-dialog v-model="clearDialogOpen" title="清仓持仓" width="560px">
+      <DisclaimerBar simulated />
+      <div v-if="clearTarget" class="modal-grid compact-form">
+        <p class="form-hint full-span">
+          清仓会把当前持仓金额、份额和成本归零，但保留持仓记录，并生成一条已完成的模拟卖出流水。
+        </p>
+        <p class="form-hint full-span">
+          当前持仓：{{ money(clearTarget.holdingAmount) }} / {{ money(clearTarget.holdingShare, 0) }} 份
+        </p>
+        <label>到账金额<input v-model.number="clearForm.tradeAmount" class="form-control" type="number" min="0" /></label>
+        <label>手续费<input v-model.number="clearForm.tradeFee" class="form-control" type="number" min="0" @change="syncClearRemark" /></label>
+        <label>备注<textarea v-model="clearForm.remark" class="form-control text-area" /></label>
+      </div>
+      <template #footer>
+        <button class="ghost-button" @click="clearDialogOpen = false">取消</button>
+        <button class="primary-button" :disabled="clearTarget ? clearingId === clearTarget.id : false" @click="saveClearHolding">
+          {{ clearTarget && clearingId === clearTarget.id ? '清仓中' : '确认清仓' }}
+        </button>
+      </template>
+    </el-dialog>
     <DisclaimerBar simulated />
   </div>
 </template>

@@ -1,5 +1,6 @@
 package com.lk.quantfund.service;
 
+import com.lk.quantfund.dto.trade.ConvertPairTradeRequest;
 import com.lk.quantfund.dto.trade.TradeRecordRequest;
 import com.lk.quantfund.enums.TradeStatus;
 import com.lk.quantfund.enums.TradeType;
@@ -12,10 +13,11 @@ public interface TradeRecordService {
 
     TradeRecordVO createAs(TradeRecordRequest request, TradeType tradeType);
 
+    List<TradeRecordVO> createConvertPair(ConvertPairTradeRequest request);
+
     TradeRecordVO detail(Long tradeId);
 
     List<TradeRecordVO> list(Long accountId, Long holdingId, TradeType tradeType, TradeStatus tradeStatus);
 
     List<TradeRecordVO> processing();
 }
-

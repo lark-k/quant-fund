@@ -10,6 +10,7 @@ import LoadingState from '@/components/common/LoadingState.vue'
 import MetricTile from '@/components/common/MetricTile.vue'
 import { fundNavOption } from '@/components/charts/chartOptions'
 import { metricTone, money, percent, signed, toneClass } from '@/utils/format'
+import { DISCLAIMER } from '@/types/domain'
 import type { FundBasicInfo, FundEstimate, FundHolding, FundNavPoint, FundPeerRank, FundStockHolding, FundTheme, TradeRecord } from '@/types/domain'
 
 const route = useRoute()
@@ -17,6 +18,7 @@ const router = useRouter()
 const loading = ref(true)
 const refreshing = ref(false)
 const generating = ref(false)
+const addingHolding = ref(false)
 const holding = ref<FundHolding>()
 const basicInfo = ref<FundBasicInfo>()
 const estimate = ref<FundEstimate | null>(null)
@@ -25,10 +27,23 @@ const tradePoints = ref<TradeRecord[]>([])
 const heavyStocks = ref<FundStockHolding[]>([])
 const themes = ref<FundTheme[]>([])
 const peerRank = ref<FundPeerRank | null>(null)
+const hasMatchedHolding = ref(false)
+const infoLoadFailed = ref(false)
 
 const fundCode = computed(() => String(route.query.fundCode || holding.value?.fundCode || ''))
 const chart = computed(() => fundNavOption(navPoints.value, tradePoints.value))
 const effectiveEstimateRate = computed(() => holding.value?.relatedThemeRate ?? estimate.value?.estimateGrowthRate ?? 0)
+const canGenerateAiAnalysis = computed(() => Boolean(hasMatchedHolding.value && holding.value?.id))
+const detailStatusText = computed(() => {
+  if (hasMatchedHolding.value) return '已加入持仓'
+  if (infoLoadFailed.value) return '基础资料同步失败'
+  return '未加入持仓，仅展示真实数据源详情'
+})
+const detailStatusDescription = computed(() => {
+  if (hasMatchedHolding.value) return '我的收益、成本和持有天数来自持仓与交易流水。'
+  if (infoLoadFailed.value) return '当前仅能使用路由基金代码和已返回的行情数据展示，建议稍后重试或检查数据源健康状态。'
+  return '该基金尚未加入持仓，持有金额、收益、成本、持有天数等个人指标不展示。'
+})
 const oneYearReturn = computed(() => {
   if (navPoints.value.length < 2) return holding.value?.holdingProfitRate || 0
   const first = navPoints.value[0].nav
@@ -77,6 +92,8 @@ function resetDetailState() {
   heavyStocks.value = []
   themes.value = []
   peerRank.value = null
+  hasMatchedHolding.value = false
+  infoLoadFailed.value = false
 }
 
 async function quiet<T>(request: Promise<T>): Promise<T | null> {
@@ -102,6 +119,7 @@ async function loadDetail() {
     if (!matchedHolding && !queryCode) {
       matchedHolding = holdings[0]
     }
+    hasMatchedHolding.value = Boolean(matchedHolding)
     const code = matchedHolding?.fundCode || queryCode || ''
     if (!code) {
       resetDetailState()
@@ -116,6 +134,7 @@ async function loadDetail() {
       quiet(quantApi.peerRank(code)),
       quiet(quantApi.trades())
     ])
+    infoLoadFailed.value = !infoResult
     const info = infoResult || {
       fundCode: code,
       fundName: matchedHolding?.fundName || code,
@@ -163,7 +182,7 @@ async function loadDetail() {
       coreHolding: false,
       watchFocus: false,
       updateTime: estimateResult?.estimateTime || '',
-      disclaimer: ''
+      disclaimer: DISCLAIMER
     }
   } finally {
     loading.value = false
@@ -188,16 +207,72 @@ async function refreshEstimate() {
   }
 }
 
+function normalizeFundType(rawType: string) {
+  const source = String(rawType || '')
+  const value = source.toUpperCase()
+  if (value.includes('ETF')) return value.includes('LINK') || source.includes('联接') ? 'ETF_LINK' : 'ETF'
+  if (value.includes('INDEX') || source.includes('指数')) return source.includes('增强') ? 'INDEX_ENHANCED' : 'INDEX'
+  if (value.includes('BOND') || source.includes('债')) return 'BOND'
+  if (value.includes('MONEY') || source.includes('货币')) return 'MONEY_MARKET'
+  if (value.includes('QDII') || source.includes('海外') || source.includes('全球')) return 'QDII'
+  if (value.includes('MIXED') || source.includes('混合')) return 'MIXED'
+  if (value.includes('ACTIVE') || source.includes('主动') || source.includes('股票')) return 'ACTIVE_EQUITY'
+  return 'UNKNOWN'
+}
+
+async function ensureAccount() {
+  const portfolios = await quantApi.portfolios()
+  let account = portfolios[0]
+  if (!account) {
+    account = await quantApi.createPortfolio({
+      accountName: '手动基金账户',
+      platformType: 'MANUAL',
+      maxSingleFundPositionRate: 25
+    })
+  }
+  return account.id
+}
+
+async function addCurrentFundToHolding() {
+  if (!holding.value || hasMatchedHolding.value) return
+  addingHolding.value = true
+  try {
+    const accountId = await ensureAccount()
+    const fundType = normalizeFundType(basicInfo.value?.fundType || holding.value.fundType)
+    const saved = await quantApi.createHolding({
+      accountId,
+      fundCode: holding.value.fundCode,
+      fundName: holding.value.fundName,
+      fundType,
+      activeFund: fundType === 'ACTIVE_EQUITY' || fundType === 'MIXED',
+      holdingAmount: 0,
+      holdingShare: 0,
+      holdingCost: 0,
+      currentEstimateNav: holding.value.currentEstimateNav ?? estimate.value?.estimateNav ?? undefined,
+      latestOfficialNav: holding.value.latestOfficialNav ?? undefined,
+      sourcePlatform: '基金详情加入',
+      regularInvestment: false,
+      coreHolding: false,
+      watchFocus: true
+    })
+    ElMessage.success('已加入持仓，请继续填写持有金额/收益或份额/成本')
+    router.push({ path: '/holding-edit', query: { holdingId: saved.id, fundCode: saved.fundCode } })
+  } finally {
+    addingHolding.value = false
+  }
+}
+
 async function generateAiAnalysis() {
-  if (!holding.value || !holding.value.id) {
+  const currentHolding = holding.value
+  if (!canGenerateAiAnalysis.value || !currentHolding?.id) {
     ElMessage.warning('请先将基金加入持仓后再生成 AI 分析')
     return
   }
   generating.value = true
   try {
-    await quantApi.generateAiAnalysis(holding.value.id)
+    await quantApi.generateAiAnalysis(currentHolding.id)
     ElMessage.success('AI 分析已生成')
-    router.push({ path: '/ai-analysis', query: { holdingId: holding.value.id, fundCode: holding.value.fundCode } })
+    router.push({ path: '/ai-analysis', query: { holdingId: currentHolding.id, fundCode: currentHolding.fundCode } })
   } finally {
     generating.value = false
   }
@@ -213,7 +288,8 @@ async function generateAiAnalysis() {
         <h2 class="panel-title">{{ holding.fundName }} · {{ holding.fundCode }}</h2>
         <div class="toolbar-row">
           <button class="ghost-button" :disabled="refreshing" @click="refreshEstimate">{{ refreshing ? '刷新中' : '刷新估值' }}</button>
-          <button class="primary-button" :disabled="generating" @click="generateAiAnalysis">{{ generating ? '生成中' : '生成 AI 分析' }}</button>
+          <button v-if="!hasMatchedHolding" class="ghost-button" :disabled="addingHolding" @click="addCurrentFundToHolding">{{ addingHolding ? '加入中' : '加入持仓' }}</button>
+          <button class="primary-button" :disabled="generating || !canGenerateAiAnalysis" @click="generateAiAnalysis">{{ generating ? '生成中' : '生成 AI 分析' }}</button>
         </div>
       </div>
       <div class="panel-body">
@@ -221,8 +297,10 @@ async function generateAiAnalysis() {
           <div>
             <div class="fund-code">{{ basicInfo?.fundType || holding.fundType }} / {{ managerText }}</div>
             <p>当日收益按关联板块或真实重仓行情估算；正式净值以基金公司晚间披露为准。</p>
+            <p class="item-meta">{{ detailStatusDescription }}</p>
           </div>
           <div class="fund-badges">
+            <span>{{ detailStatusText }}</span>
             <span>{{ holding.marketStatus || '--' }}</span>
             <span>{{ holding.estimateBasis || '基金估值涨跌率' }}</span>
             <span>{{ holding.valuationSource || estimate?.sourceName || '真实数据源' }}</span>
@@ -234,14 +312,14 @@ async function generateAiAnalysis() {
           <MetricTile label="关联板块" :value="relatedThemeText(holding.relatedThemeName)" :delta="nullablePercent(holding.relatedThemeRate)" :tone="metricTone(holding.relatedThemeRate || 0)" />
           <MetricTile label="最新正式净值" :value="navText(holding.latestOfficialNav)" />
           <MetricTile label="近一年收益" :value="percent(oneYearReturn)" sub-label="基于历史净值估算" :tone="metricTone(oneYearReturn)" />
-          <MetricTile label="持有金额" :value="money(holding.holdingAmount)" />
-          <MetricTile label="持有份额" :value="money(holding.holdingShare, 2)" />
-          <MetricTile label="持仓占比" :value="percent(holding.positionRate || 0)" />
-          <MetricTile label="持仓成本" :value="money(holding.holdingCost)" />
-          <MetricTile label="持有收益" :value="signed(holding.holdingProfit)" :delta="percent(holding.holdingProfitRate)" :tone="metricTone(holding.holdingProfit)" />
-          <MetricTile label="当日收益" :value="signed(holding.dailyProfit)" :delta="holding.updateTime || estimate?.estimateTime || '--'" :tone="metricTone(holding.dailyProfit)" />
-          <MetricTile label="昨日收益" :value="signed(holding.yesterdayProfit || 0)" :tone="metricTone(holding.yesterdayProfit || 0)" />
-          <MetricTile label="持有天数" :value="`${holding.holdingDays} 天`" />
+          <MetricTile label="持有金额" :value="hasMatchedHolding ? money(holding.holdingAmount) : '--'" />
+          <MetricTile label="持有份额" :value="hasMatchedHolding ? money(holding.holdingShare, 2) : '--'" />
+          <MetricTile label="持仓占比" :value="hasMatchedHolding ? percent(holding.positionRate || 0) : '--'" />
+          <MetricTile label="持仓成本" :value="hasMatchedHolding ? money(holding.holdingCost) : '--'" />
+          <MetricTile label="持有收益" :value="hasMatchedHolding ? signed(holding.holdingProfit) : '--'" :delta="hasMatchedHolding ? percent(holding.holdingProfitRate) : ''" :tone="hasMatchedHolding ? metricTone(holding.holdingProfit) : 'neutral'" />
+          <MetricTile label="当日收益" :value="hasMatchedHolding ? signed(holding.dailyProfit) : '--'" :delta="hasMatchedHolding ? (holding.updateTime || estimate?.estimateTime || '--') : '未加入持仓'" :tone="hasMatchedHolding ? metricTone(holding.dailyProfit) : 'neutral'" />
+          <MetricTile label="昨日收益" :value="hasMatchedHolding ? signed(holding.yesterdayProfit || 0) : '--'" :tone="hasMatchedHolding ? metricTone(holding.yesterdayProfit || 0) : 'neutral'" />
+          <MetricTile label="持有天数" :value="hasMatchedHolding ? `${holding.holdingDays} 天` : '--'" />
           <MetricTile label="最大回撤" :value="percent(maxDrawdown)" sub-label="净值曲线估算" tone="fall" />
           <MetricTile label="同类排名" :value="rankText" :delta="peerRank?.percentile !== undefined ? `百分位 ${percent(peerRank.percentile, 1)}` : peerRank?.category || ''" tone="info" />
         </div>
@@ -251,7 +329,7 @@ async function generateAiAnalysis() {
     <section class="panel">
       <div class="panel-header">
         <h2 class="panel-title">净值走势</h2>
-        <span class="item-meta">本基金 / 沪深300 / 买卖点；红点买入，绿点卖出</span>
+        <span class="item-meta">本基金 / 匹配指数（有历史数据时）/ 买卖点；红点买入，绿点卖出</span>
       </div>
       <div class="panel-body">
         <BaseChart v-if="navPoints.length >= 2" :option="chart" :height="340" />

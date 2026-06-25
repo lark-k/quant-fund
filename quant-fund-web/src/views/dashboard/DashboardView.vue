@@ -8,19 +8,47 @@ import DisclaimerBar from '@/components/common/DisclaimerBar.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
-import { estimateHoldingOption, positionOption, profitTrendOption } from '@/components/charts/chartOptions'
+import { estimateHoldingOption, positionOption, returnTrendOption } from '@/components/charts/chartOptions'
 import { quantApi } from '@/api/quant'
 import { useDashboardStore } from '@/stores/dashboard'
 import { metricTone, money, percent, signed, toneClass } from '@/utils/format'
+import type { MarketSessionStatus, ProfitAnalysis } from '@/types/domain'
 
 const store = useDashboardStore()
 const router = useRouter()
-const activeRange = ref('近1年')
+type TrendRange = 'TODAY' | 'WEEK' | 'MONTH' | 'YEAR' | 'ALL'
+type BenchmarkIndex = '000300' | '000001' | '399006'
+type TrendPoint = {
+  label: string
+  portfolioReturn: number | null
+  indexReturn: number | null
+  dailyProfit?: number | null
+}
+const activeRange = ref<TrendRange>('TODAY')
+const activeIndexCode = ref<BenchmarkIndex>('000300')
 const refreshing = ref(false)
+const trendLoading = ref(false)
+const profitAnalysis = ref<ProfitAnalysis>()
+const intradayTrendPoints = ref<TrendPoint[]>([])
 let refreshTimer: number | undefined
+
+const trendRanges: Array<{ label: string; value: TrendRange }> = [
+  { label: '今日', value: 'TODAY' },
+  { label: '本周', value: 'WEEK' },
+  { label: '本月', value: 'MONTH' },
+  { label: '今年', value: 'YEAR' },
+  { label: '全部', value: 'ALL' }
+]
+
+const benchmarkIndices: Array<{ label: string; value: BenchmarkIndex }> = [
+  { label: '沪深300', value: '000300' },
+  { label: '上证指数', value: '000001' },
+  { label: '创业板指', value: '399006' }
+]
 
 onMounted(() => {
   store.fetchOverview(true)
+  loadReturnTrend()
   refreshTimer = window.setInterval(autoRefreshEstimate, 60000)
 })
 
@@ -30,7 +58,20 @@ onBeforeUnmount(() => {
 
 const overview = computed(() => store.overview)
 const summary = computed(() => overview.value?.summary)
-const trendOption = computed(() => profitTrendOption(overview.value?.profitTrend || []))
+const trendPoints = computed<TrendPoint[]>(() => {
+  if (activeRange.value === 'TODAY') {
+    return intradayTrendPoints.value
+  }
+  const points = profitAnalysis.value?.trend || []
+  return points.map((point) => ({
+    label: point.date.slice(5),
+    portfolioReturn: point.dailyProfitRate,
+    indexReturn: point.indexReturnRate ?? null,
+    dailyProfit: point.dailyProfit
+  }))
+})
+const activeIndexName = computed(() => benchmarkIndices.find((item) => item.value === activeIndexCode.value)?.label || '沪深300')
+const trendOption = computed(() => returnTrendOption(trendPoints.value, activeIndexName.value))
 const allocationOption = computed(() => positionOption(overview.value?.positionDistribution || []))
 const estimateOption = computed(() => estimateHoldingOption(overview.value?.topHoldings || []))
 const buySellSuggestionCount = computed(() => {
@@ -56,13 +97,102 @@ const allFinalNavUpdated = computed(() => {
   const holdings = overview.value?.topHoldings || []
   return holdings.length > 0 && holdings.every((item) => item.officialNavUpdated)
 })
+const latestTrendPoint = computed(() => {
+  const trend = overview.value?.profitTrend || []
+  return trend[trend.length - 1]
+})
+const trendStatusText = computed(() => activeRange.value === 'TODAY'
+  ? '盘中分时实时走势'
+  : latestTrendPoint.value?.profitStatusText || '按已同步快照计算')
 const dailyProfitRate = computed(() => {
   if (!summary.value) return 0
   return safeRatio(summary.value.dailyProfit, summary.value.totalAsset)
 })
+const currentPortfolioReturn = computed(() => {
+  if (activeRange.value === 'TODAY') {
+    return dailyProfitRate.value
+  }
+  const points = trendPoints.value
+  return points[points.length - 1]?.portfolioReturn ?? dailyProfitRate.value
+})
+const currentIndexReturn = computed(() => {
+  const points = [...trendPoints.value].reverse()
+  return points.find((point) => point.indexReturn !== null)?.indexReturn ?? null
+})
+const excessReturn = computed(() => currentIndexReturn.value === null ? null : currentPortfolioReturn.value - currentIndexReturn.value)
 
 function safeRatio(part: number, total: number) {
   return total > 0 ? part / total * 100 : 0
+}
+
+function isoDate(date: Date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function trendRangeParams() {
+  const now = new Date()
+  const start = new Date(now)
+  if (activeRange.value === 'TODAY') {
+    return { indexCode: activeIndexCode.value }
+  }
+  if (activeRange.value === 'WEEK') {
+    const day = now.getDay() || 7
+    start.setDate(now.getDate() - day + 1)
+    return { startDate: isoDate(start), endDate: isoDate(now), indexCode: activeIndexCode.value }
+  }
+  if (activeRange.value === 'MONTH') {
+    start.setDate(1)
+    return { startDate: isoDate(start), endDate: isoDate(now), indexCode: activeIndexCode.value }
+  }
+  if (activeRange.value === 'YEAR') {
+    start.setMonth(0, 1)
+    return { startDate: isoDate(start), endDate: isoDate(now), indexCode: activeIndexCode.value }
+  }
+  return { endDate: isoDate(now), indexCode: activeIndexCode.value }
+}
+
+async function loadReturnTrend() {
+  trendLoading.value = true
+  try {
+    if (activeRange.value === 'TODAY') {
+      const points = await quantApi.profitIntraday({ indexCode: activeIndexCode.value })
+      intradayTrendPoints.value = points
+        .map((point) => ({
+          label: point.time.slice(11, 16),
+          portfolioReturn: point.portfolioReturn,
+          indexReturn: point.indexReturn,
+          dailyProfit: point.dailyProfit
+        }))
+        .filter((point) => isAShareIntradayLabel(point.label))
+      return
+    }
+    profitAnalysis.value = await quantApi.profit(trendRangeParams())
+  } finally {
+    trendLoading.value = false
+  }
+}
+
+function selectTrendRange(range: TrendRange) {
+  if (activeRange.value === range) return
+  activeRange.value = range
+  void loadReturnTrend()
+}
+
+function selectBenchmarkIndex(indexCode: BenchmarkIndex) {
+  if (activeIndexCode.value === indexCode) return
+  activeIndexCode.value = indexCode
+  void loadReturnTrend()
+}
+
+function isAShareIntradayLabel(label: string) {
+  const [hour, minute] = label.split(':').map(Number)
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return false
+  const minutes = hour * 60 + minute
+  return (minutes >= 9 * 60 + 30 && minutes <= 11 * 60 + 30)
+    || (minutes >= 13 * 60 && minutes <= 15 * 60)
 }
 
 function displaySignalType(type: string) {
@@ -85,12 +215,24 @@ function relatedThemeText(theme?: string | null) {
   return theme && theme !== '主动权益' ? theme : '重仓板块待同步'
 }
 
-function isIntradayEstimateWindow(date = new Date()) {
-  const day = date.getDay()
-  if (day === 0 || day === 6) return false
-  const minutes = date.getHours() * 60 + date.getMinutes()
-  return (minutes >= 9 * 60 + 25 && minutes <= 11 * 60 + 35)
-    || (minutes >= 12 * 60 + 55 && minutes <= 15 * 60 + 5)
+async function loadMarketStatus() {
+  try {
+    return await quantApi.marketStatus()
+  } catch {
+    return null
+  }
+}
+
+function aShareMarket(status: MarketSessionStatus | null) {
+  return status?.markets.find((item) => item.market === 'A股') || null
+}
+
+function isAShareTrading(status: MarketSessionStatus | null) {
+  return aShareMarket(status)?.trading === true
+}
+
+function aShareStatusText(status: MarketSessionStatus | null) {
+  return aShareMarket(status)?.statusText || 'A股市场状态未同步'
 }
 
 async function refreshEstimate() {
@@ -101,14 +243,15 @@ async function refreshEstimate() {
   }
   refreshing.value = true
   try {
+    const marketStatus = await loadMarketStatus()
     const officialHoldings = await quantApi.syncOfficialNav()
     const officialUpdatedCount = officialHoldings.filter((holding) => holding.officialNavUpdated).length
-    if (!isIntradayEstimateWindow()) {
+    if (!isAShareTrading(marketStatus)) {
       await store.fetchOverview()
       if (officialUpdatedCount) {
         ElMessage.success(`已同步 ${officialUpdatedCount} 只基金最新正式净值，并按最终净值重算收益`)
       } else {
-        ElMessage.warning('当前不在盘中估值时间，暂不刷新盘中估值')
+        ElMessage.warning(`当前${aShareStatusText(marketStatus)}，暂不刷新盘中估值`)
       }
       return
     }
@@ -118,6 +261,7 @@ async function refreshEstimate() {
       await quantApi.recalculateHolding(holding.id)
     }))
     await store.fetchOverview()
+    await loadReturnTrend()
     const successCount = results.filter((result) => result.status === 'fulfilled').length
     const failedCount = results.length - successCount
     if (officialUpdatedCount) {
@@ -134,7 +278,8 @@ async function refreshEstimate() {
 
 async function autoRefreshEstimate() {
   if (refreshing.value || !overview.value?.topHoldings.length) return
-  if (!isIntradayEstimateWindow()) return
+  const marketStatus = await loadMarketStatus()
+  if (!isAShareTrading(marketStatus)) return
   refreshing.value = true
   try {
     const officialHoldings = await quantApi.syncOfficialNav()
@@ -144,6 +289,7 @@ async function autoRefreshEstimate() {
       await quantApi.recalculateHolding(holding.id)
     }))
     await store.fetchOverview()
+    await loadReturnTrend()
   } finally {
     refreshing.value = false
   }
@@ -189,7 +335,10 @@ function go(path: string) {
                   <td>
                     <div class="holding-name-cell">
                       <span>{{ holding.fundName }}</span>
-                      <strong v-if="holding.officialNavUpdated" class="updated-badge">{{ updatedBadgeText(holding.officialNavDate) }}</strong>
+                      <div class="holding-meta-row">
+                        <strong v-if="holding.officialNavUpdated" class="updated-badge">{{ updatedBadgeText(holding.officialNavDate) }}</strong>
+                        <strong class="holding-amount-badge">￥{{ money(holding.holdingAmount) }}</strong>
+                      </div>
                     </div>
                   </td>
                   <td :class="toneClass(holding.dailyProfit)">{{ signed(holding.dailyProfit) }}</td>
@@ -216,16 +365,49 @@ function go(path: string) {
           </div>
         </section>
 
-        <section class="panel trend-panel">
+        <section class="panel trend-panel return-trend-panel">
+          <div class="return-trend-tabs">
+            <button
+              v-for="range in trendRanges"
+              :key="range.value"
+              :class="{ active: activeRange === range.value }"
+              type="button"
+              @click="selectTrendRange(range.value)"
+            >
+              {{ range.label }}
+            </button>
+          </div>
           <div class="panel-header">
-            <h2 class="panel-title">收益走势与回撤</h2>
+            <div>
+              <h2 class="panel-title return-trend-title">收益走势</h2>
+              <span class="item-meta">{{ trendStatusText }}</span>
+            </div>
             <button class="panel-link" @click="go('/profit-analysis')">更多 ›</button>
           </div>
-          <div class="panel-body">
-            <BaseChart :option="trendOption" :height="246" />
-            <div class="segmented">
-              <button v-for="range in ['近1月', '近3月', '近6月', '今年以来', '近1年']" :key="range" :class="{ active: activeRange === range }" @click="activeRange = range">{{ range }}</button>
+          <div class="panel-body return-trend-body">
+            <div class="return-trend-legend">
+              <span class="legend-item mine"><i></i>我的收益 <strong :class="toneClass(currentPortfolioReturn)">{{ percent(currentPortfolioReturn, 2) }}</strong></span>
+              <div class="benchmark-switch" aria-label="收益对比指数">
+                <button
+                  v-for="index in benchmarkIndices"
+                  :key="index.value"
+                  :class="{ active: activeIndexCode === index.value }"
+                  type="button"
+                  @click="selectBenchmarkIndex(index.value)"
+                >
+                  <span class="legend-item index"><i></i>{{ index.label }}</span>
+                  <strong v-if="activeIndexCode === index.value" :class="toneClass(currentIndexReturn || 0)">
+                    {{ currentIndexReturn === null ? '--' : percent(currentIndexReturn, 2) }}
+                  </strong>
+                </button>
+              </div>
             </div>
+            <BaseChart :option="trendOption" :height="214" />
+            <div class="return-trend-summary">
+              <span>当日收益率：<strong :class="toneClass(dailyProfitRate)">{{ percent(dailyProfitRate, 2) }}</strong></span>
+              <span>跑赢{{ activeIndexName }}：<strong :class="toneClass(excessReturn || 0)">{{ excessReturn === null ? '--' : percent(excessReturn, 2) }}</strong></span>
+            </div>
+            <div v-if="trendLoading" class="return-trend-loading">同步真实收益数据中...</div>
           </div>
         </section>
       </div>
@@ -277,7 +459,7 @@ function go(path: string) {
             <div><span>覆盖持仓</span><strong>{{ overview.todayAiSuggestions.length }}</strong></div>
           </div>
           <div class="item-copy">
-            所有建议仅供参考，最终买卖由用户在原平台手动确认。
+            {{ overview.disclaimer }}，最终买卖由用户在原平台手动确认。
           </div>
         </div>
       </div>
@@ -339,7 +521,7 @@ function go(path: string) {
         <button class="panel-link" @click="go('/ai-analysis')">更多 ›</button>
       </div>
       <div class="panel-body alert-list">
-        <div class="disclaimer-bar">共 {{ overview.riskAlertCount }} 条预警</div>
+        <div class="disclaimer-bar">{{ overview.disclaimer }} · 共 {{ overview.riskAlertCount }} 条预警</div>
         <article class="alert-item">
           <div class="item-title"><span>高 · 波动预警</span><span>09:41</span></div>
           <div class="item-copy">国投瑞银新能源混合A 波动率快速上升，近 5 日波动率 28.34%，高于历史 90% 区间。</div>
@@ -351,12 +533,6 @@ function go(path: string) {
       </div>
     </section>
       </div>
-    </div>
-
-    <div class="bottom-trade-bar">
-      <span>数据来源：量化数据仓、估算数据，仅供参考</span>
-      <strong>模拟交易模块：仅为模拟操作，并非真实交易</strong>
-      <button class="primary-button" @click="go('/trades')">模拟交易</button>
     </div>
   </div>
 </template>

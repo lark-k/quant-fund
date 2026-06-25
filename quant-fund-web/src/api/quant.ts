@@ -2,11 +2,15 @@ import { http, USE_MOCK } from './http'
 import { mockApi } from './mock'
 import type {
   AiAnalysisReport,
+  AiRuntimeConfig,
+  ClearHoldingRequest,
   DashboardOverview,
   DataSourceConfig,
   DataSourceConfigRequest,
+  DataSourceHealth,
   ApiCallLog,
   ApiCallLogQuery,
+  ConvertPairTradeRequest,
   FundBasicInfo,
   FundEstimate,
   FundHolding,
@@ -19,6 +23,7 @@ import type {
   HoldingCreateRequest,
   HoldingUpdateRequest,
   MarketIndex,
+  MarketSessionStatus,
   OperationLog,
   OperationLogQuery,
   PageResponse,
@@ -42,6 +47,9 @@ export const quantApi = {
   marketReadings(): Promise<MarketIndex[]> {
     return USE_MOCK ? mockApi.marketReadings() : http.get('/dashboard/market-readings')
   },
+  marketStatus(): Promise<MarketSessionStatus> {
+    return USE_MOCK ? mockApi.marketStatus() : http.get('/dashboard/market-status')
+  },
   holdings(): Promise<FundHolding[]> {
     return USE_MOCK ? mockApi.holdings() : http.get('/holdings')
   },
@@ -60,6 +68,9 @@ export const quantApi = {
   deleteHolding(id: number): Promise<void> {
     return USE_MOCK ? mockApi.deleteHolding(id) : http.delete(`/holdings/${id}`)
   },
+  clearHolding(id: number, request?: ClearHoldingRequest): Promise<FundHolding> {
+    return USE_MOCK ? mockApi.clearHolding(id, request) : http.post(`/holdings/${id}/clear`, request || {})
+  },
   recalculateHolding(id: number): Promise<FundHolding> {
     return USE_MOCK ? mockApi.recalculateHolding(id) : http.post(`/holdings/${id}/recalculate`)
   },
@@ -72,8 +83,11 @@ export const quantApi = {
   aiHistory(): Promise<AiAnalysisReport[]> {
     return USE_MOCK ? mockApi.aiHistory() : http.get('/ai-analysis/history')
   },
-  profit(): Promise<ProfitAnalysis> {
-    return USE_MOCK ? mockApi.profit() : http.get('/analytics/profit')
+  profit(params?: { startDate?: string; endDate?: string; indexCode?: string }): Promise<ProfitAnalysis> {
+    return USE_MOCK ? mockApi.profit() : http.get('/analytics/profit', { params })
+  },
+  profitIntraday(params?: { indexCode?: string }): Promise<Array<{ time: string; portfolioReturn: number | null; indexReturn: number | null; dailyProfit: number | null }>> {
+    return USE_MOCK ? Promise.resolve([]) : http.get('/analytics/profit-intraday', { params })
   },
   calendar(): Promise<ProfitCalendar> {
     return USE_MOCK ? mockApi.calendar() : http.get('/analytics/profit-calendar')
@@ -83,6 +97,12 @@ export const quantApi = {
   },
   dataSources(): Promise<DataSourceConfig[]> {
     return USE_MOCK ? mockApi.dataSources() : http.get('/system/data-sources')
+  },
+  dataSourceHealth(): Promise<DataSourceHealth[]> {
+    return USE_MOCK ? mockApi.dataSourceHealth() : http.get('/system/data-source-health')
+  },
+  aiRuntimeConfig(): Promise<AiRuntimeConfig> {
+    return USE_MOCK ? mockApi.aiRuntimeConfig() : http.get('/system/ai-runtime-config')
   },
   saveDataSource(request: DataSourceConfigRequest): Promise<DataSourceConfig> {
     return USE_MOCK ? mockApi.saveDataSource(request) : http.post('/system/data-sources', request)
@@ -127,7 +147,10 @@ export const quantApi = {
       date: point.date || point.navDate || '',
       nav: point.nav ?? point.unitNav ?? 0,
       accumulatedNav: point.accumulatedNav ?? 0,
-      dailyGrowthRate: point.dailyGrowthRate ?? 0
+      dailyGrowthRate: point.dailyGrowthRate ?? 0,
+      indexReturnRate: point.indexReturnRate ?? null,
+      indexCode: point.indexCode ?? null,
+      indexName: point.indexName ?? null
     })).filter((point) => point.date && point.nav > 0)
   },
   fundEstimate(fundCode: string): Promise<FundEstimate> {
@@ -152,5 +175,8 @@ export const quantApi = {
   },
   createTrade(request: TradeRecordRequest): Promise<TradeRecord> {
     return USE_MOCK ? mockApi.createTrade(request) : http.post('/trades', request)
+  },
+  createConvertPair(request: ConvertPairTradeRequest): Promise<TradeRecord[]> {
+    return USE_MOCK ? mockApi.createConvertPair(request) : http.post('/trades/convert-pair', request)
   }
 }

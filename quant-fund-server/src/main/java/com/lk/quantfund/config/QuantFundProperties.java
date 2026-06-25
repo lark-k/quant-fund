@@ -228,10 +228,14 @@ public class QuantFundProperties {
     public static class Scheduler {
         private boolean enabled = true;
         private String holidays = "";
+        private String hongKongHolidays = "";
+        private String usHolidays = "";
         @Min(0)
         private int batchDelayMaxMillis = 800;
         @Min(1)
         private int aiFocusHoldingLimit = 200;
+        @Min(1)
+        private int snapshotBackfillTradingDays = 30;
 
         public boolean isEnabled() {
             return enabled;
@@ -249,6 +253,22 @@ public class QuantFundProperties {
             this.holidays = holidays;
         }
 
+        public String getHongKongHolidays() {
+            return hongKongHolidays;
+        }
+
+        public void setHongKongHolidays(String hongKongHolidays) {
+            this.hongKongHolidays = hongKongHolidays;
+        }
+
+        public String getUsHolidays() {
+            return usHolidays;
+        }
+
+        public void setUsHolidays(String usHolidays) {
+            this.usHolidays = usHolidays;
+        }
+
         public int getBatchDelayMaxMillis() {
             return batchDelayMaxMillis;
         }
@@ -263,6 +283,14 @@ public class QuantFundProperties {
 
         public void setAiFocusHoldingLimit(int aiFocusHoldingLimit) {
             this.aiFocusHoldingLimit = aiFocusHoldingLimit;
+        }
+
+        public int getSnapshotBackfillTradingDays() {
+            return snapshotBackfillTradingDays;
+        }
+
+        public void setSnapshotBackfillTradingDays(int snapshotBackfillTradingDays) {
+            this.snapshotBackfillTradingDays = snapshotBackfillTradingDays;
         }
     }
 }

@@ -5,23 +5,29 @@ import com.lk.quantfund.auth.UserContext;
 import com.lk.quantfund.constants.SystemConstants;
 import com.lk.quantfund.datasource.model.FundEstimateDTO;
 import com.lk.quantfund.datasource.model.FundNavPointDTO;
+import com.lk.quantfund.dto.holding.ClearHoldingRequest;
 import com.lk.quantfund.dto.holding.CreateHoldingRequest;
 import com.lk.quantfund.dto.holding.UpdateHoldingRequest;
 import com.lk.quantfund.entity.AiAnalysisReport;
 import com.lk.quantfund.entity.FundHolding;
 import com.lk.quantfund.entity.HoldingSnapshot;
 import com.lk.quantfund.entity.PortfolioAccount;
+import com.lk.quantfund.entity.TradeRecord;
 import com.lk.quantfund.enums.ErrorCode;
+import com.lk.quantfund.enums.TradeStatus;
+import com.lk.quantfund.enums.TradeType;
 import com.lk.quantfund.exception.BusinessException;
 import com.lk.quantfund.mapper.AiAnalysisReportMapper;
 import com.lk.quantfund.mapper.FundHoldingMapper;
 import com.lk.quantfund.mapper.HoldingSnapshotMapper;
 import com.lk.quantfund.mapper.PortfolioAccountMapper;
+import com.lk.quantfund.mapper.TradeRecordMapper;
 import com.lk.quantfund.scheduler.HoldingSnapshotBackfillService;
 import com.lk.quantfund.scheduler.TradingCalendarService;
 import com.lk.quantfund.service.FundHoldingService;
 import com.lk.quantfund.service.FundQueryService;
 import com.lk.quantfund.service.PortfolioAccountService;
+import com.lk.quantfund.service.analytics.OfficialNavTiming;
 import com.lk.quantfund.service.valuation.FundValuationResult;
 import com.lk.quantfund.service.valuation.FundValuationService;
 import com.lk.quantfund.vo.holding.FundHoldingVO;
@@ -52,6 +58,7 @@ public class FundHoldingServiceImpl implements FundHoldingService {
     private final TradingCalendarService tradingCalendarService;
     private final HoldingSnapshotMapper holdingSnapshotMapper;
     private final HoldingSnapshotBackfillService holdingSnapshotBackfillService;
+    private final TradeRecordMapper tradeRecordMapper;
 
     public FundHoldingServiceImpl(FundHoldingMapper fundHoldingMapper,
                                   PortfolioAccountMapper portfolioAccountMapper,
@@ -61,7 +68,8 @@ public class FundHoldingServiceImpl implements FundHoldingService {
                                   FundValuationService fundValuationService,
                                   TradingCalendarService tradingCalendarService,
                                   HoldingSnapshotMapper holdingSnapshotMapper,
-                                  HoldingSnapshotBackfillService holdingSnapshotBackfillService) {
+                                  HoldingSnapshotBackfillService holdingSnapshotBackfillService,
+                                  TradeRecordMapper tradeRecordMapper) {
         this.fundHoldingMapper = fundHoldingMapper;
         this.portfolioAccountMapper = portfolioAccountMapper;
         this.aiAnalysisReportMapper = aiAnalysisReportMapper;
@@ -71,6 +79,7 @@ public class FundHoldingServiceImpl implements FundHoldingService {
         this.tradingCalendarService = tradingCalendarService;
         this.holdingSnapshotMapper = holdingSnapshotMapper;
         this.holdingSnapshotBackfillService = holdingSnapshotBackfillService;
+        this.tradeRecordMapper = tradeRecordMapper;
     }
 
     @Override
@@ -99,9 +108,11 @@ public class FundHoldingServiceImpl implements FundHoldingService {
         Long userId = UserContext.getUserId();
         FundHolding holding = loadOwnedHolding(userId, holdingId);
         Long oldAccountId = holding.getAccountId();
+        String oldFundCode = holding.getFundCode();
+        BigDecimal previousCurrentEstimateNav = holding.getCurrentEstimateNav();
         ensureAccountOwned(userId, request.accountId());
         applyUpdateFields(holding, request);
-        refreshMarketData(holding);
+        refreshMarketData(holding, oldFundCode, previousCurrentEstimateNav);
         recalculateEntity(holding);
         holding.setUpdateTime(LocalDateTime.now());
         fundHoldingMapper.updateById(holding);
@@ -122,6 +133,93 @@ public class FundHoldingServiceImpl implements FundHoldingService {
                 .eq(AiAnalysisReport::getHoldingId, holdingId));
         fundHoldingMapper.deleteById(holdingId);
         portfolioAccountService.recalculateOwnedAccount(userId, holding.getAccountId());
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public FundHoldingVO clear(Long holdingId, ClearHoldingRequest request) {
+        Long userId = UserContext.getUserId();
+        FundHolding holding = loadOwnedHolding(userId, holdingId);
+        BigDecimal clearedAmount = valueOrZero(holding.getHoldingAmount());
+        BigDecimal clearedShare = valueOrZero(holding.getHoldingShare());
+        BigDecimal clearedNav = clearNav(holding, clearedAmount, clearedShare);
+        BigDecimal tradeAmount = clearTradeAmount(request, clearedAmount);
+        BigDecimal tradeFee = request == null ? ZERO : valueOrZero(request.tradeFee());
+        String remark = clearRemark(request);
+        LocalDateTime now = LocalDateTime.now();
+        if (clearedAmount.compareTo(BigDecimal.ZERO) > 0 || clearedShare.compareTo(BigDecimal.ZERO) > 0) {
+            insertClearTrade(userId, holding, tradeAmount, clearedShare, clearedNav, tradeFee, remark, now);
+        }
+        holding.setActiveFund(0);
+        holding.setHoldingAmount(ZERO);
+        holding.setHoldingShare(ZERO);
+        holding.setHoldingCost(ZERO);
+        holding.setHoldingProfit(ZERO);
+        holding.setHoldingProfitRate(ZERO);
+        holding.setDailyProfit(ZERO);
+        holding.setUpdateTime(now);
+        fundHoldingMapper.updateById(holding);
+        portfolioAccountService.recalculateOwnedAccount(userId, holding.getAccountId());
+        return toVO(holding);
+    }
+
+    private void insertClearTrade(Long userId,
+                                  FundHolding holding,
+                                  BigDecimal tradeAmount,
+                                  BigDecimal clearedShare,
+                                  BigDecimal clearedNav,
+                                  BigDecimal tradeFee,
+                                  String remark,
+                                  LocalDateTime now) {
+        TradeRecord record = new TradeRecord();
+        record.setUserId(userId);
+        record.setAccountId(holding.getAccountId());
+        record.setHoldingId(holding.getId());
+        record.setFundCode(holding.getFundCode());
+        record.setFundName(holding.getFundName());
+        record.setTradeType(TradeType.SELL.name());
+        record.setTradeStatus(TradeStatus.COMPLETED.name());
+        record.setTradeAmount(tradeAmount);
+        record.setTradeShare(clearedShare);
+        record.setTradeNav(clearedNav);
+        record.setTradeFee(tradeFee);
+        record.setTradeTime(now);
+        record.setRemark(remark);
+        record.setCreateTime(now);
+        record.setUpdateTime(now);
+        record.setDeleted(0);
+        tradeRecordMapper.insert(record);
+    }
+
+    private BigDecimal clearNav(FundHolding holding, BigDecimal amount, BigDecimal share) {
+        BigDecimal nav = holding.getCurrentEstimateNav() != null ? holding.getCurrentEstimateNav() : holding.getLatestOfficialNav();
+        if (nav != null && nav.compareTo(BigDecimal.ZERO) > 0) {
+            return scale(nav);
+        }
+        if (amount.compareTo(BigDecimal.ZERO) > 0 && share.compareTo(BigDecimal.ZERO) > 0) {
+            return amount.divide(share, 4, RoundingMode.HALF_UP);
+        }
+        return ZERO;
+    }
+
+    private BigDecimal clearTradeAmount(ClearHoldingRequest request, BigDecimal fallbackAmount) {
+        if (request != null && request.tradeAmount() != null) {
+            return valueOrZero(request.tradeAmount());
+        }
+        return fallbackAmount;
+    }
+
+    private String clearRemark(ClearHoldingRequest request) {
+        String remark;
+        if (request != null && StringUtils.hasText(request.remark())) {
+            remark = request.remark().trim();
+        } else {
+            remark = "清仓自动生成的模拟卖出流水";
+        }
+        if (remark.contains(SystemConstants.SIMULATED_TRADE_NOTICE)) {
+            return remark;
+        }
+        return remark + "，" + SystemConstants.SIMULATED_TRADE_NOTICE;
     }
 
     @Override
@@ -179,6 +277,7 @@ public class FundHoldingServiceImpl implements FundHoldingService {
             applyOfficialNav(holding, officialNav.get());
             holding.setUpdateTime(LocalDateTime.now());
             fundHoldingMapper.updateById(holding);
+            upsertSnapshot(holding, officialNav.get());
             if (!touchedAccountIds.contains(holding.getAccountId())) {
                 touchedAccountIds.add(holding.getAccountId());
             }
@@ -196,8 +295,8 @@ public class FundHoldingServiceImpl implements FundHoldingService {
         holding.setHoldingShare(valueOrZero(request.holdingShare()));
         holding.setHoldingCost(valueOrZero(request.holdingCost()));
         applyUserProfitInput(holding, request.holdingProfit());
-        holding.setCurrentEstimateNav(null);
-        holding.setLatestOfficialNav(null);
+        holding.setCurrentEstimateNav(request.currentEstimateNav() == null ? null : valueOrZero(request.currentEstimateNav()));
+        holding.setLatestOfficialNav(request.latestOfficialNav() == null ? null : valueOrZero(request.latestOfficialNav()));
         holding.setHoldingDays(0);
         holding.setSourcePlatform(trimToNull(request.sourcePlatform()));
         holding.setRegularInvestment(toInt(request.regularInvestment()));
@@ -218,8 +317,12 @@ public class FundHoldingServiceImpl implements FundHoldingService {
         holding.setHoldingCost(valueOrZero(request.holdingCost()));
         applyUserProfitInput(holding, request.holdingProfit());
         deriveShareFromAmountIfNeeded(holding, previousCurrentEstimateNav, previousLatestOfficialNav);
-        holding.setCurrentEstimateNav(null);
-        holding.setLatestOfficialNav(null);
+        holding.setCurrentEstimateNav(request.currentEstimateNav() == null
+                ? previousCurrentEstimateNav
+                : valueOrZero(request.currentEstimateNav()));
+        holding.setLatestOfficialNav(request.latestOfficialNav() == null
+                ? previousLatestOfficialNav
+                : valueOrZero(request.latestOfficialNav()));
         holding.setSourcePlatform(trimToNull(request.sourcePlatform()));
         holding.setRegularInvestment(toInt(request.regularInvestment()));
         holding.setCoreHolding(toInt(request.coreHolding()));
@@ -269,14 +372,17 @@ public class FundHoldingServiceImpl implements FundHoldingService {
             return;
         }
         if (amount.compareTo(BigDecimal.ZERO) <= 0 && share.compareTo(BigDecimal.ZERO) <= 0) {
-            throw new BusinessException(ErrorCode.BAD_REQUEST, "holding amount or holding share is required");
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "持有金额或持有份额不能为空");
         }
         if (cost.compareTo(BigDecimal.ZERO) <= 0) {
-            throw new BusinessException(ErrorCode.BAD_REQUEST, "holding cost or holding profit is required");
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "持有成本或持有收益不能为空");
         }
     }
 
     private BigDecimal estimateAmount(FundHolding holding) {
+        if (valueOrZero(holding.getHoldingAmount()).compareTo(BigDecimal.ZERO) > 0) {
+            return scale(holding.getHoldingAmount());
+        }
         BigDecimal nav = holding.getCurrentEstimateNav() != null ? holding.getCurrentEstimateNav() : holding.getLatestOfficialNav();
         if (nav != null && valueOrZero(holding.getHoldingShare()).compareTo(BigDecimal.ZERO) > 0) {
             return scale(valueOrZero(holding.getHoldingShare()).multiply(nav));
@@ -285,12 +391,16 @@ public class FundHoldingServiceImpl implements FundHoldingService {
     }
 
     private void refreshMarketData(FundHolding holding) {
+        refreshMarketData(holding, null, null);
+    }
+
+    private void refreshMarketData(FundHolding holding, String previousFundCode, BigDecimal previousCurrentEstimateNav) {
         Optional<OfficialNavContext> officialNav = officialNavContext(holding.getFundCode());
         if (officialNav.isPresent() && officialNavPublishedFor(holding, officialNav.get())) {
             applyOfficialNav(holding, officialNav.get());
             return;
         }
-        if (intradayEstimateAllowed(holding)) {
+        if (intradayEstimateFetchAllowed(holding)) {
             try {
                 FundEstimateDTO estimate = fundQueryService.getIntradayEstimate(holding.getFundCode(), false);
                 if (StringUtils.hasText(estimate.fundName())) {
@@ -307,7 +417,12 @@ public class FundHoldingServiceImpl implements FundHoldingService {
             }
         }
         latestOfficialNav(holding.getFundCode()).ifPresent(holding::setLatestOfficialNav);
-        holding.setCurrentEstimateNav(null);
+        if (previousFundCode != null
+                && previousFundCode.equals(holding.getFundCode())
+                && previousCurrentEstimateNav != null
+                && holding.getCurrentEstimateNav() == null) {
+            holding.setCurrentEstimateNav(previousCurrentEstimateNav);
+        }
     }
 
     private Optional<BigDecimal> deriveOfficialNav(FundEstimateDTO estimate) {
@@ -356,7 +471,7 @@ public class FundHoldingServiceImpl implements FundHoldingService {
 
     private BigDecimal calculateDailyProfit(FundHolding holding) {
         Optional<OfficialNavContext> officialNav = officialNavContext(holding.getFundCode());
-        if (officialNav.isPresent() && officialNavCountsAsToday(officialNav.get())) {
+        if (officialNav.isPresent() && officialNavCountsAsToday(holding, officialNav.get())) {
             OfficialNavContext context = officialNav.get();
             BigDecimal previousNav = context.previousNav();
             if (previousNav != null && previousNav.compareTo(BigDecimal.ZERO) > 0) {
@@ -465,7 +580,7 @@ public class FundHoldingServiceImpl implements FundHoldingService {
 
     private BigDecimal currentEstimateGrowthRate(FundHolding holding) {
         Optional<OfficialNavContext> officialNav = officialNavContext(holding.getFundCode());
-        if (officialNav.isPresent() && officialNavCountsAsToday(officialNav.get()) && officialNav.get().dailyGrowthRate() != null) {
+        if (officialNav.isPresent() && officialNavCountsAsToday(holding, officialNav.get()) && officialNav.get().dailyGrowthRate() != null) {
             return scale(officialNav.get().dailyGrowthRate());
         }
         if (!intradayEstimateAllowed(holding)) {
@@ -493,7 +608,7 @@ public class FundHoldingServiceImpl implements FundHoldingService {
                 .eq(PortfolioAccount::getUserId, userId)
                 .last("LIMIT 1"));
         if (account == null) {
-            throw new BusinessException(ErrorCode.NOT_FOUND, "portfolio account not found");
+            throw new BusinessException(ErrorCode.NOT_FOUND, "组合账户不存在");
         }
     }
 
@@ -503,7 +618,7 @@ public class FundHoldingServiceImpl implements FundHoldingService {
                 .eq(FundHolding::getUserId, userId)
                 .last("LIMIT 1"));
         if (holding == null) {
-            throw new BusinessException(ErrorCode.NOT_FOUND, "fund holding not found");
+            throw new BusinessException(ErrorCode.NOT_FOUND, "基金持仓不存在");
         }
         return holding;
     }
@@ -515,7 +630,7 @@ public class FundHoldingServiceImpl implements FundHoldingService {
     private FundHoldingVO toVO(FundHolding holding, BigDecimal accountTotal) {
         BigDecimal estimateRate = currentEstimateGrowthRate(holding);
         OfficialNavContext officialNav = officialNavContext(holding.getFundCode()).orElse(null);
-        boolean officialUpdated = officialNav != null && officialNavCountsAsToday(officialNav);
+        boolean officialUpdated = officialNav != null && officialNavCountsAsToday(holding, officialNav);
         boolean intradayAllowed = intradayEstimateAllowed(holding);
         BigDecimal dailyProfit = officialUpdated || intradayAllowed ? valueOrZero(holding.getDailyProfit()) : ZERO;
         BigDecimal displayEstimateRate = officialUpdated || intradayAllowed ? estimateRate : ZERO;
@@ -579,36 +694,87 @@ public class FundHoldingServiceImpl implements FundHoldingService {
     }
 
     private boolean officialNavPublishedFor(FundHolding holding, OfficialNavContext context) {
-        LocalDate earliestEffectiveDate = delayedOfficialNavFund(holding) ? LocalDate.now().minusDays(3) : LocalDate.now();
-        return !context.navDate().isBefore(earliestEffectiveDate);
+        LocalDate today = LocalDate.now();
+        LocalDate effectiveDate = officialNavEffectiveDate(holding, context.navDate());
+        if (delayedOfficialNavFund(holding)) {
+            return !effectiveDate.isBefore(today.minusDays(3)) && !effectiveDate.isAfter(today);
+        }
+        return !context.navDate().isBefore(today);
     }
 
-    private boolean officialNavCountsAsToday(OfficialNavContext context) {
-        return context.navDate() != null && context.navDate().equals(LocalDate.now());
+    private boolean officialNavCountsAsToday(FundHolding holding, OfficialNavContext context) {
+        return context.navDate() != null && officialNavEffectiveDate(holding, context.navDate()).equals(LocalDate.now());
+    }
+
+    private void upsertSnapshot(FundHolding holding, OfficialNavContext officialNav) {
+        PortfolioAccount account = portfolioAccountMapper.selectById(holding.getAccountId());
+        if (account == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "组合账户不存在");
+        }
+        LocalDate snapshotDate = officialNavEffectiveDate(holding, officialNav.navDate());
+        LocalDateTime now = LocalDateTime.now();
+        HoldingSnapshot snapshot = findSnapshot(holding.getId(), snapshotDate);
+        HoldingSnapshot legacyDelayedSnapshot = legacyDelayedSnapshot(holding, officialNav.navDate(), snapshotDate);
+        boolean insert = snapshot == null;
+        if (insert) {
+            snapshot = legacyDelayedSnapshot == null ? new HoldingSnapshot() : legacyDelayedSnapshot;
+            insert = legacyDelayedSnapshot == null;
+            if (insert) {
+                snapshot.setCreateTime(now);
+                snapshot.setDeleted(0);
+            }
+        } else if (legacyDelayedSnapshot != null && legacyDelayedSnapshot.getId() != null) {
+            holdingSnapshotMapper.deleteById(legacyDelayedSnapshot.getId());
+        }
+        snapshot.setUserId(holding.getUserId());
+        snapshot.setAccountId(holding.getAccountId());
+        snapshot.setHoldingId(holding.getId());
+        snapshot.setSnapshotDate(snapshotDate);
+        snapshot.setTotalAsset(valueOrZero(account.getTotalAsset()));
+        snapshot.setHoldingAmount(valueOrZero(holding.getHoldingAmount()));
+        snapshot.setHoldingProfit(valueOrZero(holding.getHoldingProfit()));
+        snapshot.setDailyProfit(valueOrZero(holding.getDailyProfit()));
+        snapshot.setPositionRate(rate(holding.getHoldingAmount(), account.getTotalAsset()));
+        snapshot.setUpdateTime(now);
+        if (insert) {
+            holdingSnapshotMapper.insert(snapshot);
+        } else {
+            holdingSnapshotMapper.updateById(snapshot);
+        }
+    }
+
+    private HoldingSnapshot findSnapshot(Long holdingId, LocalDate snapshotDate) {
+        return holdingSnapshotMapper.selectOne(new LambdaQueryWrapper<HoldingSnapshot>()
+                .eq(HoldingSnapshot::getHoldingId, holdingId)
+                .eq(HoldingSnapshot::getSnapshotDate, snapshotDate)
+                .last("LIMIT 1"));
+    }
+
+    private HoldingSnapshot legacyDelayedSnapshot(FundHolding holding, LocalDate navDate, LocalDate snapshotDate) {
+        if (!delayedOfficialNavFund(holding) || navDate == null || navDate.equals(snapshotDate)) {
+            return null;
+        }
+        return findSnapshot(holding.getId(), navDate);
+    }
+
+    private LocalDate officialNavEffectiveDate(FundHolding holding, LocalDate navDate) {
+        return OfficialNavTiming.effectiveDate(holding, navDate, tradingCalendarService);
     }
 
     private boolean intradayEstimateAllowed(FundHolding holding) {
-        return tradingCalendarService.isIntradayEstimateWindow(LocalDateTime.now()) && !delayedOfficialNavFund(holding);
+        return tradingCalendarService.isIntradayEstimateDisplayWindow(now()) && !delayedOfficialNavFund(holding);
+    }
+
+    private boolean intradayEstimateFetchAllowed(FundHolding holding) {
+        return tradingCalendarService.isIntradayEstimateWindow(now()) && !delayedOfficialNavFund(holding);
+    }
+
+    protected LocalDateTime now() {
+        return LocalDateTime.now();
     }
 
     private boolean delayedOfficialNavFund(FundHolding holding) {
-        String name = holding.getFundName() == null ? "" : holding.getFundName().toUpperCase();
-        String type = holding.getFundType() == null ? "" : holding.getFundType().toUpperCase();
-        if (name.contains("恒生") || name.contains("港股") || name.contains("香港") || name.contains("H股")) {
-            return false;
-        }
-        return type.contains("QDII")
-                || name.contains("QDII")
-                || name.contains("全球")
-                || name.contains("海外")
-                || name.contains("美国")
-                || name.contains("美股")
-                || name.contains("纳指")
-                || name.contains("纳斯达克")
-                || name.contains("标普")
-                || name.contains("道琼斯")
-                || name.contains("美元")
-                || name.contains("人民币");
+        return OfficialNavTiming.isDelayedOfficialNavFund(holding);
     }
 
     private BigDecimal rate(BigDecimal numerator, BigDecimal denominator) {

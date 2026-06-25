@@ -7,6 +7,7 @@ import com.lk.quantfund.annotation.RepeatSubmit;
 import com.lk.quantfund.annotation.RequireLogin;
 import com.lk.quantfund.common.ApiResponse;
 import com.lk.quantfund.constants.SystemConstants;
+import com.lk.quantfund.dto.trade.ConvertPairTradeRequest;
 import com.lk.quantfund.dto.trade.TradeRecordRequest;
 import com.lk.quantfund.enums.DataOperation;
 import com.lk.quantfund.enums.ResourceType;
@@ -85,6 +86,14 @@ public class TradeController {
         return ApiResponse.success(tradeRecordService.createAs(request, TradeType.CONVERT_OUT));
     }
 
+    @PostMapping("/convert-pair")
+    @RateLimit(key = "trade:convert-pair", windowSeconds = 60, maxRequests = 60)
+    @RepeatSubmit(intervalSeconds = 3)
+    @OperationLog(module = "trade", action = "simulated_convert_pair", bizType = "TRADE_RECORD")
+    public ApiResponse<List<TradeRecordVO>> convertPair(@Valid @RequestBody ConvertPairTradeRequest request) {
+        return ApiResponse.success(tradeRecordService.createConvertPair(request));
+    }
+
     @GetMapping
     @RateLimit(key = "trade:list", windowSeconds = 60, maxRequests = 120)
     public ApiResponse<List<TradeRecordVO>> list(@RequestParam(required = false) Long accountId,
@@ -107,4 +116,3 @@ public class TradeController {
         return ApiResponse.success(tradeRecordService.detail(id));
     }
 }
-

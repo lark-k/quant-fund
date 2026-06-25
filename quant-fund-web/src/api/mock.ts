@@ -1,10 +1,14 @@
 import type {
   AiAnalysisReport,
+  AiRuntimeConfig,
   ApiCallLog,
   ApiCallLogQuery,
+  ClearHoldingRequest,
+  ConvertPairTradeRequest,
   DashboardOverview,
   DataSourceConfig,
   DataSourceConfigRequest,
+  DataSourceHealth,
   FundBasicInfo,
   FundHolding,
   FundNavPoint,
@@ -16,6 +20,7 @@ import type {
   HoldingCreateRequest,
   HoldingUpdateRequest,
   LoginResult,
+  MarketSessionStatus,
   OperationLog,
   OperationLogQuery,
   PageResponse,
@@ -80,6 +85,22 @@ const now = atTime(14, 42, 15)
 const dailyProfitByRate = (currentAmount: number, rate: number, baseAmount?: number) => {
   const originalAmount = baseAmount && baseAmount > 0 ? baseAmount : currentAmount / (1 + rate / 100)
   return originalAmount * rate / 100
+}
+const simulatedRemark = (value?: string) => {
+  const remark = value?.trim()
+  if (!remark) return SIMULATED_TRADE_NOTICE
+  return remark.includes(SIMULATED_TRADE_NOTICE) ? remark : `${remark}，${SIMULATED_TRADE_NOTICE}`
+}
+
+export const marketSessionStatus: MarketSessionStatus = {
+  primaryStatusText: 'A股交易中',
+  trading: true,
+  updateTime: now,
+  markets: [
+    { market: 'A股', statusText: 'A股交易中', trading: true },
+    { market: '港股', statusText: '港股交易中', trading: true },
+    { market: '美股', statusText: '海外市场参考/待海外收盘', trading: false }
+  ]
 }
 
 const holdingSeeds: HoldingSeed[] = [
@@ -247,7 +268,9 @@ const trend = Array.from({ length: 18 }, (_, index) => {
     date: `${year}-${String(month).padStart(2, '0')}-23`,
     totalAsset: 5700000 + index * 93000,
     holdingProfit: 300000 + Math.sin(index / 1.4) * 130000 + Math.cos(index / 2.3) * 42000 + index * 46000,
-    dailyProfit: (Math.sin(index * 1.9) + 0.4) * 18000
+    dailyProfit: (Math.sin(index * 1.9) + 0.4) * 18000,
+    profitStatus: index === 17 ? 'ESTIMATED' : 'CONFIRMED',
+    profitStatusText: index === 17 ? '盘中预估，待正式净值确认' : '正式净值已确认'
   }
 })
 
@@ -335,11 +358,24 @@ export const profitAnalysis: ProfitAnalysis = {
     totalAsset: point.totalAsset,
     dailyProfit: point.dailyProfit,
     cumulativeProfit: 300000 + index * 42000,
-    dailyProfitRate: point.dailyProfit / point.totalAsset * 100
+    dailyProfitRate: point.dailyProfit / point.totalAsset * 100,
+    profitStatus: index === trend.length - 1 ? 'ESTIMATED' : 'CONFIRMED',
+    profitStatusText: index === trend.length - 1 ? '盘中预估，待正式净值确认' : '正式净值已确认'
   })),
   profitTop5: holdings.map(toRank).filter((item) => item.holdingProfit > 0).slice(0, 5),
   lossTop5: holdings.map(toRank).filter((item) => item.holdingProfit < 0).slice(0, 5),
-  indexCompareStatus: '跑赢沪深300 6.21%，跑赢上证指数 4.18%',
+  indexCompare: {
+    indexCode: '000300',
+    indexName: '沪深300',
+    indexChangeRate: 1.68,
+    selectedRangeProfitRate: 8.12,
+    excessReturn: 6.44,
+    updateTime: atTime(15, 0),
+    sourceName: 'MOCK_FALLBACK',
+    statusText: '组合区间收益率 8.12%，沪深300实时涨跌幅 1.68%，跑赢 6.44%',
+    available: true
+  },
+  indexCompareStatus: '组合区间收益率 8.12%，沪深300实时涨跌幅 1.68%，跑赢 6.44%',
   disclaimer: DISCLAIMER
 }
 
@@ -390,7 +426,9 @@ export const profitCalendar: ProfitCalendar = {
       cumulativeProfit: 400000 + index * 5700 + (tradingDay ? profit : 0),
       heatLevel: tradingDay ? (profit > 6500 ? 'STRONG_PROFIT' : profit > 0 ? 'PROFIT' : profit < -6500 ? 'STRONG_LOSS' : profit < 0 ? 'LOSS' : 'FLAT') : 'NON_TRADING',
       tradingDay,
-      tradingDayLabel: tradingDay ? '交易日' : '非交易日'
+      tradingDayLabel: tradingDay ? '交易日' : '非交易日',
+      profitStatus: tradingDay ? (index === 29 ? 'ESTIMATED' : 'CONFIRMED') : 'NON_TRADING',
+      profitStatusText: tradingDay ? (index === 29 ? '盘中预估，待正式净值确认' : '正式净值已确认') : '休市/非交易日'
     }
   }),
   profitTop5: holdings.map(toRank).filter((item) => item.holdingProfit > 0).slice(0, 5),
@@ -462,6 +500,44 @@ export const dataSources: DataSourceConfig[] = [
     updateTime: now
   }
 ]
+
+export const dataSourceHealth: DataSourceHealth[] = [
+  {
+    provider: 'EAST_MONEY',
+    apiName: 'FUND_ESTIMATE',
+    healthy: true,
+    delayed: false,
+    lastCallTime: now,
+    lastSuccessTime: now,
+    lastFailureTime: null,
+    lastFailureReason: null,
+    lastCostTimeMs: 138,
+    statusText: '最近调用成功'
+  },
+  {
+    provider: 'MOCK_FALLBACK',
+    apiName: 'FUND_NAV_DAILY',
+    healthy: false,
+    delayed: true,
+    lastCallTime: atTime(14, 31, 44),
+    lastSuccessTime: atTime(14, 31, 44),
+    lastFailureTime: null,
+    lastFailureReason: null,
+    lastCostTimeMs: 8,
+    statusText: '最近调用使用降级数据'
+  }
+]
+
+export const aiRuntimeConfig: AiRuntimeConfig = {
+  enabled: true,
+  provider: 'deepseek',
+  model: 'deepseek-v4-flash',
+  baseUrl: 'local://mock',
+  keyPresent: false,
+  mockEnabled: true,
+  ready: false,
+  diagnosis: 'DEEPSEEK_MOCK_ENABLED=true，当前前端使用本地 mock 数据'
+}
 
 export const operationLogs: OperationLog[] = [
   {
@@ -666,7 +742,10 @@ function buildFundNav(fundCode: string): FundNavPoint[] {
       date: `2025-${String((index % 12) + 1).padStart(2, '0')}-${String((index % 24) + 1).padStart(2, '0')}`,
       nav,
       accumulatedNav: Number((nav + 0.42).toFixed(4)),
-      dailyGrowthRate: Number(((Math.sin(index / 2.1) + 0.2) * 0.85).toFixed(2))
+      dailyGrowthRate: Number(((Math.sin(index / 2.1) + 0.2) * 0.85).toFixed(2)),
+      indexReturnRate: Number((Math.sin(index / 6) * 2.4 + index * 0.12 - 0.8).toFixed(2)),
+      indexCode: fundCode === '161725' ? '399997' : '000300',
+      indexName: fundCode === '161725' ? '中证白酒' : '沪深300'
     }
   })
 }
@@ -724,6 +803,9 @@ export const mockApi = {
       { code: '399006', name: '创业板指', latestPrice: 4251.42, changeValue: 59.23, changeRate: 1.41, turnover: 853839664922.36, updateTime: new Date().toISOString(), sourceName: 'MOCK' },
       { code: '000905', name: '中证500', latestPrice: 8842.94, changeValue: 154.35, changeRate: 1.78, turnover: 684019604157.1, updateTime: new Date().toISOString(), sourceName: 'MOCK' }
     ]
+  },
+  async marketStatus() {
+    return marketSessionStatus
   },
   async holdings() {
     return holdings
@@ -840,6 +922,46 @@ export const mockApi = {
       }
     }
   },
+  async clearHolding(id: number, request?: ClearHoldingRequest) {
+    const existing = holdings.find((item) => item.id === id)
+    if (!existing) throw new Error('未找到持仓记录')
+    const clearedAmount = existing.holdingAmount
+    const clearedShare = existing.holdingShare
+    const clearedNav = existing.currentEstimateNav || existing.latestOfficialNav || (clearedShare > 0 ? clearedAmount / clearedShare : 0)
+    const tradeAmount = request?.tradeAmount ?? clearedAmount
+    const tradeFee = request?.tradeFee ?? 0
+    if (clearedAmount > 0 || clearedShare > 0) {
+      trades.unshift({
+        id: Date.now(),
+        accountId: existing.accountId,
+        holdingId: existing.id,
+        fundCode: existing.fundCode,
+        fundName: existing.fundName,
+        tradeType: 'SELL',
+        tradeStatus: 'COMPLETED',
+        tradeAmount,
+        tradeShare: clearedShare,
+        tradeNav: clearedNav,
+        tradeFee,
+        tradeTime: now,
+        remark: simulatedRemark(request?.remark || '清仓自动生成的模拟卖出流水'),
+        simulatedTradeNotice: SIMULATED_TRADE_NOTICE
+      })
+    }
+    Object.assign(existing, {
+      activeFund: false,
+      holdingAmount: 0,
+      holdingShare: 0,
+      holdingCost: 0,
+      holdingProfit: 0,
+      holdingProfitRate: 0,
+      dailyProfit: 0,
+      positionRate: 0,
+      currentEstimateGrowthRate: 0,
+      updateTime: now
+    })
+    return existing
+  },
   async recalculateHolding(id: number) {
     const existing = holdings.find((item) => item.id === id)
     if (!existing) throw new Error('未找到持仓记录')
@@ -895,6 +1017,12 @@ export const mockApi = {
   },
   async dataSources() {
     return dataSources
+  },
+  async dataSourceHealth() {
+    return dataSourceHealth
+  },
+  async aiRuntimeConfig() {
+    return aiRuntimeConfig
   },
   async saveDataSource(request: DataSourceConfigRequest) {
     const saved: DataSourceConfig = {
@@ -1070,10 +1198,50 @@ export const mockApi = {
       tradeNav: request.tradeNav || 1.2,
       tradeFee: request.tradeFee || 0,
       tradeTime: request.tradeTime || now,
-      remark: request.remark || SIMULATED_TRADE_NOTICE,
+      remark: simulatedRemark(request.remark),
       simulatedTradeNotice: SIMULATED_TRADE_NOTICE
     }
     trades.unshift(trade)
     return trade
+  },
+  async createConvertPair(request: ConvertPairTradeRequest) {
+    const outHolding = holdings.find((item) => item.id === request.outHoldingId)
+    const timestamp = Date.now()
+    const outNav = request.outTradeNav || outHolding?.currentEstimateNav || outHolding?.latestOfficialNav || 1.2
+    const inNav = request.inTradeNav || 1.2
+    const outTrade: TradeRecord = {
+      id: timestamp,
+      accountId: request.accountId,
+      holdingId: request.outHoldingId,
+      fundCode: outHolding?.fundCode || '',
+      fundName: outHolding?.fundName || '',
+      tradeType: 'CONVERT_OUT',
+      tradeStatus: request.tradeStatus || 'COMPLETED',
+      tradeAmount: request.outTradeAmount,
+      tradeShare: request.outTradeShare || Math.round(request.outTradeAmount / Math.max(outNav, 0.0001)),
+      tradeNav: outNav,
+      tradeFee: request.outTradeFee || 0,
+      tradeTime: request.tradeTime || now,
+      remark: simulatedRemark(request.remark),
+      simulatedTradeNotice: SIMULATED_TRADE_NOTICE
+    }
+    const inTrade: TradeRecord = {
+      id: timestamp + 1,
+      accountId: request.accountId,
+      holdingId: request.inHoldingId,
+      fundCode: request.inFundCode,
+      fundName: request.inFundName,
+      tradeType: 'CONVERT_IN',
+      tradeStatus: request.tradeStatus || 'COMPLETED',
+      tradeAmount: request.inTradeAmount,
+      tradeShare: request.inTradeShare || Math.round(request.inTradeAmount / Math.max(inNav, 0.0001)),
+      tradeNav: inNav,
+      tradeFee: request.inTradeFee || 0,
+      tradeTime: request.tradeTime || now,
+      remark: simulatedRemark(request.remark),
+      simulatedTradeNotice: SIMULATED_TRADE_NOTICE
+    }
+    trades.unshift(inTrade, outTrade)
+    return [outTrade, inTrade]
   }
 }

@@ -32,6 +32,9 @@ const holdings = ref<FundHolding[]>([])
 const filter = ref('ALL')
 const dialogOpen = ref(false)
 const saving = ref(false)
+const convertDialogOpen = ref(false)
+const convertSaving = ref(false)
+const convertInAmountTouched = ref(false)
 const tradeForm = ref({
   holdingId: undefined as number | undefined,
   fundCode: '',
@@ -42,6 +45,22 @@ const tradeForm = ref({
   tradeFee: 0,
   tradeType: 'BUY' as TradeRecord['tradeType'],
   tradeStatus: 'PROCESSING' as TradeRecord['tradeStatus'],
+  remark: SIMULATED_TRADE_NOTICE
+})
+const convertForm = ref({
+  outHoldingId: undefined as number | undefined,
+  outTradeAmount: 0,
+  outTradeShare: 0,
+  outTradeNav: 1,
+  outTradeFee: 0,
+  inHoldingId: undefined as number | undefined,
+  inFundCode: '',
+  inFundName: '',
+  inTradeAmount: 0,
+  inTradeShare: 0,
+  inTradeNav: 1,
+  inTradeFee: 0,
+  tradeStatus: 'COMPLETED' as TradeRecord['tradeStatus'],
   remark: SIMULATED_TRADE_NOTICE
 })
 
@@ -66,6 +85,18 @@ const filtered = computed(() => {
 const totalAmount = computed(() => filtered.value.reduce((sum, item) => sum + item.tradeAmount, 0))
 const processingCount = computed(() => trades.value.filter((item) => item.tradeStatus === 'PROCESSING').length)
 const completedCount = computed(() => trades.value.filter((item) => item.tradeStatus === 'COMPLETED').length)
+const selectedOutHolding = computed(() => holdings.value.find((item) => item.id === convertForm.value.outHoldingId))
+const estimatedOutShare = computed(() => {
+  const explicitShare = Number(convertForm.value.outTradeShare)
+  if (explicitShare > 0) return explicitShare
+  const outNav = Number(convertForm.value.outTradeNav) || 1
+  return Number(convertForm.value.outTradeAmount) / Math.max(outNav, 0.0001)
+})
+const convertOutOverLimit = computed(() => {
+  const holding = selectedOutHolding.value
+  if (!holding) return false
+  return Number(convertForm.value.outTradeAmount) > holding.holdingAmount || estimatedOutShare.value > holding.holdingShare
+})
 
 function actionForTrade(tradeType: TradeRecord['tradeType']) {
   return tradeType === 'SELL' || tradeType === 'CONVERT_OUT' ? 'SELL' : 'BUY'
@@ -94,6 +125,12 @@ function localDateTime() {
   const date = new Date()
   const pad = (value: number) => String(value).padStart(2, '0')
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
+function simulatedRemark(value?: string) {
+  const remark = value?.trim()
+  if (!remark) return SIMULATED_TRADE_NOTICE
+  return remark.includes(SIMULATED_TRADE_NOTICE) ? remark : `${remark}，${SIMULATED_TRADE_NOTICE}`
 }
 
 function resetTradeForm() {
@@ -146,13 +183,108 @@ async function saveTrade() {
       tradeNav: nav,
       tradeFee: Number(tradeForm.value.tradeFee),
       tradeTime: localDateTime(),
-      remark: tradeForm.value.remark || SIMULATED_TRADE_NOTICE
+      remark: simulatedRemark(tradeForm.value.remark)
     })
     trades.value = [trade, ...trades.value.filter((item) => item.id !== trade.id)]
     dialogOpen.value = false
     ElMessage.success('模拟交易记录已保存')
   } finally {
     saving.value = false
+  }
+}
+
+function resetConvertForm() {
+  const first = holdings.value[0]
+  convertInAmountTouched.value = false
+  convertForm.value = {
+    outHoldingId: first?.id,
+    outTradeAmount: 0,
+    outTradeShare: 0,
+    outTradeNav: first?.currentEstimateNav || first?.latestOfficialNav || 1,
+    outTradeFee: 0,
+    inHoldingId: undefined,
+    inFundCode: '',
+    inFundName: '',
+    inTradeAmount: 0,
+    inTradeShare: 0,
+    inTradeNav: 1,
+    inTradeFee: 0,
+    tradeStatus: 'COMPLETED',
+    remark: SIMULATED_TRADE_NOTICE
+  }
+}
+
+function openConvertDialog() {
+  resetConvertForm()
+  convertDialogOpen.value = true
+}
+
+function applyOutHolding() {
+  const holding = holdings.value.find((item) => item.id === convertForm.value.outHoldingId)
+  if (!holding) return
+  convertForm.value.outTradeNav = holding.currentEstimateNav || holding.latestOfficialNav || 1
+  syncConvertInAmountFromOut()
+}
+
+function applyInHolding() {
+  const holding = holdings.value.find((item) => item.id === convertForm.value.inHoldingId)
+  if (!holding) return
+  convertForm.value.inFundCode = holding.fundCode
+  convertForm.value.inFundName = holding.fundName
+  convertForm.value.inTradeNav = holding.currentEstimateNav || holding.latestOfficialNav || 1
+}
+
+function syncConvertInAmountFromOut() {
+  if (convertInAmountTouched.value) return
+  const outAmount = Number(convertForm.value.outTradeAmount) || 0
+  const outFee = Number(convertForm.value.outTradeFee) || 0
+  const inFee = Number(convertForm.value.inTradeFee) || 0
+  convertForm.value.inTradeAmount = Math.max(outAmount - outFee - inFee, 0)
+}
+
+function markConvertInAmountTouched() {
+  convertInAmountTouched.value = true
+}
+
+async function saveConvertPair() {
+  const outHolding = holdings.value.find((item) => item.id === convertForm.value.outHoldingId)
+  if (!outHolding || convertForm.value.outTradeAmount <= 0 || !convertForm.value.inFundCode || !convertForm.value.inFundName || convertForm.value.inTradeAmount <= 0) {
+    ElMessage.warning('请选择转出持仓并填写有效的转入基金和金额')
+    return
+  }
+  if (convertOutOverLimit.value) {
+    ElMessage.warning('转出金额或份额不能超过当前持仓')
+    return
+  }
+
+  convertSaving.value = true
+  try {
+    const outNav = Number(convertForm.value.outTradeNav) || 1
+    const inNav = Number(convertForm.value.inTradeNav) || 1
+    const pair = await quantApi.createConvertPair({
+      accountId: outHolding.accountId,
+      outHoldingId: outHolding.id,
+      outTradeAmount: Number(convertForm.value.outTradeAmount),
+      outTradeShare: Number(convertForm.value.outTradeShare) || Math.round(Number(convertForm.value.outTradeAmount) / Math.max(outNav, 0.0001)),
+      outTradeNav: outNav,
+      outTradeFee: Number(convertForm.value.outTradeFee),
+      inHoldingId: convertForm.value.inHoldingId,
+      inFundCode: convertForm.value.inFundCode,
+      inFundName: convertForm.value.inFundName,
+      inTradeAmount: Number(convertForm.value.inTradeAmount),
+      inTradeShare: Number(convertForm.value.inTradeShare) || Math.round(Number(convertForm.value.inTradeAmount) / Math.max(inNav, 0.0001)),
+      inTradeNav: inNav,
+      inTradeFee: Number(convertForm.value.inTradeFee),
+      tradeStatus: convertForm.value.tradeStatus,
+      tradeTime: localDateTime(),
+      remark: simulatedRemark(convertForm.value.remark)
+    })
+    trades.value = [...pair, ...trades.value.filter((item) => !pair.some((trade) => trade.id === item.id))]
+    filter.value = 'CONVERT'
+    convertDialogOpen.value = false
+    ElMessage.success('成对转换记录已保存')
+  } finally {
+    convertSaving.value = false
   }
 }
 </script>
@@ -168,6 +300,7 @@ async function saveTrade() {
           <div class="segmented trade-filter">
             <button v-for="item in filters" :key="item.key" :class="{ active: filter === item.key }" @click="filter = item.key">{{ item.label }}</button>
           </div>
+          <button class="ghost-button" @click="openConvertDialog">成对转换</button>
           <button class="primary-button" @click="openDialog">添加交易记录</button>
         </div>
       </div>
@@ -236,6 +369,45 @@ async function saveTrade() {
       </div>
       <template #footer>
         <button class="primary-button" :disabled="saving" @click="saveTrade">{{ saving ? '保存中' : '保存模拟记录' }}</button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="convertDialogOpen" title="成对转换" width="720px">
+      <DisclaimerBar simulated />
+      <div class="modal-grid compact-form">
+        <label>转出持仓
+          <select v-model.number="convertForm.outHoldingId" class="form-control" @change="applyOutHolding">
+            <option v-for="item in holdings" :key="item.id" :value="item.id">{{ item.fundCode }} · {{ item.fundName }}</option>
+          </select>
+        </label>
+        <label>转出金额<input v-model.number="convertForm.outTradeAmount" class="form-control" type="number" min="0" @input="syncConvertInAmountFromOut" /></label>
+        <label>转出份额<input v-model.number="convertForm.outTradeShare" class="form-control" type="number" min="0" /></label>
+        <label>转出净值<input v-model.number="convertForm.outTradeNav" class="form-control" type="number" min="0" step="0.0001" /></label>
+        <label>转出手续费<input v-model.number="convertForm.outTradeFee" class="form-control" type="number" min="0" @input="syncConvertInAmountFromOut" /></label>
+        <p v-if="selectedOutHolding" class="form-hint full-span">当前可转出：{{ money(selectedOutHolding.holdingAmount) }} / {{ money(selectedOutHolding.holdingShare, 0) }} 份</p>
+        <p v-if="convertOutOverLimit" class="form-warning full-span">转出金额或份额不能超过当前持仓。</p>
+        <label>转入持仓
+          <select v-model.number="convertForm.inHoldingId" class="form-control" @change="applyInHolding">
+            <option :value="undefined">新基金</option>
+            <option v-for="item in holdings" :key="item.id" :value="item.id">{{ item.fundCode }} · {{ item.fundName }}</option>
+          </select>
+        </label>
+        <label>转入基金代码<input v-model="convertForm.inFundCode" class="form-control" /></label>
+        <label>转入基金名称<input v-model="convertForm.inFundName" class="form-control" /></label>
+        <label>转入金额<input v-model.number="convertForm.inTradeAmount" class="form-control" type="number" min="0" @input="markConvertInAmountTouched" /></label>
+        <label>转入份额<input v-model.number="convertForm.inTradeShare" class="form-control" type="number" min="0" /></label>
+        <label>转入净值<input v-model.number="convertForm.inTradeNav" class="form-control" type="number" min="0" step="0.0001" /></label>
+        <label>转入手续费<input v-model.number="convertForm.inTradeFee" class="form-control" type="number" min="0" @input="syncConvertInAmountFromOut" /></label>
+        <label>交易状态
+          <select v-model="convertForm.tradeStatus" class="form-control">
+            <option value="COMPLETED">已完成</option>
+            <option value="PROCESSING">进行中</option>
+          </select>
+        </label>
+        <label class="full-span">备注<textarea v-model="convertForm.remark" class="form-control text-area"></textarea></label>
+      </div>
+      <template #footer>
+        <button class="primary-button" :disabled="convertSaving" @click="saveConvertPair">{{ convertSaving ? '保存中' : '保存成对转换' }}</button>
       </template>
     </el-dialog>
   </div>

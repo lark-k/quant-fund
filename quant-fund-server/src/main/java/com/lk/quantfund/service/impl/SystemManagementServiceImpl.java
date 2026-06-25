@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.lk.quantfund.auth.UserContext;
 import com.lk.quantfund.common.PageResponse;
+import com.lk.quantfund.config.QuantFundProperties;
 import com.lk.quantfund.dto.system.DataSourceConfigRequest;
 import com.lk.quantfund.entity.ApiCallLogEntity;
 import com.lk.quantfund.entity.DataSourceConfig;
@@ -15,7 +16,9 @@ import com.lk.quantfund.mapper.DataSourceConfigMapper;
 import com.lk.quantfund.mapper.OperationLogMapper;
 import com.lk.quantfund.service.SystemManagementService;
 import com.lk.quantfund.vo.system.ApiCallLogVO;
+import com.lk.quantfund.vo.system.AiRuntimeConfigVO;
 import com.lk.quantfund.vo.system.DataSourceConfigVO;
+import com.lk.quantfund.vo.system.DataSourceHealthVO;
 import com.lk.quantfund.vo.system.OperationLogVO;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
@@ -31,13 +34,16 @@ public class SystemManagementServiceImpl implements SystemManagementService {
     private final DataSourceConfigMapper dataSourceConfigMapper;
     private final OperationLogMapper operationLogMapper;
     private final ApiCallLogMapper apiCallLogMapper;
+    private final QuantFundProperties properties;
 
     public SystemManagementServiceImpl(DataSourceConfigMapper dataSourceConfigMapper,
                                        OperationLogMapper operationLogMapper,
-                                       ApiCallLogMapper apiCallLogMapper) {
+                                       ApiCallLogMapper apiCallLogMapper,
+                                       QuantFundProperties properties) {
         this.dataSourceConfigMapper = dataSourceConfigMapper;
         this.operationLogMapper = operationLogMapper;
         this.apiCallLogMapper = apiCallLogMapper;
+        this.properties = properties;
     }
 
     @Override
@@ -60,6 +66,44 @@ public class SystemManagementServiceImpl implements SystemManagementService {
             }
         }
         return merged.values().stream().map(this::toDataSourceConfigVO).toList();
+    }
+
+    @Override
+    public AiRuntimeConfigVO aiRuntimeConfig() {
+        QuantFundProperties.Ai ai = properties.getAi();
+        boolean keyPresent = StringUtils.hasText(ai.getApiKey());
+        boolean ready = ai.isEnabled() && keyPresent && !ai.isMockEnabled();
+        return new AiRuntimeConfigVO(
+                ai.isEnabled(),
+                ai.getProvider(),
+                ai.getModel(),
+                ai.getBaseUrl(),
+                keyPresent,
+                ai.isMockEnabled(),
+                ready,
+                aiDiagnosis(ai, keyPresent)
+        );
+    }
+
+    @Override
+    public List<DataSourceHealthVO> listDataSourceHealth() {
+        Long userId = UserContext.getUserId();
+        List<ApiCallLogEntity> logs = apiCallLogMapper.selectList(new LambdaQueryWrapper<ApiCallLogEntity>()
+                .and(wrapper -> wrapper.eq(ApiCallLogEntity::getUserId, userId).or().isNull(ApiCallLogEntity::getUserId))
+                .orderByDesc(ApiCallLogEntity::getCallTime)
+                .last("LIMIT 300"));
+        Map<String, HealthAccumulator> healthByApi = new LinkedHashMap<>();
+        for (ApiCallLogEntity log : logs) {
+            if (!StringUtils.hasText(log.getProvider()) || !StringUtils.hasText(log.getApiName())) {
+                continue;
+            }
+            String key = log.getProvider() + "::" + log.getApiName();
+            healthByApi.computeIfAbsent(key, ignored -> new HealthAccumulator(log.getProvider(), log.getApiName()))
+                    .accept(log);
+        }
+        return healthByApi.values().stream()
+                .map(HealthAccumulator::toVO)
+                .toList();
     }
 
     @Override
@@ -203,6 +247,77 @@ public class SystemManagementServiceImpl implements SystemManagementService {
                 log.getFallbackUsed() != null && log.getFallbackUsed() == 1,
                 log.getCallTime()
         );
+    }
+
+    private String aiDiagnosis(QuantFundProperties.Ai ai, boolean keyPresent) {
+        if (!ai.isEnabled()) {
+            return "DEEPSEEK_ENABLED=false，AI 真实调用已关闭";
+        }
+        if (ai.isMockEnabled()) {
+            return "DEEPSEEK_MOCK_ENABLED=true，当前配置要求使用 mock/降级模式";
+        }
+        if (!keyPresent) {
+            return "DEEPSEEK_API_KEY 未配置，无法调用 DeepSeek 真实接口";
+        }
+        return "DeepSeek 真实调用配置就绪";
+    }
+
+    private static class HealthAccumulator {
+        private final String provider;
+        private final String apiName;
+        private ApiCallLogEntity latest;
+        private LocalDateTime lastSuccessTime;
+        private LocalDateTime lastFailureTime;
+        private String lastFailureReason;
+
+        HealthAccumulator(String provider, String apiName) {
+            this.provider = provider;
+            this.apiName = apiName;
+        }
+
+        void accept(ApiCallLogEntity log) {
+            if (latest == null) {
+                latest = log;
+            }
+            if (isSuccess(log) && lastSuccessTime == null) {
+                lastSuccessTime = log.getCallTime();
+            }
+            if (!isSuccess(log) && lastFailureTime == null) {
+                lastFailureTime = log.getCallTime();
+                lastFailureReason = log.getErrorMessage();
+            }
+        }
+
+        DataSourceHealthVO toVO() {
+            boolean latestSuccess = latest != null && isSuccess(latest);
+            boolean delayed = latest != null && latest.getFallbackUsed() != null && latest.getFallbackUsed() == 1;
+            return new DataSourceHealthVO(
+                    provider,
+                    apiName,
+                    latestSuccess && !delayed,
+                    delayed,
+                    latest == null ? null : latest.getCallTime(),
+                    lastSuccessTime,
+                    lastFailureTime,
+                    lastFailureReason,
+                    latest == null ? null : latest.getCostTimeMs(),
+                    statusText(latestSuccess, delayed)
+            );
+        }
+
+        private static boolean isSuccess(ApiCallLogEntity log) {
+            return log.getSuccess() != null && log.getSuccess() == 1;
+        }
+
+        private static String statusText(boolean latestSuccess, boolean delayed) {
+            if (!latestSuccess) {
+                return "最近调用失败";
+            }
+            if (delayed) {
+                return "最近调用使用降级数据";
+            }
+            return "最近调用成功";
+        }
     }
 
     private long normalizePageNo(Long pageNo) {

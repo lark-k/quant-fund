@@ -8,6 +8,9 @@ public record ProfitTrendPointVO(
         BigDecimal totalAsset,
         BigDecimal dailyProfit,
         BigDecimal cumulativeProfit,
-        BigDecimal dailyProfitRate
+        BigDecimal dailyProfitRate,
+        BigDecimal indexReturnRate,
+        String profitStatus,
+        String profitStatusText
 ) {
 }

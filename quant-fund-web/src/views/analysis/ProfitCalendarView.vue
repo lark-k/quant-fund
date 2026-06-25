@@ -26,8 +26,8 @@ const chart = computed(() => calendarBarOption(data.value?.days || []))
 const tradingDays = computed(() => data.value?.days.filter((day) => day.tradingDay) || [])
 const profitDays = computed(() => tradingDays.value.filter((day) => day.dailyProfit > 0).length)
 const lossDays = computed(() => tradingDays.value.filter((day) => day.dailyProfit < 0).length)
-const bestDay = computed(() => data.value?.days.reduce((best, day) => day.dailyProfit > best.dailyProfit ? day : best, data.value.days[0]))
-const worstDay = computed(() => data.value?.days.reduce((worst, day) => day.dailyProfit < worst.dailyProfit ? day : worst, data.value.days[0]))
+const bestDay = computed(() => tradingDays.value.reduce((best, day) => day.dailyProfit > best.dailyProfit ? day : best, tradingDays.value[0]))
+const worstDay = computed(() => tradingDays.value.reduce((worst, day) => day.dailyProfit < worst.dailyProfit ? day : worst, tradingDays.value[0]))
 const weekdayLabels = ['一', '二', '三', '四', '五', '六', '日']
 const calendarCells = computed(() => {
   const days = data.value?.days || []
@@ -53,6 +53,12 @@ const calendarCells = computed(() => {
 const todayText = new Date().toISOString().slice(0, 10)
 const profitRows = computed(() => (data.value?.profitTop5 || []).filter((item) => item.holdingProfit > 0))
 const lossRows = computed(() => (data.value?.lossTop5 || []).filter((item) => item.holdingProfit < 0))
+
+function dayStatusText(day: ProfitCalendar['days'][number]) {
+  if (!day.tradingDay) return day.profitStatusText || day.tradingDayLabel
+  const rateText = percent(day.dailyProfitRate, 2)
+  return day.profitStatusText ? `${rateText} · ${day.profitStatusText}` : rateText
+}
 </script>
 
 <template>
@@ -71,7 +77,7 @@ const lossRows = computed(() => (data.value?.lossTop5 || []).filter((item) => it
     <section class="panel">
       <div class="panel-header">
         <h2 class="panel-title">盈亏日历 · {{ data.month }}</h2>
-        <span class="item-meta">每日收益金额 / 每日收益率 / 累计收益</span>
+        <span class="item-meta">每日收益金额 / 每日收益率 / 累计收益；休市日不参与统计</span>
       </div>
       <div class="panel-body">
         <div class="calendar-toolbar">
@@ -96,14 +102,14 @@ const lossRows = computed(() => (data.value?.lossTop5 || []).filter((item) => it
               !day.blank && !day.tradingDay ? 'non-trading' : ''
             ]"
             type="button"
-            :title="day.blank ? '' : `${day.date} ${day.tradingDayLabel} ${signed(day.dailyProfit)} ${percent(day.dailyProfitRate)}`"
+            :title="day.blank ? '' : `${day.date} ${day.tradingDayLabel} ${signed(day.dailyProfit)} ${dayStatusText(day)}`"
             :disabled="day.blank"
           >
             <template v-if="!day.blank">
               <strong>{{ day.date.slice(8) }}<em v-if="day.date === todayText">今</em></strong>
               <span v-if="day.tradingDay" :class="toneClass(day.dailyProfit)">{{ signed(day.dailyProfit) }}</span>
               <span v-else>休</span>
-              <small>{{ day.tradingDay ? percent(day.dailyProfitRate, 2) : day.tradingDayLabel }}</small>
+              <small>{{ dayStatusText(day) }}</small>
             </template>
           </button>
         </div>

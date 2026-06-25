@@ -1,6 +1,7 @@
 package com.lk.quantfund.scheduler;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.lk.quantfund.config.QuantFundProperties;
 import com.lk.quantfund.entity.FundHolding;
 import com.lk.quantfund.entity.HoldingSnapshot;
 import com.lk.quantfund.entity.PortfolioAccount;
@@ -24,21 +25,39 @@ public class HoldingSnapshotBackfillService {
     private final FundHoldingMapper fundHoldingMapper;
     private final PortfolioAccountMapper portfolioAccountMapper;
     private final HoldingSnapshotMapper holdingSnapshotMapper;
+    private final TradingCalendarService tradingCalendarService;
+    private final QuantFundProperties properties;
 
     public HoldingSnapshotBackfillService(FundHoldingMapper fundHoldingMapper,
                                           PortfolioAccountMapper portfolioAccountMapper,
-                                          HoldingSnapshotMapper holdingSnapshotMapper) {
+                                          HoldingSnapshotMapper holdingSnapshotMapper,
+                                          TradingCalendarService tradingCalendarService,
+                                          QuantFundProperties properties) {
         this.fundHoldingMapper = fundHoldingMapper;
         this.portfolioAccountMapper = portfolioAccountMapper;
         this.holdingSnapshotMapper = holdingSnapshotMapper;
+        this.tradingCalendarService = tradingCalendarService;
+        this.properties = properties;
     }
 
     @Transactional(rollbackFor = Exception.class)
     public void ensureRecentSnapshots(Long userId) {
+        ensureRecentSnapshots(userId, LocalDate.now());
+    }
+
+    void ensureRecentSnapshots(Long userId, LocalDate today) {
         if (userId == null) {
             return;
         }
-        ensureSnapshot(userId, LocalDate.now().minusDays(1));
+        int remainingTradingDays = properties.getScheduler().getSnapshotBackfillTradingDays();
+        LocalDate cursor = today.minusDays(1);
+        while (remainingTradingDays > 0) {
+            if (tradingCalendarService.isTradingDay(cursor)) {
+                ensureSnapshot(userId, cursor);
+                remainingTradingDays--;
+            }
+            cursor = cursor.minusDays(1);
+        }
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -51,27 +70,14 @@ public class HoldingSnapshotBackfillService {
                 .orderByAsc(FundHolding::getFundCode));
         LocalDateTime now = LocalDateTime.now();
         for (FundHolding holding : holdings) {
-            if (!holdingExistedOn(holding, snapshotDate) || snapshotExists(holding.getId(), snapshotDate)) {
+            if (!holdingExistedOn(holding, snapshotDate)) {
                 continue;
             }
             PortfolioAccount account = portfolioAccountMapper.selectById(holding.getAccountId());
             if (account == null) {
                 continue;
             }
-            HoldingSnapshot snapshot = new HoldingSnapshot();
-            snapshot.setUserId(holding.getUserId());
-            snapshot.setAccountId(holding.getAccountId());
-            snapshot.setHoldingId(holding.getId());
-            snapshot.setSnapshotDate(snapshotDate);
-            snapshot.setTotalAsset(scale(account.getTotalAsset()));
-            snapshot.setHoldingAmount(scale(holding.getHoldingAmount()));
-            snapshot.setHoldingProfit(scale(holding.getHoldingProfit()));
-            snapshot.setDailyProfit(scale(holding.getDailyProfit()));
-            snapshot.setPositionRate(positionRate(holding.getHoldingAmount(), account.getTotalAsset()));
-            snapshot.setCreateTime(now);
-            snapshot.setUpdateTime(now);
-            snapshot.setDeleted(0);
-            holdingSnapshotMapper.insert(snapshot);
+            upsertSnapshot(holding, account, snapshotDate, now);
         }
     }
 
@@ -80,13 +86,6 @@ public class HoldingSnapshotBackfillService {
             return true;
         }
         return !holding.getCreateTime().toLocalDate().isAfter(snapshotDate);
-    }
-
-    private boolean snapshotExists(Long holdingId, LocalDate snapshotDate) {
-        Long count = holdingSnapshotMapper.selectCount(new LambdaQueryWrapper<HoldingSnapshot>()
-                .eq(HoldingSnapshot::getHoldingId, holdingId)
-                .eq(HoldingSnapshot::getSnapshotDate, snapshotDate));
-        return count != null && count > 0;
     }
 
     private BigDecimal positionRate(BigDecimal holdingAmount, BigDecimal totalAsset) {
@@ -98,5 +97,29 @@ public class HoldingSnapshotBackfillService {
 
     private BigDecimal scale(BigDecimal value) {
         return value == null ? ZERO : value.setScale(4, RoundingMode.HALF_UP);
+    }
+
+    private void upsertSnapshot(FundHolding holding, PortfolioAccount account, LocalDate snapshotDate, LocalDateTime now) {
+        HoldingSnapshot snapshot = holdingSnapshotMapper.selectOne(new LambdaQueryWrapper<HoldingSnapshot>()
+                .eq(HoldingSnapshot::getHoldingId, holding.getId())
+                .eq(HoldingSnapshot::getSnapshotDate, snapshotDate)
+                .last("LIMIT 1"));
+        if (snapshot != null) {
+            return;
+        }
+        snapshot = new HoldingSnapshot();
+        snapshot.setCreateTime(now);
+        snapshot.setDeleted(0);
+        snapshot.setUserId(holding.getUserId());
+        snapshot.setAccountId(holding.getAccountId());
+        snapshot.setHoldingId(holding.getId());
+        snapshot.setSnapshotDate(snapshotDate);
+        snapshot.setTotalAsset(scale(account.getTotalAsset()));
+        snapshot.setHoldingAmount(scale(holding.getHoldingAmount()));
+        snapshot.setHoldingProfit(scale(holding.getHoldingProfit()));
+        snapshot.setDailyProfit(scale(holding.getDailyProfit()));
+        snapshot.setPositionRate(positionRate(holding.getHoldingAmount(), account.getTotalAsset()));
+        snapshot.setUpdateTime(now);
+        holdingSnapshotMapper.insert(snapshot);
     }
 }

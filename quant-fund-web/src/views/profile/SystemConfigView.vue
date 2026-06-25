@@ -4,8 +4,10 @@ import { ElMessage } from 'element-plus'
 import { quantApi } from '@/api/quant'
 import type {
   ApiCallLog,
+  AiRuntimeConfig,
   DataSourceConfig,
   DataSourceConfigRequest,
+  DataSourceHealth,
   OperationLog,
   PageResponse,
   RiskLevel,
@@ -15,6 +17,8 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 
 const configs = ref<DataSourceConfig[]>([])
+const dataSourceHealth = ref<DataSourceHealth[]>([])
+const aiRuntimeConfig = ref<AiRuntimeConfig | null>(null)
 const riskProfile = ref<RiskProfile | null>(null)
 const selectedDataSourceId = ref<number | null>(null)
 const operationLogPage = ref<PageResponse<OperationLog>>()
@@ -53,17 +57,23 @@ const logFilter = reactive({
 
 const selectedDataSource = computed(() => configs.value.find((item) => item.id === selectedDataSourceId.value))
 const logSuccessValue = computed(() => logFilter.success === '' ? undefined : logFilter.success === 'true')
+const aiStatusTagClass = computed(() => aiRuntimeConfig.value?.ready ? 'tag-success' : 'tag-risk')
+const aiStatusText = computed(() => aiRuntimeConfig.value?.ready ? '真实调用就绪' : '需要检查配置')
 
 onMounted(loadConfig)
 
 async function loadConfig() {
   loading.value = true
   try {
-    const [sourceList, profile] = await Promise.all([
+    const [sourceList, healthList, profile, aiConfig] = await Promise.all([
       quantApi.dataSources(),
-      quantApi.riskProfile()
+      quantApi.dataSourceHealth(),
+      quantApi.riskProfile(),
+      quantApi.aiRuntimeConfig()
     ])
     configs.value = sourceList
+    dataSourceHealth.value = healthList
+    aiRuntimeConfig.value = aiConfig
     applyRiskProfile(profile)
     if (sourceList[0]) selectDataSource(sourceList[0])
     await loadLogs()
@@ -204,6 +214,40 @@ async function saveDataSource() {
 
     <section class="panel">
       <div class="panel-header">
+        <h2 class="panel-title">AI 配置诊断</h2>
+        <span class="action-tag" :class="aiStatusTagClass">{{ aiStatusText }}</span>
+      </div>
+      <div v-if="aiRuntimeConfig" class="panel-body ai-diagnosis-grid">
+        <div class="insight-item">
+          <span>Provider</span>
+          <strong>{{ aiRuntimeConfig.provider }}</strong>
+        </div>
+        <div class="insight-item">
+          <span>Model</span>
+          <strong>{{ aiRuntimeConfig.model }}</strong>
+        </div>
+        <div class="insight-item">
+          <span>Base URL</span>
+          <strong>{{ aiRuntimeConfig.baseUrl }}</strong>
+        </div>
+        <div class="insight-item">
+          <span>DEEPSEEK_ENABLED</span>
+          <strong>{{ aiRuntimeConfig.enabled ? 'true' : 'false' }}</strong>
+        </div>
+        <div class="insight-item">
+          <span>DEEPSEEK_MOCK_ENABLED</span>
+          <strong>{{ aiRuntimeConfig.mockEnabled ? 'true' : 'false' }}</strong>
+        </div>
+        <div class="insight-item">
+          <span>DEEPSEEK_API_KEY</span>
+          <strong>{{ aiRuntimeConfig.keyPresent ? '已配置' : '未配置' }}</strong>
+        </div>
+        <p class="diagnosis-text">{{ aiRuntimeConfig.diagnosis }}</p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
         <h2 class="panel-title">数据源配置</h2>
         <div class="toolbar-row">
           <button class="ghost-button" @click="newDataSource">新增</button>
@@ -250,6 +294,34 @@ async function saveDataSource() {
           </tbody>
         </table>
         <EmptyState v-else title="暂无数据源配置" description="可以新增一个用户级数据源，外部 API 不可用时仍可使用 mock 降级。" />
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <h2 class="panel-title">数据源健康</h2>
+        <span class="item-meta">按最近 300 条 API 日志聚合</span>
+      </div>
+      <div class="panel-body">
+        <table v-if="dataSourceHealth.length" class="terminal-table">
+          <thead><tr><th>来源</th><th>接口</th><th>状态</th><th>最近调用</th><th>最近成功</th><th>失败原因</th><th>耗时</th></tr></thead>
+          <tbody>
+            <tr v-for="item in dataSourceHealth" :key="`${item.provider}-${item.apiName}`">
+              <td>{{ item.provider }}</td>
+              <td>{{ item.apiName }}</td>
+              <td>
+                <span class="action-tag" :class="item.healthy ? 'tag-success' : item.delayed ? 'tag-warning' : 'tag-risk'">
+                  {{ item.statusText }}
+                </span>
+              </td>
+              <td>{{ item.lastCallTime || '--' }}</td>
+              <td>{{ item.lastSuccessTime || '--' }}</td>
+              <td>{{ item.lastFailureReason || '--' }}</td>
+              <td>{{ item.lastCostTimeMs ?? '--' }}ms</td>
+            </tr>
+          </tbody>
+        </table>
+        <EmptyState v-else title="暂无数据源健康记录" description="搜索基金、刷新估值或同步净值后会产生健康记录。" />
       </div>
     </section>
 

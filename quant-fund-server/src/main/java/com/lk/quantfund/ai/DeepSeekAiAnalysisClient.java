@@ -46,6 +46,9 @@ public class DeepSeekAiAnalysisClient implements AiAnalysisClient {
         if (!ai.isEnabled()) {
             return responseValidator.fallback("", "AI is disabled");
         }
+        if (ai.isMockEnabled()) {
+            return responseValidator.fallback("", "DEEPSEEK_MOCK_ENABLED=true");
+        }
         if (!StringUtils.hasText(ai.getApiKey())) {
             return responseValidator.fallback("", "DeepSeek API key is not configured");
         }

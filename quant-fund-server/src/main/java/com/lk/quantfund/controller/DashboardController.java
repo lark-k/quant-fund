@@ -7,6 +7,7 @@ import com.lk.quantfund.constants.SystemConstants;
 import com.lk.quantfund.service.DashboardService;
 import com.lk.quantfund.service.MarketDataService;
 import com.lk.quantfund.vo.dashboard.DashboardOverviewVO;
+import com.lk.quantfund.vo.dashboard.MarketSessionStatusVO;
 import com.lk.quantfund.vo.market.MarketIndexVO;
 import java.util.List;
 import org.springframework.validation.annotation.Validated;
@@ -38,5 +39,11 @@ public class DashboardController {
     @RateLimit(key = "dashboard:market-readings", windowSeconds = 60, maxRequests = 120)
     public ApiResponse<List<MarketIndexVO>> marketReadings() {
         return ApiResponse.success(marketDataService.marketReadings());
+    }
+
+    @GetMapping("/market-status")
+    @RateLimit(key = "dashboard:market-status", windowSeconds = 60, maxRequests = 120)
+    public ApiResponse<MarketSessionStatusVO> marketStatus() {
+        return ApiResponse.success(dashboardService.marketStatus());
     }
 }

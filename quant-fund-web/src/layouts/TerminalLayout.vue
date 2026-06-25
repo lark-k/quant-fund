@@ -20,7 +20,7 @@ import {
 import { useAuthStore } from '@/stores/auth'
 import { quantApi } from '@/api/quant'
 import { money, percent, toneClass } from '@/utils/format'
-import type { MarketIndex } from '@/types/domain'
+import type { MarketIndex, MarketSessionStatus } from '@/types/domain'
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -28,6 +28,7 @@ const router = useRouter()
 const collapsed = ref(false)
 const now = ref(new Date())
 const marketReadings = ref<MarketIndex[]>([])
+const marketStatus = ref<MarketSessionStatus | null>(null)
 
 const navItems = [
   { to: '/dashboard', label: '首页总览', icon: Grid },
@@ -60,13 +61,8 @@ const dateText = computed(() => {
     weekday: 'short'
   })
 })
-const isTradingSession = computed(() => {
-  const day = now.value.getDay()
-  if (day === 0 || day === 6) return false
-  const minutes = now.value.getHours() * 60 + now.value.getMinutes()
-  return (minutes >= 570 && minutes <= 690) || (minutes >= 780 && minutes <= 900)
-})
-const marketStatusText = computed(() => (isTradingSession.value ? '交易中' : '休市中'))
+const isTradingSession = computed(() => Boolean(marketStatus.value?.trading))
+const marketStatusText = computed(() => marketStatus.value?.primaryStatusText || '市场状态同步中')
 let clockTimer: number | undefined
 let marketTimer: number | undefined
 
@@ -88,7 +84,12 @@ onBeforeUnmount(() => {
 
 async function loadMarketReadings() {
   try {
-    marketReadings.value = await quantApi.marketReadings()
+    const [readings, status] = await Promise.all([
+      quantApi.marketReadings(),
+      quantApi.marketStatus()
+    ])
+    marketReadings.value = readings
+    marketStatus.value = status
   } catch {
     marketReadings.value = []
   }
@@ -148,7 +149,7 @@ function logout() {
           <span class="page-kicker">{{ pageTitle }}</span>
         </div>
         <div class="header-status">
-          <span>估算刷新：{{ nowText }}</span>
+          <span>估算刷新</span>
           <el-icon><Refresh /></el-icon>
           <span :class="isTradingSession ? 'trade-open' : 'trade-closed'">{{ marketStatusText }} {{ nowText }}</span>
           <span>{{ dateText }}</span>

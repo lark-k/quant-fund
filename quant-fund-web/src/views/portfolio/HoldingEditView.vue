@@ -8,7 +8,7 @@ import DisclaimerBar from '@/components/common/DisclaimerBar.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import MetricTile from '@/components/common/MetricTile.vue'
-import { SIMULATED_TRADE_NOTICE, type FundHolding, type HoldingUpdateRequest, type TradeRecord } from '@/types/domain'
+import { SIMULATED_TRADE_NOTICE, type ClearHoldingRequest, type FundHolding, type HoldingUpdateRequest, type TradeRecord } from '@/types/domain'
 import { metricTone, money, percent, signed, toneClass } from '@/utils/format'
 
 type SyncAction = 'BUY' | 'SELL' | 'REGULAR_INVEST' | 'CONVERT_OUT'
@@ -19,9 +19,11 @@ const router = useRouter()
 const loading = ref(true)
 const saving = ref(false)
 const deleting = ref(false)
+const clearing = ref(false)
 const recalculating = ref(false)
 const tradeSaving = ref(false)
 const dialogOpen = ref(false)
+const clearDialogOpen = ref(false)
 const holdings = ref<FundHolding[]>([])
 const selectedHoldingId = ref<number>()
 const editMode = ref<EditMode>('AMOUNT_PROFIT')
@@ -51,6 +53,11 @@ const tradeForm = ref({
   tradeFee: 0,
   remark: SIMULATED_TRADE_NOTICE
 })
+const clearForm = ref<ClearHoldingRequest>({
+  tradeAmount: 0,
+  tradeFee: 0,
+  remark: `清仓自动生成的模拟卖出流水，${SIMULATED_TRADE_NOTICE}`
+})
 
 const operationCards = [
   { action: 'BUY', title: '同步加仓', description: '记录你在原平台完成的追加买入' },
@@ -76,6 +83,19 @@ const previewCost = computed(() => {
 })
 const previewProfit = computed(() => previewAmount.value - previewCost.value)
 const previewProfitRate = computed(() => previewCost.value > 0 ? previewProfit.value / previewCost.value * 100 : 0)
+const isNewHoldingDraft = computed(() => {
+  const holding = activeHolding.value
+  if (!holding) return false
+  return holding.holdingAmount <= 0 && holding.holdingShare <= 0 && holding.holdingCost <= 0
+})
+const shareModeMissingNav = computed(() => editMode.value === 'SHARE_COST' && referenceNav.value <= 0)
+const isDecreaseTrade = computed(() => ['SELL', 'CONVERT_OUT'].includes(tradeForm.value.tradeType))
+const estimatedTradeShare = computed(() => Number(tradeForm.value.tradeAmount || 0) / Math.max(Number(tradeForm.value.tradeNav || 0), 0.0001))
+const tradeOverLimit = computed(() => {
+  const holding = activeHolding.value
+  if (!holding || !isDecreaseTrade.value) return false
+  return Number(tradeForm.value.tradeAmount) > holding.holdingAmount || estimatedTradeShare.value > holding.holdingShare
+})
 
 async function loadHoldings() {
   loading.value = true
@@ -118,6 +138,10 @@ function selectHolding(id: number) {
 
 async function saveHolding() {
   if (!activeHolding.value) return
+  if (shareModeMissingNav.value) {
+    ElMessage.warning('份额+成本模式需要先从数据源同步到有效净值')
+    return
+  }
   saving.value = true
   try {
     const amount = Number(form.value.holdingAmount || 0)
@@ -144,7 +168,7 @@ async function saveHolding() {
 
 async function deleteCurrentHolding() {
   if (!activeHolding.value) return
-  await ElMessageBox.confirm(`确认删除 ${activeHolding.value.fundName} 的持有记录？`, '删除持仓', {
+  await ElMessageBox.confirm(`确认删除 ${activeHolding.value.fundName} 的持有记录？删除后不再展示该持仓；如只是已经卖完，请使用清仓。`, '删除持仓', {
     type: 'warning',
     confirmButtonText: '删除',
     cancelButtonText: '取消'
@@ -162,6 +186,50 @@ async function deleteCurrentHolding() {
     }
   } finally {
     deleting.value = false
+  }
+}
+
+function clearRemark(tradeFee: number) {
+  const feeText = tradeFee > 0 ? `，手续费 ${tradeFee.toFixed(2)}` : ''
+  return `清仓自动生成的模拟卖出流水${feeText}，${SIMULATED_TRADE_NOTICE}`
+}
+
+function openClearDialog() {
+  if (!activeHolding.value) return
+  clearForm.value = {
+    tradeAmount: Number(activeHolding.value.holdingAmount.toFixed(2)),
+    tradeFee: 0,
+    remark: clearRemark(0)
+  }
+  clearDialogOpen.value = true
+}
+
+function syncClearRemark() {
+  clearForm.value.remark = clearRemark(Number(clearForm.value.tradeFee || 0))
+}
+
+async function saveClearHolding() {
+  if (!activeHolding.value) return
+  const tradeAmount = Number(clearForm.value.tradeAmount)
+  const tradeFee = Number(clearForm.value.tradeFee || 0)
+  if (!Number.isFinite(tradeAmount) || tradeAmount < 0 || !Number.isFinite(tradeFee) || tradeFee < 0) {
+    ElMessage.warning('请填写有效的到账金额和手续费')
+    return
+  }
+  const request: ClearHoldingRequest = {
+    tradeAmount,
+    tradeFee,
+    remark: clearForm.value.remark || clearRemark(tradeFee)
+  }
+  clearing.value = true
+  try {
+    const saved = await quantApi.clearHolding(activeHolding.value.id, request)
+    holdings.value = holdings.value.map((item) => item.id === saved.id ? saved : item)
+    selectHolding(saved.id)
+    clearDialogOpen.value = false
+    ElMessage.success('持仓已清仓，历史记录已保留')
+  } finally {
+    clearing.value = false
   }
 }
 
@@ -220,6 +288,10 @@ async function saveTrade() {
     ElMessage.warning('请填写有效的模拟交易金额')
     return
   }
+  if (tradeOverLimit.value) {
+    ElMessage.warning('卖出或转出金额不能超过当前持仓')
+    return
+  }
   tradeSaving.value = true
   try {
     await quantApi.createTrade({
@@ -258,6 +330,7 @@ async function saveTrade() {
             <option v-for="item in holdings" :key="item.id" :value="item.id">{{ item.fundCode }} · {{ item.fundName }}</option>
           </select>
           <button class="ghost-button" :disabled="recalculating" @click="recalculateHolding">{{ recalculating ? '重算中' : '刷新净值并重算' }}</button>
+          <button class="ghost-button" :disabled="clearing" @click="openClearDialog">{{ clearing ? '清仓中' : '清仓持仓' }}</button>
           <button class="ghost-button danger-button" :disabled="deleting" @click="deleteCurrentHolding">{{ deleting ? '删除中' : '删除持仓' }}</button>
           <button class="primary-button" :disabled="saving" @click="saveHolding">{{ saving ? '保存中' : '保存持仓' }}</button>
         </div>
@@ -267,6 +340,7 @@ async function saveTrade() {
           <div>
             <div class="fund-code">{{ activeHolding.fundName }} · {{ activeHolding.fundCode }}</div>
             <p>净值来自基金数据源，用户只填写真实持有信息；系统自动计算金额、收益、占比和成本。</p>
+            <p v-if="isNewHoldingDraft" class="item-meta">新加入基金待完善：请选择一种录入方式，填写后保存即可生成真实持仓口径。</p>
           </div>
           <div class="fund-badges">
             <span>{{ relatedThemeText(activeHolding.relatedThemeName) }}</span>
@@ -296,6 +370,15 @@ async function saveTrade() {
           </div>
         </div>
         <div class="panel-body config-grid compact-form">
+          <p class="form-hint full-span">
+            只需二选一填写：金额+收益适合从原平台抄当前持有金额和累计收益；份额+成本适合从确认份额和总成本录入。
+          </p>
+          <p class="form-hint full-span">
+            净值、持仓金额、收益率和当日收益由数据源与后端统一重算，不在这里手动维护净值。
+          </p>
+          <p v-if="shareModeMissingNav" class="form-warning full-span">
+            当前没有有效参考净值，份额+成本模式暂不能测算金额；请先点击“刷新净值并重算”，或切换到金额+收益模式。
+          </p>
           <template v-if="editMode === 'AMOUNT_PROFIT'">
             <label>持有金额<input v-model.number="form.holdingAmount" class="form-control" type="number" min="0" /></label>
             <label>持有收益<input v-model.number="form.holdingProfit" class="form-control" type="number" /></label>
@@ -337,6 +420,25 @@ async function saveTrade() {
       </div>
     </section>
 
+    <el-dialog v-model="clearDialogOpen" title="清仓持仓" width="560px">
+      <DisclaimerBar simulated />
+      <div class="modal-grid compact-form">
+        <p class="form-hint full-span">
+          清仓会把当前持仓金额、份额和成本归零，但保留持仓记录，并生成一条已完成的模拟卖出流水。
+        </p>
+        <p class="form-hint full-span">
+          当前持仓：{{ money(activeHolding.holdingAmount) }} / {{ money(activeHolding.holdingShare, 0) }} 份
+        </p>
+        <label>到账金额<input v-model.number="clearForm.tradeAmount" class="form-control" type="number" min="0" /></label>
+        <label>手续费<input v-model.number="clearForm.tradeFee" class="form-control" type="number" min="0" @change="syncClearRemark" /></label>
+        <label>备注<textarea v-model="clearForm.remark" class="form-control text-area" /></label>
+      </div>
+      <template #footer>
+        <button class="ghost-button" @click="clearDialogOpen = false">取消</button>
+        <button class="primary-button" :disabled="clearing" @click="saveClearHolding">{{ clearing ? '清仓中' : '确认清仓' }}</button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="dialogOpen" title="同步模拟交易记录" width="560px">
       <DisclaimerBar simulated />
       <div class="modal-grid compact-form">
@@ -360,6 +462,8 @@ async function saveTrade() {
         <label>交易金额<input v-model.number="tradeForm.tradeAmount" class="form-control" type="number" min="0" /></label>
         <label>成交/参考净值<input v-model.number="tradeForm.tradeNav" class="form-control" type="number" min="0" step="0.0001" /></label>
         <label>手续费<input v-model.number="tradeForm.tradeFee" class="form-control" type="number" min="0" /></label>
+        <p v-if="isDecreaseTrade" class="form-hint full-span">当前可卖出/转出：{{ money(activeHolding.holdingAmount) }} / {{ money(activeHolding.holdingShare, 0) }} 份</p>
+        <p v-if="tradeOverLimit" class="form-warning full-span">卖出或转出金额不能超过当前持仓。</p>
         <label>备注<textarea v-model="tradeForm.remark" class="form-control text-area" /></label>
       </div>
       <template #footer>

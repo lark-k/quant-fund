@@ -7,6 +7,7 @@ import com.lk.quantfund.dto.portfolio.CreatePortfolioAccountRequest;
 import com.lk.quantfund.dto.portfolio.UpdatePortfolioAccountRequest;
 import com.lk.quantfund.entity.FundNavDaily;
 import com.lk.quantfund.entity.FundHolding;
+import com.lk.quantfund.entity.PortfolioIntradaySnapshot;
 import com.lk.quantfund.entity.PortfolioAccount;
 import com.lk.quantfund.enums.AccountStatus;
 import com.lk.quantfund.enums.ErrorCode;
@@ -15,7 +16,10 @@ import com.lk.quantfund.exception.BusinessException;
 import com.lk.quantfund.mapper.FundHoldingMapper;
 import com.lk.quantfund.mapper.FundNavDailyMapper;
 import com.lk.quantfund.mapper.PortfolioAccountMapper;
+import com.lk.quantfund.mapper.PortfolioIntradaySnapshotMapper;
+import com.lk.quantfund.scheduler.TradingCalendarService;
 import com.lk.quantfund.service.PortfolioAccountService;
+import com.lk.quantfund.service.analytics.OfficialNavTiming;
 import com.lk.quantfund.service.valuation.FundValuationResult;
 import com.lk.quantfund.service.valuation.FundValuationService;
 import com.lk.quantfund.vo.holding.FundHoldingVO;
@@ -38,16 +42,22 @@ public class PortfolioAccountServiceImpl implements PortfolioAccountService {
     private final PortfolioAccountMapper portfolioAccountMapper;
     private final FundHoldingMapper fundHoldingMapper;
     private final FundNavDailyMapper fundNavDailyMapper;
+    private final PortfolioIntradaySnapshotMapper portfolioIntradaySnapshotMapper;
     private final FundValuationService fundValuationService;
+    private final TradingCalendarService tradingCalendarService;
 
     public PortfolioAccountServiceImpl(PortfolioAccountMapper portfolioAccountMapper,
                                        FundHoldingMapper fundHoldingMapper,
                                        FundNavDailyMapper fundNavDailyMapper,
-                                       FundValuationService fundValuationService) {
+                                       PortfolioIntradaySnapshotMapper portfolioIntradaySnapshotMapper,
+                                       FundValuationService fundValuationService,
+                                       TradingCalendarService tradingCalendarService) {
         this.portfolioAccountMapper = portfolioAccountMapper;
         this.fundHoldingMapper = fundHoldingMapper;
         this.fundNavDailyMapper = fundNavDailyMapper;
+        this.portfolioIntradaySnapshotMapper = portfolioIntradaySnapshotMapper;
         this.fundValuationService = fundValuationService;
+        this.tradingCalendarService = tradingCalendarService;
     }
 
     @Override
@@ -189,6 +199,47 @@ public class PortfolioAccountServiceImpl implements PortfolioAccountService {
         account.setMaxSingleFundPositionRate(rate(maxSingleAmount, totalAsset));
         account.setUpdateTime(LocalDateTime.now());
         portfolioAccountMapper.updateById(account);
+        upsertIntradaySnapshot(userId);
+    }
+
+    private void upsertIntradaySnapshot(Long userId) {
+        LocalDateTime now = LocalDateTime.now();
+        if (!tradingCalendarService.isIntradayEstimateWindow(now)) {
+            return;
+        }
+        LocalDateTime snapshotTime = now.withSecond(0).withNano(0);
+        List<PortfolioAccount> accounts = portfolioAccountMapper.selectList(new LambdaQueryWrapper<PortfolioAccount>()
+                .eq(PortfolioAccount::getUserId, userId));
+        BigDecimal totalAsset = accounts.stream()
+                .map(PortfolioAccount::getTotalAsset)
+                .map(this::valueOrZero)
+                .reduce(ZERO, BigDecimal::add);
+        BigDecimal dailyProfit = accounts.stream()
+                .map(PortfolioAccount::getDailyProfit)
+                .map(this::valueOrZero)
+                .reduce(ZERO, BigDecimal::add);
+        PortfolioIntradaySnapshot snapshot = portfolioIntradaySnapshotMapper.selectOne(new LambdaQueryWrapper<PortfolioIntradaySnapshot>()
+                .eq(PortfolioIntradaySnapshot::getUserId, userId)
+                .eq(PortfolioIntradaySnapshot::getSnapshotTime, snapshotTime)
+                .last("LIMIT 1"));
+        if (snapshot == null) {
+            snapshot = new PortfolioIntradaySnapshot();
+            snapshot.setUserId(userId);
+            snapshot.setSnapshotDate(snapshotTime.toLocalDate());
+            snapshot.setSnapshotTime(snapshotTime);
+            snapshot.setCreateTime(now);
+            snapshot.setDeleted(0);
+        }
+        snapshot.setTotalAsset(scale(totalAsset));
+        snapshot.setDailyProfit(scale(dailyProfit));
+        snapshot.setDailyProfitRate(rate(dailyProfit, totalAsset));
+        snapshot.setSourceName("PORTFOLIO_RECALCULATE");
+        snapshot.setUpdateTime(now);
+        if (snapshot.getId() == null) {
+            portfolioIntradaySnapshotMapper.insert(snapshot);
+        } else {
+            portfolioIntradaySnapshotMapper.updateById(snapshot);
+        }
     }
 
     private PortfolioAccount loadOwnedAccount(Long userId, Long accountId) {
@@ -292,7 +343,11 @@ public class PortfolioAccountServiceImpl implements PortfolioAccountService {
         if (nav == null) {
             return false;
         }
-        return nav.getNavDate() != null && nav.getNavDate().equals(LocalDate.now());
+        return nav.getNavDate() != null && officialNavEffectiveDate(holding, nav.getNavDate()).equals(LocalDate.now());
+    }
+
+    private LocalDate officialNavEffectiveDate(FundHolding holding, LocalDate navDate) {
+        return OfficialNavTiming.effectiveDate(holding, navDate, tradingCalendarService);
     }
 
     private FundNavDaily latestOfficialNav(String fundCode) {
@@ -306,23 +361,7 @@ public class PortfolioAccountServiceImpl implements PortfolioAccountService {
     }
 
     private boolean delayedOfficialNavFund(FundHolding holding) {
-        String name = holding.getFundName() == null ? "" : holding.getFundName().toUpperCase();
-        String type = holding.getFundType() == null ? "" : holding.getFundType().toUpperCase();
-        if (name.contains("恒生") || name.contains("港股") || name.contains("香港") || name.contains("H股")) {
-            return false;
-        }
-        return type.contains("QDII")
-                || name.contains("QDII")
-                || name.contains("全球")
-                || name.contains("海外")
-                || name.contains("美国")
-                || name.contains("美股")
-                || name.contains("纳指")
-                || name.contains("纳斯达克")
-                || name.contains("标普")
-                || name.contains("道琼斯")
-                || name.contains("美元")
-                || name.contains("人民币");
+        return OfficialNavTiming.isDelayedOfficialNavFund(holding);
     }
 
     private BigDecimal sumAccounts(List<PortfolioAccountVO> accounts,

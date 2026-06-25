@@ -18,9 +18,14 @@ import com.lk.quantfund.mapper.FundNavDailyMapper;
 import com.lk.quantfund.mapper.HoldingSnapshotMapper;
 import com.lk.quantfund.mapper.StrategySignalMapper;
 import com.lk.quantfund.scheduler.HoldingSnapshotBackfillService;
+import com.lk.quantfund.scheduler.MarketType;
 import com.lk.quantfund.scheduler.TradingCalendarService;
 import com.lk.quantfund.service.DashboardService;
+import com.lk.quantfund.service.MarketDataService;
 import com.lk.quantfund.service.PortfolioAccountService;
+import com.lk.quantfund.service.analytics.OfficialNavTiming;
+import com.lk.quantfund.service.analytics.SnapshotProfitStatusResolver;
+import com.lk.quantfund.service.analytics.SnapshotProfitStatusResolver.ProfitStatus;
 import com.lk.quantfund.service.valuation.FundValuationResult;
 import com.lk.quantfund.service.valuation.FundValuationService;
 import com.lk.quantfund.vo.ai.AiAnalysisReportVO;
@@ -28,7 +33,10 @@ import com.lk.quantfund.vo.dashboard.DashboardEstimateStatusVO;
 import com.lk.quantfund.vo.dashboard.DashboardOverviewVO;
 import com.lk.quantfund.vo.dashboard.DashboardPositionSliceVO;
 import com.lk.quantfund.vo.dashboard.DashboardProfitTrendPointVO;
+import com.lk.quantfund.vo.dashboard.MarketSessionItemVO;
+import com.lk.quantfund.vo.dashboard.MarketSessionStatusVO;
 import com.lk.quantfund.vo.holding.FundHoldingVO;
+import com.lk.quantfund.vo.market.MarketIndexDailyVO;
 import com.lk.quantfund.vo.portfolio.PortfolioSummaryVO;
 import com.lk.quantfund.vo.strategy.StrategySignalVO;
 import java.math.BigDecimal;
@@ -60,6 +68,8 @@ public class DashboardServiceImpl implements DashboardService {
     private final FundValuationService fundValuationService;
     private final TradingCalendarService tradingCalendarService;
     private final HoldingSnapshotBackfillService holdingSnapshotBackfillService;
+    private final MarketDataService marketDataService;
+    private final SnapshotProfitStatusResolver snapshotProfitStatusResolver;
 
     public DashboardServiceImpl(PortfolioAccountService portfolioAccountService,
                                 FundHoldingMapper fundHoldingMapper,
@@ -71,7 +81,9 @@ public class DashboardServiceImpl implements DashboardService {
                                 ObjectMapper objectMapper,
                                 FundValuationService fundValuationService,
                                 TradingCalendarService tradingCalendarService,
-                                HoldingSnapshotBackfillService holdingSnapshotBackfillService) {
+                                HoldingSnapshotBackfillService holdingSnapshotBackfillService,
+                                MarketDataService marketDataService,
+                                SnapshotProfitStatusResolver snapshotProfitStatusResolver) {
         this.portfolioAccountService = portfolioAccountService;
         this.fundHoldingMapper = fundHoldingMapper;
         this.strategySignalMapper = strategySignalMapper;
@@ -83,6 +95,8 @@ public class DashboardServiceImpl implements DashboardService {
         this.fundValuationService = fundValuationService;
         this.tradingCalendarService = tradingCalendarService;
         this.holdingSnapshotBackfillService = holdingSnapshotBackfillService;
+        this.marketDataService = marketDataService;
+        this.snapshotProfitStatusResolver = snapshotProfitStatusResolver;
     }
 
     @Override
@@ -96,17 +110,19 @@ public class DashboardServiceImpl implements DashboardService {
         Set<Long> activeHoldingIds = holdings.stream()
                 .map(FundHolding::getId)
                 .collect(Collectors.toSet());
-        LocalDate today = LocalDate.now();
-        boolean intradayWindow = tradingCalendarService.isIntradayEstimateWindow(LocalDateTime.now());
+        LocalDate today = today();
+        LocalDateTime now = now();
+        boolean intradayWindow = tradingCalendarService.isIntradayEstimateWindow(now);
+        boolean intradayDisplayWindow = tradingCalendarService.isIntradayEstimateDisplayWindow(now);
         Map<String, FundNavDaily> latestOfficialNavByFund = latestOfficialNavByFund(holdings.stream()
                 .map(FundHolding::getFundCode)
                 .filter(code -> code != null && !code.isBlank())
                 .collect(Collectors.toSet()));
         List<FundHoldingVO> topHoldings = holdings.stream()
                 .limit(10)
-                .map(holding -> toHoldingVO(holding, intradayWindow, latestOfficialNavByFund.get(holding.getFundCode())))
+                .map(holding -> toHoldingVO(holding, intradayDisplayWindow, latestOfficialNavByFund))
                 .toList();
-        PortfolioSummaryVO effectiveSummary = dashboardSummary(summary, topHoldings);
+        PortfolioSummaryVO effectiveSummary = dashboardSummary(summary, holdings, latestOfficialNavByFund, dashboardDailyProfit(holdings, intradayDisplayWindow, latestOfficialNavByFund));
         List<StrategySignal> signals = strategySignalMapper.selectList(new LambdaQueryWrapper<StrategySignal>()
                 .eq(StrategySignal::getUserId, userId)
                 .orderByDesc(StrategySignal::getSignalTime)
@@ -127,13 +143,33 @@ public class DashboardServiceImpl implements DashboardService {
                 effectiveSummary,
                 topHoldings,
                 positionDistribution(effectiveSummary),
-                profitTrend(userId),
+                profitTrend(userId, effectiveSummary, intradayDisplayWindow, holdings),
                 signals.stream().map(this::toSignalVO).toList(),
                 todayAiSuggestions,
                 estimateStatus(holdings, today, intradayWindow, latestOfficialNavByFund),
                 riskAlertCount(signals),
                 todayAiSuggestions.size(),
                 SystemConstants.DISCLAIMER
+        );
+    }
+
+    @Override
+    public MarketSessionStatusVO marketStatus() {
+        LocalDateTime now = now();
+        List<MarketSessionItemVO> markets = List.of(
+                marketItem(MarketType.A_SHARE, "A股", now),
+                marketItem(MarketType.HONG_KONG, "港股", now),
+                marketItem(MarketType.US, "美股", now)
+        );
+        MarketSessionItemVO primary = markets.stream()
+                .filter(MarketSessionItemVO::trading)
+                .findFirst()
+                .orElse(markets.getFirst());
+        return new MarketSessionStatusVO(
+                primary.statusText(),
+                primary.trading(),
+                now,
+                markets
         );
     }
 
@@ -145,22 +181,95 @@ public class DashboardServiceImpl implements DashboardService {
         );
     }
 
-    private List<DashboardProfitTrendPointVO> profitTrend(Long userId) {
-        LocalDate startDate = LocalDate.now().minusDays(29);
+    private MarketSessionItemVO marketItem(MarketType market, String label, LocalDateTime now) {
+        String status = tradingCalendarService.marketSession(market, now);
+        return new MarketSessionItemVO(label, status, tradingCalendarService.isTradingWindow(market, now));
+    }
+
+    private List<DashboardProfitTrendPointVO> profitTrend(Long userId, PortfolioSummaryVO summary,
+                                                          boolean intradayDisplayWindow, List<FundHolding> holdings) {
+        LocalDate today = today();
+        LocalDate startDate = today.minusDays(29);
+        LocalDate endDate = today;
         List<HoldingSnapshot> snapshots = holdingSnapshotMapper.selectList(new LambdaQueryWrapper<HoldingSnapshot>()
                 .eq(HoldingSnapshot::getUserId, userId)
                 .ge(HoldingSnapshot::getSnapshotDate, startDate)
                 .orderByAsc(HoldingSnapshot::getSnapshotDate));
         Map<LocalDate, List<HoldingSnapshot>> byDate = snapshots.stream()
                 .collect(Collectors.groupingBy(HoldingSnapshot::getSnapshotDate, LinkedHashMap::new, Collectors.toList()));
-        return byDate.entrySet().stream()
-                .map(entry -> new DashboardProfitTrendPointVO(
-                        entry.getKey(),
-                        entry.getValue().stream().map(HoldingSnapshot::getTotalAsset).filter(value -> value != null).max(BigDecimal::compareTo).orElse(ZERO),
-                        sum(entry.getValue().stream().map(HoldingSnapshot::getHoldingProfit).toList()),
-                        sum(entry.getValue().stream().map(HoldingSnapshot::getDailyProfit).toList())
-                ))
+        Map<LocalDate, BigDecimal> indexReturns = indexReturns(startDate, endDate);
+        Map<LocalDate, ProfitStatus> statusByDate = snapshotProfitStatusResolver.resolve(snapshots, holdings, startDate, endDate);
+        List<DashboardProfitTrendPointVO> trend = byDate.entrySet().stream()
+                .map(entry -> {
+                    ProfitStatus status = statusByDate.getOrDefault(entry.getKey(), snapshotProfitStatusResolver.snapshotSynced());
+                    return new DashboardProfitTrendPointVO(
+                            entry.getKey(),
+                            entry.getValue().stream().map(HoldingSnapshot::getTotalAsset).filter(value -> value != null).max(BigDecimal::compareTo).orElse(ZERO),
+                            sum(entry.getValue().stream().map(HoldingSnapshot::getHoldingProfit).toList()),
+                            sum(entry.getValue().stream().map(HoldingSnapshot::getDailyProfit).toList()),
+                            indexReturns.get(entry.getKey()),
+                            status.code(),
+                            status.text()
+                    );
+                })
                 .toList();
+        return withCurrentDayEstimate(trend, today, summary, intradayDisplayWindow);
+    }
+
+    private List<DashboardProfitTrendPointVO> withCurrentDayEstimate(List<DashboardProfitTrendPointVO> trend, LocalDate today, PortfolioSummaryVO summary, boolean intradayDisplayWindow) {
+        DashboardProfitTrendPointVO existingToday = trend.stream()
+                .filter(point -> today.equals(point.date()))
+                .findFirst()
+                .orElse(null);
+        if (!intradayDisplayWindow
+                || !tradingCalendarService.isTradingDay(today)
+                || (existingToday != null && "CONFIRMED".equals(existingToday.profitStatus()))
+                || scale(summary.dailyProfit()).compareTo(BigDecimal.ZERO) == 0) {
+            return trend;
+        }
+        List<DashboardProfitTrendPointVO> withToday = trend.stream()
+                .filter(point -> !today.equals(point.date()))
+                .collect(Collectors.toCollection(java.util.ArrayList::new));
+        BigDecimal todayProfit = scale(summary.dailyProfit());
+        withToday.add(new DashboardProfitTrendPointVO(
+                today,
+                scale(summary.totalAsset()),
+                scale(summary.currentProfit()),
+                todayProfit,
+                null,
+                "ESTIMATED",
+                "盘中预估，待正式净值确认"
+        ));
+        withToday.sort(Comparator.comparing(DashboardProfitTrendPointVO::date));
+        return withToday;
+    }
+
+    private Map<LocalDate, BigDecimal> indexReturns(LocalDate startDate, LocalDate endDate) {
+        List<MarketIndexDailyVO> history;
+        try {
+            history = marketDataService.historicalIndex("000300", startDate, endDate);
+        } catch (Exception exception) {
+            return Map.of();
+        }
+        if (history.size() < 2 || history.getFirst().closePrice() == null || history.getFirst().closePrice().compareTo(BigDecimal.ZERO) <= 0) {
+            return Map.of();
+        }
+        BigDecimal baseClose = history.getFirst().closePrice();
+        Map<LocalDate, BigDecimal> returns = new LinkedHashMap<>();
+        for (MarketIndexDailyVO point : history) {
+            if (point.tradeDate() != null && point.closePrice() != null) {
+                returns.put(point.tradeDate(), point.closePrice().subtract(baseClose).multiply(ONE_HUNDRED).divide(baseClose, 4, RoundingMode.HALF_UP));
+            }
+        }
+        return returns;
+    }
+
+    protected LocalDate today() {
+        return LocalDate.now();
+    }
+
+    protected LocalDateTime now() {
+        return LocalDateTime.now();
     }
 
     private DashboardEstimateStatusVO estimateStatus(List<FundHolding> holdings, LocalDate today,
@@ -214,7 +323,7 @@ public class DashboardServiceImpl implements DashboardService {
         String statusText = officialSyncedCount >= fundCodes.size()
                 ? marketStatus + "，最新正式净值已同步"
                 : !intradayWindow
-                ? (tradingCalendarService.isBeforeIntradayEstimateWindow(LocalDateTime.now())
+                ? (tradingCalendarService.isBeforeIntradayEstimateWindow(now())
                         ? marketStatus + "，未开盘，盘中估值未开始"
                         : marketStatus + "，非盘中估值时间")
                 : latestByFund.isEmpty()
@@ -232,12 +341,15 @@ public class DashboardServiceImpl implements DashboardService {
     }
 
     private FundHoldingVO toHoldingVO(FundHolding holding) {
-        return toHoldingVO(holding, tradingCalendarService.isIntradayEstimateWindow(LocalDateTime.now()), latestOfficialNav(holding.getFundCode()));
+        FundNavDaily officialNav = latestOfficialNav(holding.getFundCode());
+        Map<String, FundNavDaily> officialNavByFund = officialNav == null ? Map.of() : Map.of(holding.getFundCode(), officialNav);
+        return toHoldingVO(holding, tradingCalendarService.isIntradayEstimateDisplayWindow(now()), officialNavByFund);
     }
 
-    private FundHoldingVO toHoldingVO(FundHolding holding, boolean intradayWindow, FundNavDaily officialNav) {
+    private FundHoldingVO toHoldingVO(FundHolding holding, boolean intradayDisplayWindow, Map<String, FundNavDaily> latestOfficialNavByFund) {
+        FundNavDaily officialNav = latestOfficialNavByFund.get(holding.getFundCode());
         BigDecimal estimateRate = currentEstimateGrowthRate(holding);
-        boolean intradayAllowed = intradayWindow && !delayedOfficialNavFund(holding);
+        boolean intradayAllowed = intradayDisplayWindow && !delayedOfficialNavFund(holding);
         boolean officialUpdated = officialNavUpdated(holding, officialNav);
         BigDecimal dailyProfit = officialUpdated || intradayAllowed ? scale(holding.getDailyProfit()) : ZERO;
         BigDecimal displayEstimateRate = officialUpdated || intradayAllowed ? estimateRate : ZERO;
@@ -252,11 +364,12 @@ public class DashboardServiceImpl implements DashboardService {
                     valuation.marketStatus()
             );
         }
+        BigDecimal holdingAmount = effectiveHoldingAmount(holding, officialNav);
+        BigDecimal holdingProfit = effectiveHoldingProfit(holding, officialNav);
         BigDecimal accountTotal = fundHoldingMapper.selectList(new LambdaQueryWrapper<FundHolding>()
                         .eq(FundHolding::getAccountId, holding.getAccountId()))
                 .stream()
-                .map(FundHolding::getHoldingAmount)
-                .map(this::scale)
+                .map(accountHolding -> effectiveHoldingAmount(accountHolding, latestOfficialNavByFund.get(accountHolding.getFundCode())))
                 .reduce(ZERO, BigDecimal::add);
         return new FundHoldingVO(
                 holding.getId(),
@@ -265,16 +378,16 @@ public class DashboardServiceImpl implements DashboardService {
                 holding.getFundName(),
                 holding.getFundType(),
                 holding.getActiveFund() != null && holding.getActiveFund() == 1,
-                scale(holding.getHoldingAmount()),
+                holdingAmount,
                 scale(holding.getHoldingShare()),
                 scale(holding.getHoldingCost()),
-                holding.getCurrentEstimateNav(),
-                holding.getLatestOfficialNav(),
-                scale(holding.getHoldingProfit()),
-                scale(holding.getHoldingProfitRate()),
+                officialUpdated ? officialNav.getUnitNav() : holding.getCurrentEstimateNav(),
+                officialUpdated ? officialNav.getUnitNav() : holding.getLatestOfficialNav(),
+                holdingProfit,
+                effectiveHoldingProfitRate(holding, officialNav),
                 dailyProfit,
                 ZERO,
-                rate(scale(holding.getHoldingAmount()), accountTotal),
+                rate(holdingAmount, accountTotal),
                 displayEstimateRate,
                 officialUpdated,
                 officialUpdated ? officialNav.getNavDate() : null,
@@ -298,7 +411,7 @@ public class DashboardServiceImpl implements DashboardService {
         if (officialNavUpdated(holding, officialNav) && officialNav.getDailyGrowthRate() != null) {
             return scale(officialNav.getDailyGrowthRate());
         }
-        if (!tradingCalendarService.isIntradayEstimateWindow(LocalDateTime.now()) || delayedOfficialNavFund(holding)) {
+        if (!tradingCalendarService.isIntradayEstimateDisplayWindow(now()) || delayedOfficialNavFund(holding)) {
             return ZERO;
         }
         if (holding.getCurrentEstimateNav() == null || holding.getLatestOfficialNav() == null
@@ -312,7 +425,11 @@ public class DashboardServiceImpl implements DashboardService {
         if (nav == null) {
             return false;
         }
-        return nav.getNavDate() != null && nav.getNavDate().equals(LocalDate.now());
+        return nav.getNavDate() != null && officialNavEffectiveDate(holding, nav.getNavDate()).equals(today());
+    }
+
+    private LocalDate officialNavEffectiveDate(FundHolding holding, LocalDate navDate) {
+        return OfficialNavTiming.effectiveDate(holding, navDate, tradingCalendarService);
     }
 
     private FundNavDaily latestOfficialNav(String fundCode) {
@@ -340,42 +457,95 @@ public class DashboardServiceImpl implements DashboardService {
     }
 
     private boolean delayedOfficialNavFund(FundHolding holding) {
-        String name = holding.getFundName() == null ? "" : holding.getFundName().toUpperCase();
-        String type = holding.getFundType() == null ? "" : holding.getFundType().toUpperCase();
-        if (name.contains("恒生") || name.contains("港股") || name.contains("香港") || name.contains("H股")) {
-            return false;
-        }
-        return type.contains("QDII")
-                || name.contains("QDII")
-                || name.contains("全球")
-                || name.contains("海外")
-                || name.contains("美国")
-                || name.contains("美股")
-                || name.contains("纳指")
-                || name.contains("纳斯达克")
-                || name.contains("标普")
-                || name.contains("道琼斯")
-                || name.contains("美元")
-                || name.contains("人民币");
+        return OfficialNavTiming.isDelayedOfficialNavFund(holding);
     }
 
-    private PortfolioSummaryVO dashboardSummary(PortfolioSummaryVO summary, List<FundHoldingVO> topHoldings) {
-        BigDecimal dailyProfit = topHoldings.stream()
-                .map(FundHoldingVO::dailyProfit)
-                .map(this::scale)
+    private BigDecimal dashboardDailyProfit(List<FundHolding> holdings, boolean intradayDisplayWindow, Map<String, FundNavDaily> latestOfficialNavByFund) {
+        return holdings.stream()
+                .map(holding -> holdingDailyProfit(holding, intradayDisplayWindow, latestOfficialNavByFund.get(holding.getFundCode())))
                 .reduce(ZERO, BigDecimal::add);
+    }
+
+    private BigDecimal holdingDailyProfit(FundHolding holding, boolean intradayDisplayWindow, FundNavDaily officialNav) {
+        boolean intradayAllowed = intradayDisplayWindow && !delayedOfficialNavFund(holding);
+        boolean officialUpdated = officialNavUpdated(holding, officialNav);
+        return officialUpdated || intradayAllowed ? scale(holding.getDailyProfit()) : ZERO;
+    }
+
+    private PortfolioSummaryVO dashboardSummary(PortfolioSummaryVO summary, List<FundHolding> holdings,
+                                                Map<String, FundNavDaily> latestOfficialNavByFund,
+                                                BigDecimal dailyProfit) {
+        if (holdings.isEmpty()) {
+            return dashboardSummary(summary, summary.totalAsset(), summary.currentProfit(),
+                    summary.equityPositionRate(), summary.bondPositionRate(), dailyProfit);
+        }
+        BigDecimal totalAsset = holdings.stream()
+                .map(holding -> effectiveHoldingAmount(holding, latestOfficialNavByFund.get(holding.getFundCode())))
+                .reduce(ZERO, BigDecimal::add);
+        BigDecimal currentProfit = holdings.stream()
+                .map(holding -> effectiveHoldingProfit(holding, latestOfficialNavByFund.get(holding.getFundCode())))
+                .reduce(ZERO, BigDecimal::add);
+        BigDecimal equityAmount = holdings.stream()
+                .filter(holding -> isEquityType(holding.getFundType()))
+                .map(holding -> effectiveHoldingAmount(holding, latestOfficialNavByFund.get(holding.getFundCode())))
+                .reduce(ZERO, BigDecimal::add);
+        BigDecimal bondAmount = holdings.stream()
+                .filter(holding -> isBondType(holding.getFundType()))
+                .map(holding -> effectiveHoldingAmount(holding, latestOfficialNavByFund.get(holding.getFundCode())))
+                .reduce(ZERO, BigDecimal::add);
+        return dashboardSummary(summary, totalAsset, currentProfit, rate(equityAmount, totalAsset), rate(bondAmount, totalAsset), dailyProfit);
+    }
+
+    private PortfolioSummaryVO dashboardSummary(PortfolioSummaryVO summary, BigDecimal totalAsset,
+                                                BigDecimal currentProfit, BigDecimal equityPositionRate,
+                                                BigDecimal bondPositionRate, BigDecimal dailyProfit) {
         return new PortfolioSummaryVO(
-                summary.totalAsset(),
+                scale(totalAsset),
                 summary.totalInvestAmount(),
-                summary.currentProfit(),
-                summary.currentProfitRate(),
-                dailyProfit,
-                summary.equityPositionRate(),
-                summary.bondPositionRate(),
+                scale(currentProfit),
+                rate(currentProfit, summary.totalInvestAmount()),
+                scale(dailyProfit),
+                scale(equityPositionRate),
+                scale(bondPositionRate),
                 summary.cashPositionRate(),
                 summary.holdingCount(),
                 summary.accounts()
         );
+    }
+
+    private BigDecimal effectiveHoldingAmount(FundHolding holding, FundNavDaily officialNav) {
+        if (officialNavUpdated(holding, officialNav)
+                && officialNav.getUnitNav() != null
+                && officialNav.getUnitNav().compareTo(BigDecimal.ZERO) > 0
+                && holding.getHoldingShare() != null
+                && holding.getHoldingShare().compareTo(BigDecimal.ZERO) > 0) {
+            return scale(holding.getHoldingShare().multiply(officialNav.getUnitNav()));
+        }
+        return scale(holding.getHoldingAmount());
+    }
+
+    private BigDecimal effectiveHoldingProfit(FundHolding holding, FundNavDaily officialNav) {
+        if (officialNavUpdated(holding, officialNav)) {
+            return scale(effectiveHoldingAmount(holding, officialNav).subtract(scale(holding.getHoldingCost())));
+        }
+        return scale(holding.getHoldingProfit());
+    }
+
+    private BigDecimal effectiveHoldingProfitRate(FundHolding holding, FundNavDaily officialNav) {
+        if (officialNavUpdated(holding, officialNav)) {
+            return rate(effectiveHoldingProfit(holding, officialNav), holding.getHoldingCost());
+        }
+        return scale(holding.getHoldingProfitRate());
+    }
+
+    private boolean isEquityType(String fundType) {
+        String value = fundType == null ? "" : fundType.toUpperCase();
+        return value.contains("EQUITY") || value.contains("INDEX") || value.contains("ETF") || value.contains("MIXED") || value.contains("QDII");
+    }
+
+    private boolean isBondType(String fundType) {
+        String value = fundType == null ? "" : fundType.toUpperCase();
+        return value.contains("BOND") || value.contains("FIXED_INCOME");
     }
 
     private StrategySignalVO toSignalVO(StrategySignal signal) {

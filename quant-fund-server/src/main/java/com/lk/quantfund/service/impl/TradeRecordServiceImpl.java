@@ -2,6 +2,7 @@ package com.lk.quantfund.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.lk.quantfund.auth.UserContext;
+import com.lk.quantfund.dto.trade.ConvertPairTradeRequest;
 import com.lk.quantfund.constants.SystemConstants;
 import com.lk.quantfund.dto.trade.TradeRecordRequest;
 import com.lk.quantfund.entity.FundHolding;
@@ -62,6 +63,7 @@ public class TradeRecordServiceImpl implements TradeRecordService {
         ensurePositiveAmount(request.tradeAmount());
         ensureAccountOwned(userId, request.accountId());
         TradeStatus status = request.tradeStatus() == null ? TradeStatus.COMPLETED : request.tradeStatus();
+        validateRelatedTrade(userId, request, tradeType);
         FundHolding holding = resolveHoldingForTrade(userId, request, tradeType);
 
         LocalDateTime now = LocalDateTime.now();
@@ -79,7 +81,7 @@ public class TradeRecordServiceImpl implements TradeRecordService {
         record.setTradeFee(valueOrZero(request.tradeFee()));
         record.setTradeTime(request.tradeTime() == null ? now : request.tradeTime());
         record.setRelatedTradeId(request.relatedTradeId());
-        record.setRemark(trimToNull(request.remark()));
+        record.setRemark(simulatedRemark(request.remark()));
         record.setCreateTime(now);
         record.setUpdateTime(now);
         record.setDeleted(0);
@@ -90,6 +92,20 @@ public class TradeRecordServiceImpl implements TradeRecordService {
             portfolioAccountService.recalculateOwnedAccount(userId, request.accountId());
         }
         return toVO(record);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public List<TradeRecordVO> createConvertPair(ConvertPairTradeRequest request) {
+        Long userId = UserContext.getUserId();
+        FundHolding outHolding = ensureHoldingOwned(userId, request.outHoldingId());
+        if (!outHolding.getAccountId().equals(request.accountId())) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "holding does not belong to the selected account");
+        }
+        TradeStatus status = request.tradeStatus() == null ? TradeStatus.COMPLETED : request.tradeStatus();
+        TradeRecordVO out = createAs(convertOutRequest(request, status, outHolding), TradeType.CONVERT_OUT);
+        TradeRecordVO in = createAs(convertInRequest(request, status, out.id()), TradeType.CONVERT_IN);
+        return List.of(out, in);
     }
 
     @Override
@@ -144,6 +160,60 @@ public class TradeRecordServiceImpl implements TradeRecordService {
         throw new BusinessException(ErrorCode.BAD_REQUEST, "holding is required for sell or convert-out trade");
     }
 
+    private TradeRecordRequest convertOutRequest(ConvertPairTradeRequest request, TradeStatus status, FundHolding outHolding) {
+        return new TradeRecordRequest(
+                request.accountId(),
+                request.outHoldingId(),
+                outHolding.getFundCode(),
+                outHolding.getFundName(),
+                TradeType.CONVERT_OUT,
+                status,
+                request.outTradeAmount(),
+                request.outTradeShare(),
+                request.outTradeNav(),
+                request.outTradeFee(),
+                request.tradeTime(),
+                null,
+                request.remark()
+        );
+    }
+
+    private TradeRecordRequest convertInRequest(ConvertPairTradeRequest request, TradeStatus status, Long relatedTradeId) {
+        return new TradeRecordRequest(
+                request.accountId(),
+                request.inHoldingId(),
+                request.inFundCode(),
+                request.inFundName(),
+                TradeType.CONVERT_IN,
+                status,
+                request.inTradeAmount(),
+                request.inTradeShare(),
+                request.inTradeNav(),
+                request.inTradeFee(),
+                request.tradeTime(),
+                relatedTradeId,
+                request.remark()
+        );
+    }
+
+    private void validateRelatedTrade(Long userId, TradeRecordRequest request, TradeType tradeType) {
+        if (request.relatedTradeId() == null) {
+            return;
+        }
+        if (tradeType != TradeType.CONVERT_IN) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "related trade is only allowed for convert-in trade");
+        }
+        TradeRecord related = tradeRecordMapper.selectOne(new LambdaQueryWrapper<TradeRecord>()
+                .eq(TradeRecord::getId, request.relatedTradeId())
+                .eq(TradeRecord::getUserId, userId)
+                .eq(TradeRecord::getAccountId, request.accountId())
+                .eq(TradeRecord::getTradeType, TradeType.CONVERT_OUT.name())
+                .last("LIMIT 1"));
+        if (related == null) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "related convert-out trade not found");
+        }
+    }
+
     private void applyCompletedTrade(Long userId, TradeRecord record, FundHolding holding) {
         if (isIncreaseTrade(TradeType.valueOf(record.getTradeType()))) {
             FundHolding target = holding == null ? createHoldingFromTrade(userId, record) : holding;
@@ -188,6 +258,9 @@ public class TradeRecordServiceImpl implements TradeRecordService {
 
     private void increaseHolding(FundHolding holding, TradeRecord record) {
         BigDecimal share = valueOrZero(record.getTradeShare());
+        if (share.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "trade share or trade nav is required for buy or convert-in trade");
+        }
         BigDecimal costIncrease = valueOrZero(record.getTradeAmount()).add(valueOrZero(record.getTradeFee()));
         holding.setHoldingShare(valueOrZero(holding.getHoldingShare()).add(share));
         holding.setHoldingCost(valueOrZero(holding.getHoldingCost()).add(costIncrease));
@@ -237,6 +310,16 @@ public class TradeRecordServiceImpl implements TradeRecordService {
     }
 
     private void recalculateHolding(FundHolding holding) {
+        if (valueOrZero(holding.getHoldingShare()).compareTo(BigDecimal.ZERO) <= 0) {
+            holding.setHoldingShare(ZERO);
+            holding.setHoldingAmount(ZERO);
+            holding.setHoldingCost(ZERO);
+            holding.setHoldingProfit(ZERO);
+            holding.setHoldingProfitRate(ZERO);
+            holding.setDailyProfit(ZERO);
+            holding.setUpdateTime(LocalDateTime.now());
+            return;
+        }
         BigDecimal amount = estimateAmount(holding, holding.getHoldingAmount());
         BigDecimal profit = amount.subtract(valueOrZero(holding.getHoldingCost()));
         holding.setHoldingAmount(amount);
@@ -350,5 +433,16 @@ public class TradeRecordServiceImpl implements TradeRecordService {
 
     private String trimToNull(String value) {
         return StringUtils.hasText(value) ? value.trim() : null;
+    }
+
+    private String simulatedRemark(String value) {
+        String remark = trimToNull(value);
+        if (remark == null) {
+            return SystemConstants.SIMULATED_TRADE_NOTICE;
+        }
+        if (remark.contains(SystemConstants.SIMULATED_TRADE_NOTICE)) {
+            return remark;
+        }
+        return remark + "，" + SystemConstants.SIMULATED_TRADE_NOTICE;
     }
 }

@@ -18,6 +18,7 @@ public record ProfitAnalysisVO(
         List<ProfitTrendPointVO> trend,
         List<FundProfitRankVO> profitTop5,
         List<FundProfitRankVO> lossTop5,
+        IndexCompareVO indexCompare,
         String indexCompareStatus,
         String disclaimer
 ) {

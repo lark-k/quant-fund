@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { quantApi } from '@/api/quant'
 import type { AiAnalysisReport, FundHolding } from '@/types/domain'
+import { DISCLAIMER } from '@/types/domain'
 import ActionTag from '@/components/common/ActionTag.vue'
 import DisclaimerBar from '@/components/common/DisclaimerBar.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
@@ -29,6 +30,7 @@ const aiSourceText = computed(() => {
   if (!selected.value) return ''
   return selected.value.fallbackUsed ? 'AI 降级兜底' : 'DeepSeek 真实分析'
 })
+const selectedDisclaimer = computed(() => selected.value?.disclaimer || DISCLAIMER)
 
 onMounted(async () => {
   try {
@@ -106,6 +108,9 @@ async function generate() {
             <span>{{ selectedHolding?.fundName || '持仓基金' }}</span>
             <span>{{ selectedHolding?.fundType || '类型待同步' }}</span>
           </div>
+        </div>
+        <div class="disclaimer-bar">
+          <span>{{ selectedDisclaimer }}</span>
         </div>
 
         <div class="metric-row">
@@ -192,6 +197,6 @@ async function generate() {
       </div>
     </section>
 
-    <DisclaimerBar simulated />
+    <DisclaimerBar />
   </div>
 </template>

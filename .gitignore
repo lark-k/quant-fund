@@ -28,3 +28,4 @@ dist/
 # 临时缓存
 tmp/
 .cache/
+qa-artifacts/

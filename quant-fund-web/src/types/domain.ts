@@ -123,6 +123,12 @@ export type HoldingUpdateRequest = {
 
 export type HoldingCreateRequest = HoldingUpdateRequest
 
+export type ClearHoldingRequest = {
+  tradeAmount?: number
+  tradeFee?: number
+  remark?: string
+}
+
 export interface FundSearchResult {
   fundCode: string
   fundName: string
@@ -217,7 +223,7 @@ export interface DashboardOverview {
   summary: PortfolioSummary
   topHoldings: FundHolding[]
   positionDistribution: Array<{ name: string; rate: number }>
-  profitTrend: Array<{ date: string; totalAsset: number; holdingProfit: number; dailyProfit: number }>
+  profitTrend: Array<{ date: string; totalAsset: number; holdingProfit: number; dailyProfit: number; indexReturnRate?: number | null; profitStatus?: string; profitStatusText?: string }>
   latestStrategySignals: StrategySignal[]
   todayAiSuggestions: AiAnalysisReport[]
   estimateStatus: {
@@ -243,6 +249,17 @@ export interface MarketIndex {
   sourceName: string
 }
 
+export interface MarketSessionStatus {
+  primaryStatusText: string
+  trading: boolean
+  updateTime: string
+  markets: Array<{
+    market: string
+    statusText: string
+    trading: boolean
+  }>
+}
+
 export interface ProfitAnalysis {
   startDate: string
   endDate: string
@@ -254,9 +271,20 @@ export interface ProfitAnalysis {
   selectedRangeProfit: number
   selectedRangeProfitRate: number
   periodStats: Array<{ period: string; profit: number; profitRate: number }>
-  trend: Array<{ date: string; totalAsset: number; dailyProfit: number; cumulativeProfit: number; dailyProfitRate: number }>
+  trend: Array<{ date: string; totalAsset: number; dailyProfit: number; cumulativeProfit: number; dailyProfitRate: number; indexReturnRate?: number | null; profitStatus?: string; profitStatusText?: string }>
   profitTop5: FundProfitRank[]
   lossTop5: FundProfitRank[]
+  indexCompare?: {
+    indexCode: string
+    indexName: string
+    indexChangeRate: number
+    selectedRangeProfitRate: number
+    excessReturn: number
+    updateTime: string | null
+    sourceName: string
+    statusText: string
+    available: boolean
+  }
   indexCompareStatus: string
   disclaimer: string
 }
@@ -273,6 +301,8 @@ export interface ProfitCalendar {
     heatLevel: string
     tradingDay: boolean
     tradingDayLabel: string
+    profitStatus?: string
+    profitStatusText?: string
   }>
   profitTop5: FundProfitRank[]
   lossTop5: FundProfitRank[]
@@ -321,6 +351,25 @@ export type TradeRecordRequest = {
   remark?: string
 }
 
+export type ConvertPairTradeRequest = {
+  accountId: number
+  outHoldingId: number
+  outTradeAmount: number
+  outTradeShare?: number
+  outTradeNav?: number
+  outTradeFee?: number
+  inHoldingId?: number
+  inFundCode: string
+  inFundName: string
+  inTradeAmount: number
+  inTradeShare?: number
+  inTradeNav?: number
+  inTradeFee?: number
+  tradeStatus?: TradeRecord['tradeStatus']
+  tradeTime?: string
+  remark?: string
+}
+
 export interface FundEstimate {
   fundCode: string
   estimateDate: string
@@ -348,6 +397,9 @@ export interface FundNavPoint {
   nav: number
   accumulatedNav: number
   dailyGrowthRate: number
+  indexReturnRate?: number | null
+  indexCode?: string | null
+  indexName?: string | null
 }
 
 export interface FundStockHolding {
@@ -398,6 +450,30 @@ export interface DataSourceConfig {
   configJson: string
   userOverride: boolean
   updateTime: string
+}
+
+export interface DataSourceHealth {
+  provider: string
+  apiName: string
+  healthy: boolean
+  delayed: boolean
+  lastCallTime: string | null
+  lastSuccessTime: string | null
+  lastFailureTime: string | null
+  lastFailureReason: string | null
+  lastCostTimeMs: number | null
+  statusText: string
+}
+
+export interface AiRuntimeConfig {
+  enabled: boolean
+  provider: string
+  model: string
+  baseUrl: string
+  keyPresent: boolean
+  mockEnabled: boolean
+  ready: boolean
+  diagnosis: string
 }
 
 export type DataSourceConfigRequest = {

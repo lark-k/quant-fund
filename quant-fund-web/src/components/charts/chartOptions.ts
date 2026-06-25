@@ -4,6 +4,14 @@ type TrendPoint = {
   date: string
   holdingProfit?: number
   cumulativeProfit?: number
+  dailyProfitRate?: number
+  indexReturnRate?: number | null
+}
+
+type ReturnTrendPoint = {
+  label: string
+  portfolioReturn: number | null
+  indexReturn: number | null
 }
 
 const axis = {
@@ -12,7 +20,7 @@ const axis = {
   splitLine: { lineStyle: { color: '#20313a', type: 'dashed' } }
 }
 
-export function profitTrendOption(data: DashboardOverview['profitTrend'] | ProfitAnalysis['trend']) {
+export function profitTrendOption(data: DashboardOverview['profitTrend'] | ProfitAnalysis['trend'], showSyntheticIndex = false) {
   const points: TrendPoint[] = data
   const firstValue = points[0]?.holdingProfit ?? points[0]?.cumulativeProfit ?? 1
   const profitRates = points.map((item, index) => {
@@ -20,7 +28,22 @@ export function profitTrendOption(data: DashboardOverview['profitTrend'] | Profi
     return Number((((value - firstValue) / Math.max(Math.abs(firstValue), 1)) * 18 + index * 0.42).toFixed(2))
   })
   const indexRates = points.map((_, index) => Number((Math.sin(index / 2.8) * 3 + index * 0.55 - 1.2).toFixed(2)))
-  const drawdowns = points.map((_, index) => Number((-Math.abs(Math.sin(index / 2.1) * 7 + Math.cos(index / 3) * 3) - 0.8).toFixed(2)))
+  const historicalIndexRates = points.map((item) => item.indexReturnRate ?? null)
+  const hasHistoricalIndex = historicalIndexRates.some((value) => value !== null)
+  let peak = profitRates[0] ?? 0
+  const drawdowns = profitRates.map((value) => {
+    peak = Math.max(peak, value)
+    return Number((value - peak).toFixed(2))
+  })
+  const series: Array<Record<string, unknown>> = [
+    { name: '组合收益', type: 'line', smooth: true, showSymbol: false, data: profitRates },
+    { name: '最大回撤', type: 'line', smooth: true, showSymbol: false, data: drawdowns, lineStyle: { width: 0 }, areaStyle: { opacity: 0.46 } }
+  ]
+  if (hasHistoricalIndex) {
+    series.splice(1, 0, { name: '沪深300', type: 'line', smooth: true, showSymbol: false, data: historicalIndexRates })
+  } else if (showSyntheticIndex) {
+    series.splice(1, 0, { name: '沪深300', type: 'line', smooth: true, showSymbol: false, data: indexRates })
+  }
 
   return {
     color: ['#3c9cff', '#ffb84d', '#30c978'],
@@ -29,10 +52,56 @@ export function profitTrendOption(data: DashboardOverview['profitTrend'] | Profi
     grid: { top: 34, right: 16, bottom: 24, left: 44 },
     xAxis: { type: 'category', data: points.map((item) => item.date.slice(5)), ...axis },
     yAxis: { type: 'value', axisLabel: { color: '#7f93a1', fontSize: 11, formatter: '{value}%' }, axisLine: axis.axisLine, splitLine: axis.splitLine },
+    series
+  }
+}
+
+export function returnTrendOption(data: ReturnTrendPoint[], indexName = '沪深300') {
+  return {
+    backgroundColor: 'transparent',
+    color: ['#ff514b', '#3c9cff'],
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: '#101a20',
+      borderColor: '#283b46',
+      textStyle: { color: '#d7e3ea' },
+      valueFormatter: (value: number | string) => `${Number(value).toFixed(2)}%`
+    },
+    legend: { show: false },
+    grid: { top: 20, right: 12, bottom: 28, left: 44 },
+    xAxis: {
+      type: 'category',
+      data: data.map((item) => item.label),
+      axisTick: { show: false },
+      axisLine: { lineStyle: { color: '#263844' } },
+      axisLabel: { color: '#7f93a1', fontSize: 11 },
+      splitLine: { show: false }
+    },
+    yAxis: {
+      type: 'value',
+      axisLabel: { color: '#7f93a1', fontSize: 11, formatter: '{value}%' },
+      axisLine: { show: false },
+      splitLine: { lineStyle: { color: '#20313a', type: 'dashed' } }
+    },
     series: [
-      { name: '组合收益', type: 'line', smooth: true, showSymbol: false, data: profitRates },
-      { name: '沪深300', type: 'line', smooth: true, showSymbol: false, data: indexRates },
-      { name: '最大回撤', type: 'line', smooth: true, showSymbol: false, data: drawdowns, lineStyle: { width: 0 }, areaStyle: { opacity: 0.46 } }
+      {
+        name: '我的收益',
+        type: 'line',
+        smooth: true,
+        showSymbol: false,
+        data: data.map((item) => item.portfolioReturn),
+        lineStyle: { width: 2 },
+        connectNulls: true
+      },
+      {
+        name: indexName,
+        type: 'line',
+        smooth: true,
+        showSymbol: false,
+        data: data.map((item) => item.indexReturn),
+        lineStyle: { width: 2 },
+        connectNulls: true
+      }
     ]
   }
 }
@@ -114,7 +183,9 @@ export function fundNavOption(data: FundNavPoint[], trades: TradeRecord[] = []) 
     return Number(((item.nav - peak) / peak * 100).toFixed(2))
   })
   const fundReturn = data.map((item) => Number(((item.nav - firstNav) / Math.max(firstNav, 0.0001) * 100).toFixed(2)))
-  const indexReturn = data.map((_, index) => Number((Math.sin(index / 6) * 2.4 + index * 0.12 - 0.8).toFixed(2)))
+  const indexReturn = data.map((item) => item.indexReturnRate ?? null)
+  const hasIndexReturn = indexReturn.some((value) => value !== null)
+  const indexName = data.find((item) => item.indexReturnRate !== null && item.indexReturnRate !== undefined)?.indexName || '沪深300'
   const tradeByDate = new Map<string, TradeRecord[]>()
   for (const trade of trades) {
     const day = trade.tradeTime.slice(0, 10)
@@ -129,6 +200,16 @@ export function fundNavOption(data: FundNavPoint[], trades: TradeRecord[] = []) 
     return tradesOnDay.map(() => [point.date.slice(5), fundReturn[index]])
   })
 
+  const series: Array<Record<string, unknown>> = [
+    { name: '本基金', type: 'line', smooth: true, showSymbol: false, data: fundReturn, areaStyle: { opacity: 0.08 } },
+    { name: '买入', type: 'scatter', symbolSize: 9, data: buyPoints, itemStyle: { color: '#ff514b' }, z: 8 },
+    { name: '卖出', type: 'scatter', symbolSize: 9, data: sellPoints, itemStyle: { color: '#2fd17c' }, z: 8 },
+    { name: '当前回撤', type: 'line', yAxisIndex: 1, smooth: true, showSymbol: false, data: drawdown, lineStyle: { width: 0 }, areaStyle: { opacity: 0.12 } }
+  ]
+  if (hasIndexReturn) {
+    series.splice(1, 0, { name: indexName, type: 'line', smooth: true, showSymbol: false, data: indexReturn })
+  }
+
   return {
     color: ['#6e91ff', '#ff9657', '#ff514b', '#2fd17c'],
     tooltip: { trigger: 'axis', backgroundColor: '#101a20', borderColor: '#283b46', textStyle: { color: '#d7e3ea' } },
@@ -139,12 +220,6 @@ export function fundNavOption(data: FundNavPoint[], trades: TradeRecord[] = []) 
       { type: 'value', axisLabel: { color: '#7f93a1', fontSize: 11, formatter: '{value}%' }, axisLine: axis.axisLine, splitLine: axis.splitLine },
       { type: 'value', axisLabel: { color: '#7f93a1', fontSize: 11, formatter: '{value}%' }, axisLine: axis.axisLine, splitLine: { show: false } }
     ],
-    series: [
-      { name: '本基金', type: 'line', smooth: true, showSymbol: false, data: fundReturn, areaStyle: { opacity: 0.08 } },
-      { name: '沪深300', type: 'line', smooth: true, showSymbol: false, data: indexReturn },
-      { name: '买入', type: 'scatter', symbolSize: 9, data: buyPoints, itemStyle: { color: '#ff514b' }, z: 8 },
-      { name: '卖出', type: 'scatter', symbolSize: 9, data: sellPoints, itemStyle: { color: '#2fd17c' }, z: 8 },
-      { name: '当前回撤', type: 'line', yAxisIndex: 1, smooth: true, showSymbol: false, data: drawdown, lineStyle: { width: 0 }, areaStyle: { opacity: 0.12 } }
-    ]
+    series
   }
 }

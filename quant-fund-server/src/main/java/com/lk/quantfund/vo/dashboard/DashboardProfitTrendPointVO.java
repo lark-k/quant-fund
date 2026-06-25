@@ -7,6 +7,9 @@ public record DashboardProfitTrendPointVO(
         LocalDate date,
         BigDecimal totalAsset,
         BigDecimal holdingProfit,
-        BigDecimal dailyProfit
+        BigDecimal dailyProfit,
+        BigDecimal indexReturnRate,
+        String profitStatus,
+        String profitStatusText
 ) {
 }

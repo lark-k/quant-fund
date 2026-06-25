@@ -10,6 +10,8 @@ public record ProfitCalendarDayVO(
         BigDecimal cumulativeProfit,
         String heatLevel,
         boolean tradingDay,
-        String tradingDayLabel
+        String tradingDayLabel,
+        String profitStatus,
+        String profitStatusText
 ) {
 }

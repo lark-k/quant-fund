@@ -10,7 +10,9 @@ import com.lk.quantfund.constants.SystemConstants;
 import com.lk.quantfund.dto.system.DataSourceConfigRequest;
 import com.lk.quantfund.service.SystemManagementService;
 import com.lk.quantfund.vo.system.ApiCallLogVO;
+import com.lk.quantfund.vo.system.AiRuntimeConfigVO;
 import com.lk.quantfund.vo.system.DataSourceConfigVO;
+import com.lk.quantfund.vo.system.DataSourceHealthVO;
 import com.lk.quantfund.vo.system.OperationLogVO;
 import jakarta.validation.Valid;
 import java.util.List;
@@ -40,6 +42,18 @@ public class SystemController {
     @RateLimit(key = "system:data-source:list", windowSeconds = 60, maxRequests = 120)
     public ApiResponse<List<DataSourceConfigVO>> dataSources() {
         return ApiResponse.success(systemManagementService.listDataSources());
+    }
+
+    @GetMapping("/data-source-health")
+    @RateLimit(key = "system:data-source-health", windowSeconds = 60, maxRequests = 120)
+    public ApiResponse<List<DataSourceHealthVO>> dataSourceHealth() {
+        return ApiResponse.success(systemManagementService.listDataSourceHealth());
+    }
+
+    @GetMapping("/ai-runtime-config")
+    @RateLimit(key = "system:ai-runtime-config", windowSeconds = 60, maxRequests = 120)
+    public ApiResponse<AiRuntimeConfigVO> aiRuntimeConfig() {
+        return ApiResponse.success(systemManagementService.aiRuntimeConfig());
     }
 
     @PostMapping("/data-sources")

@@ -7,6 +7,7 @@ import com.lk.quantfund.annotation.RepeatSubmit;
 import com.lk.quantfund.annotation.RequireLogin;
 import com.lk.quantfund.common.ApiResponse;
 import com.lk.quantfund.constants.SystemConstants;
+import com.lk.quantfund.dto.holding.ClearHoldingRequest;
 import com.lk.quantfund.dto.holding.CreateHoldingRequest;
 import com.lk.quantfund.dto.holding.UpdateHoldingRequest;
 import com.lk.quantfund.enums.DataOperation;
@@ -86,6 +87,16 @@ public class HoldingController {
     public ApiResponse<Void> delete(@PathVariable Long id) {
         fundHoldingService.delete(id);
         return ApiResponse.success();
+    }
+
+    @PostMapping("/{id}/clear")
+    @DataScope(resourceType = ResourceType.FUND_HOLDING, idParam = "id", operation = DataOperation.UPDATE)
+    @RateLimit(key = "holding:clear", windowSeconds = 60, maxRequests = 30)
+    @RepeatSubmit(intervalSeconds = 3)
+    @OperationLog(module = "holding", action = "clear_holding", bizType = "FUND_HOLDING")
+    public ApiResponse<FundHoldingVO> clear(@PathVariable Long id,
+                                            @Valid @RequestBody(required = false) ClearHoldingRequest request) {
+        return ApiResponse.success(fundHoldingService.clear(id, request));
     }
 
     @PostMapping("/{id}/recalculate")

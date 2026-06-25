@@ -9,9 +9,11 @@ import com.lk.quantfund.exception.BusinessException;
 import com.lk.quantfund.service.AnalyticsService;
 import com.lk.quantfund.vo.analytics.ProfitAnalysisVO;
 import com.lk.quantfund.vo.analytics.ProfitCalendarVO;
+import com.lk.quantfund.vo.analytics.ProfitIntradayTrendPointVO;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.format.DateTimeParseException;
+import java.util.List;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -35,8 +37,16 @@ public class AnalyticsController {
     @RateLimit(key = "analytics:profit", windowSeconds = 60, maxRequests = 120)
     public ApiResponse<ProfitAnalysisVO> profitAnalysis(
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate) {
-        return ApiResponse.success(analyticsService.profitAnalysis(startDate, endDate));
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate,
+            @RequestParam(required = false) String indexCode) {
+        return ApiResponse.success(analyticsService.profitAnalysis(startDate, endDate, indexCode));
+    }
+
+    @GetMapping("/profit-intraday")
+    @RateLimit(key = "analytics:profit-intraday", windowSeconds = 60, maxRequests = 180)
+    public ApiResponse<List<ProfitIntradayTrendPointVO>> profitIntraday(
+            @RequestParam(required = false) String indexCode) {
+        return ApiResponse.success(analyticsService.intradayTrend(indexCode));
     }
 
     @GetMapping("/profit-calendar")
