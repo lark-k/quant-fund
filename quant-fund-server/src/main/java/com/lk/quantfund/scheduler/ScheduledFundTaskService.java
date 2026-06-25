@@ -13,6 +13,7 @@ import com.lk.quantfund.mapper.PortfolioAccountMapper;
 import com.lk.quantfund.service.AiAnalysisService;
 import com.lk.quantfund.service.FundQueryService;
 import com.lk.quantfund.service.PortfolioAccountService;
+import com.lk.quantfund.service.StrategyService;
 import com.lk.quantfund.service.analytics.OfficialNavTiming;
 import com.lk.quantfund.service.valuation.FundValuationResult;
 import com.lk.quantfund.service.valuation.FundValuationService;
@@ -41,6 +42,7 @@ public class ScheduledFundTaskService {
     private final QuantFundProperties properties;
     private final FundQueryService fundQueryService;
     private final AiAnalysisService aiAnalysisService;
+    private final StrategyService strategyService;
     private final PortfolioAccountService portfolioAccountService;
     private final FundHoldingMapper fundHoldingMapper;
     private final PortfolioAccountMapper portfolioAccountMapper;
@@ -51,6 +53,7 @@ public class ScheduledFundTaskService {
     public ScheduledFundTaskService(QuantFundProperties properties,
                                     FundQueryService fundQueryService,
                                     AiAnalysisService aiAnalysisService,
+                                    StrategyService strategyService,
                                     PortfolioAccountService portfolioAccountService,
                                     FundHoldingMapper fundHoldingMapper,
                                     PortfolioAccountMapper portfolioAccountMapper,
@@ -60,6 +63,7 @@ public class ScheduledFundTaskService {
         this.properties = properties;
         this.fundQueryService = fundQueryService;
         this.aiAnalysisService = aiAnalysisService;
+        this.strategyService = strategyService;
         this.portfolioAccountService = portfolioAccountService;
         this.fundHoldingMapper = fundHoldingMapper;
         this.portfolioAccountMapper = portfolioAccountMapper;
@@ -87,6 +91,7 @@ public class ScheduledFundTaskService {
                     fundHoldingMapper.updateById(holding);
                 }
                 recalculateAccounts(entry.getValue());
+                analyzeStrategies(entry.getValue());
                 result.success();
             } catch (RuntimeException exception) {
                 result.failure(entry.getKey() + ": " + exception.getMessage());
@@ -127,6 +132,7 @@ public class ScheduledFundTaskService {
                     upsertSnapshot(holding, latest.navDate(), snapshotDate, now);
                 }
                 recalculateAccounts(entry.getValue());
+                analyzeStrategies(entry.getValue());
                 result.success();
             } catch (RuntimeException exception) {
                 result.failure(entry.getKey() + ": " + exception.getMessage());
@@ -146,6 +152,7 @@ public class ScheduledFundTaskService {
                 .last("LIMIT " + properties.getScheduler().getAiFocusHoldingLimit()));
         for (FundHolding holding : holdings) {
             try {
+                strategyService.analyzeHoldingForUser(holding.getUserId(), holding.getId());
                 aiAnalysisService.analyzeHoldingForUser(holding.getUserId(), holding.getId());
                 result.success();
             } catch (RuntimeException exception) {
@@ -156,6 +163,16 @@ public class ScheduledFundTaskService {
             }
         }
         return result;
+    }
+
+    private void analyzeStrategies(List<FundHolding> holdings) {
+        for (FundHolding holding : holdings) {
+            try {
+                strategyService.analyzeHoldingForUser(holding.getUserId(), holding.getId());
+            } catch (RuntimeException exception) {
+                log.warn("Scheduled strategy analysis failed for holding {}: {}", holding.getId(), exception.getMessage());
+            }
+        }
     }
 
     @Transactional(rollbackFor = Exception.class)

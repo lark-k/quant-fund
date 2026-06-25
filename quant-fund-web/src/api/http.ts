@@ -3,6 +3,12 @@ import { ElMessage } from 'element-plus'
 import router from '@/router'
 import { useAuthStore } from '@/stores/auth'
 
+declare module 'axios' {
+  export interface AxiosRequestConfig {
+    suppressErrorMessage?: boolean
+  }
+}
+
 export const USE_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
 
 export const http = axios.create({
@@ -42,7 +48,9 @@ http.interceptors.response.use(
       handleAuthExpired()
       return Promise.reject(error)
     }
-    ElMessage.error(error.message || '网络异常')
+    if (!error.config?.suppressErrorMessage) {
+      ElMessage.error(error.message || '????')
+    }
     return Promise.reject(error)
   }
 )

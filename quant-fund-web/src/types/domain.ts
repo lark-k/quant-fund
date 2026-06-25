@@ -144,6 +144,7 @@ export interface StrategySignal {
   accountId: number
   holdingId: number
   fundCode: string
+  fundName?: string
   signalType: string
   action: StrategyAction
   actionText: string
@@ -154,6 +155,18 @@ export interface StrategySignal {
   reasons: string[]
   signalTime: string
   disclaimer: string
+}
+
+export interface DashboardRiskAlert {
+  id: string
+  sourceType: string
+  alertType: string
+  riskLevel: RiskLevel | string
+  title: string
+  fundCode: string
+  fundName?: string
+  content: string
+  alertTime: string
 }
 
 export interface StrategyConfig {
@@ -201,6 +214,7 @@ export interface AiAnalysisReport {
   accountId: number
   holdingId: number
   fundCode: string
+  fundName?: string
   modelName: string
   action: StrategyAction
   actionText: string
@@ -233,6 +247,7 @@ export interface DashboardOverview {
     latestEstimateTime: string | null
     statusText: string
   }
+  riskAlerts: DashboardRiskAlert[]
   riskAlertCount: number
   aiSuggestionCount: number
   disclaimer: string

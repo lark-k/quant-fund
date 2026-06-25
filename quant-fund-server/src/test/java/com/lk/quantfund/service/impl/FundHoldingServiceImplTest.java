@@ -29,6 +29,7 @@ import com.lk.quantfund.scheduler.HoldingSnapshotBackfillService;
 import com.lk.quantfund.scheduler.TradingCalendarService;
 import com.lk.quantfund.service.FundQueryService;
 import com.lk.quantfund.service.PortfolioAccountService;
+import com.lk.quantfund.service.StrategyService;
 import com.lk.quantfund.service.valuation.FundValuationResult;
 import com.lk.quantfund.service.valuation.FundValuationService;
 import java.math.BigDecimal;
@@ -48,6 +49,7 @@ class FundHoldingServiceImplTest {
     private final HoldingSnapshotMapper snapshotMapper = mock(HoldingSnapshotMapper.class);
     private final FundQueryService fundQueryService = mock(FundQueryService.class);
     private final PortfolioAccountService portfolioAccountService = mock(PortfolioAccountService.class);
+    private final StrategyService strategyService = mock(StrategyService.class);
     private final FundValuationService valuationService = mock(FundValuationService.class);
     private final HoldingSnapshotBackfillService backfillService = mock(HoldingSnapshotBackfillService.class);
     private final TradeRecordMapper tradeRecordMapper = mock(TradeRecordMapper.class);
@@ -71,6 +73,7 @@ class FundHoldingServiceImplTest {
                 accountMapper,
                 mock(AiAnalysisReportMapper.class),
                 portfolioAccountService,
+                strategyService,
                 fundQueryService,
                 valuationService,
                 new TradingCalendarService(new QuantFundProperties()),
@@ -331,6 +334,7 @@ class FundHoldingServiceImplTest {
                 accountMapper,
                 aiAnalysisReportMapper,
                 portfolioAccountService,
+                strategyService,
                 fundQueryService,
                 valuationService,
                 new TradingCalendarService(new QuantFundProperties()),

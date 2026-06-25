@@ -14,6 +14,7 @@ public record DashboardOverviewVO(
         List<StrategySignalVO> latestStrategySignals,
         List<AiAnalysisReportVO> todayAiSuggestions,
         DashboardEstimateStatusVO estimateStatus,
+        List<DashboardRiskAlertVO> riskAlerts,
         Integer riskAlertCount,
         Integer aiSuggestionCount,
         String disclaimer

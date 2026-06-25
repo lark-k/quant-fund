@@ -9,6 +9,7 @@ public record StrategySignalVO(
         Long accountId,
         Long holdingId,
         String fundCode,
+        String fundName,
         String signalType,
         String action,
         String actionText,
@@ -21,4 +22,3 @@ public record StrategySignalVO(
         String disclaimer
 ) {
 }
-

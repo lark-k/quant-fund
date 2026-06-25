@@ -27,6 +27,7 @@ import com.lk.quantfund.scheduler.TradingCalendarService;
 import com.lk.quantfund.service.FundHoldingService;
 import com.lk.quantfund.service.FundQueryService;
 import com.lk.quantfund.service.PortfolioAccountService;
+import com.lk.quantfund.service.StrategyService;
 import com.lk.quantfund.service.analytics.OfficialNavTiming;
 import com.lk.quantfund.service.valuation.FundValuationResult;
 import com.lk.quantfund.service.valuation.FundValuationService;
@@ -39,6 +40,8 @@ import java.time.temporal.ChronoUnit;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -46,6 +49,7 @@ import org.springframework.util.StringUtils;
 @Service
 public class FundHoldingServiceImpl implements FundHoldingService {
 
+    private static final Logger log = LoggerFactory.getLogger(FundHoldingServiceImpl.class);
     private static final BigDecimal ZERO = BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP);
     private static final BigDecimal ONE_HUNDRED = new BigDecimal("100.0000");
 
@@ -53,6 +57,7 @@ public class FundHoldingServiceImpl implements FundHoldingService {
     private final PortfolioAccountMapper portfolioAccountMapper;
     private final AiAnalysisReportMapper aiAnalysisReportMapper;
     private final PortfolioAccountService portfolioAccountService;
+    private final StrategyService strategyService;
     private final FundQueryService fundQueryService;
     private final FundValuationService fundValuationService;
     private final TradingCalendarService tradingCalendarService;
@@ -64,6 +69,7 @@ public class FundHoldingServiceImpl implements FundHoldingService {
                                   PortfolioAccountMapper portfolioAccountMapper,
                                   AiAnalysisReportMapper aiAnalysisReportMapper,
                                   PortfolioAccountService portfolioAccountService,
+                                  StrategyService strategyService,
                                   FundQueryService fundQueryService,
                                   FundValuationService fundValuationService,
                                   TradingCalendarService tradingCalendarService,
@@ -74,6 +80,7 @@ public class FundHoldingServiceImpl implements FundHoldingService {
         this.portfolioAccountMapper = portfolioAccountMapper;
         this.aiAnalysisReportMapper = aiAnalysisReportMapper;
         this.portfolioAccountService = portfolioAccountService;
+        this.strategyService = strategyService;
         this.fundQueryService = fundQueryService;
         this.fundValuationService = fundValuationService;
         this.tradingCalendarService = tradingCalendarService;
@@ -99,6 +106,7 @@ public class FundHoldingServiceImpl implements FundHoldingService {
         holding.setDeleted(0);
         fundHoldingMapper.insert(holding);
         portfolioAccountService.recalculateOwnedAccount(userId, request.accountId());
+        refreshStrategySignals(userId, holding.getId());
         return toVO(holding);
     }
 
@@ -120,6 +128,7 @@ public class FundHoldingServiceImpl implements FundHoldingService {
         if (!oldAccountId.equals(holding.getAccountId())) {
             portfolioAccountService.recalculateOwnedAccount(userId, oldAccountId);
         }
+        refreshStrategySignals(userId, holding.getId());
         return toVO(holding);
     }
 
@@ -258,6 +267,7 @@ public class FundHoldingServiceImpl implements FundHoldingService {
         holding.setUpdateTime(LocalDateTime.now());
         fundHoldingMapper.updateById(holding);
         portfolioAccountService.recalculateOwnedAccount(userId, holding.getAccountId());
+        refreshStrategySignals(userId, holding.getId());
         return toVO(holding);
     }
 
@@ -283,7 +293,18 @@ public class FundHoldingServiceImpl implements FundHoldingService {
             }
         }
         touchedAccountIds.forEach(accountId -> portfolioAccountService.recalculateOwnedAccount(userId, accountId));
+        holdings.stream()
+                .filter(holding -> touchedAccountIds.contains(holding.getAccountId()))
+                .forEach(holding -> refreshStrategySignals(userId, holding.getId()));
         return list(null, null);
+    }
+
+    private void refreshStrategySignals(Long userId, Long holdingId) {
+        try {
+            strategyService.analyzeHoldingForUser(userId, holdingId);
+        } catch (RuntimeException exception) {
+            log.warn("Strategy analysis skipped for holding {}: {}", holdingId, exception.getMessage());
+        }
     }
 
     private void applyCreateFields(FundHolding holding, CreateHoldingRequest request) {

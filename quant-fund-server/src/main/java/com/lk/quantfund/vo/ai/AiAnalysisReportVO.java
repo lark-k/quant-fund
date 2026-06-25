@@ -9,6 +9,7 @@ public record AiAnalysisReportVO(
         Long accountId,
         Long holdingId,
         String fundCode,
+        String fundName,
         String modelName,
         String action,
         String actionText,
@@ -27,4 +28,3 @@ public record AiAnalysisReportVO(
         String disclaimer
 ) {
 }
-

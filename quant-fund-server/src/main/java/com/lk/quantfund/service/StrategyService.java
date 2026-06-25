@@ -13,6 +13,8 @@ public interface StrategyService {
 
     StrategyAnalysisVO analyzeHolding(Long holdingId);
 
+    StrategyAnalysisVO analyzeHoldingForUser(Long userId, Long holdingId);
+
     List<StrategyAnalysisVO> analyzeAccount(Long accountId);
 
     List<StrategySignalVO> listSignals(Long accountId, Long holdingId, String fundCode, StrategyAction action);
@@ -25,4 +27,3 @@ public interface StrategyService {
 
     RiskProfileVO updateRiskProfile(RiskProfileRequest request);
 }
-

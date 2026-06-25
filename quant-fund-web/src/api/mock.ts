@@ -5,6 +5,7 @@ import type {
   ApiCallLogQuery,
   ClearHoldingRequest,
   ConvertPairTradeRequest,
+  DashboardRiskAlert,
   DashboardOverview,
   DataSourceConfig,
   DataSourceConfigRequest,
@@ -260,6 +261,93 @@ export const aiSuggestions: AiAnalysisReport[] = [
   }
 ]
 
+function latestAiSuggestions(items: AiAnalysisReport[]) {
+  const latestByHolding = new Map<number, AiAnalysisReport>()
+  for (const item of [...items].sort((left, right) => {
+    const timeDiff = new Date(right.analysisTime).getTime() - new Date(left.analysisTime).getTime()
+    if (timeDiff !== 0) return timeDiff
+    return right.id - left.id
+  })) {
+    if (!latestByHolding.has(item.holdingId)) {
+      latestByHolding.set(item.holdingId, item)
+    }
+  }
+  return Array.from(latestByHolding.values())
+}
+
+const rawRiskAlerts: DashboardRiskAlert[] = [
+  ...strategySignals
+    .filter((item) => item.riskLevel === 'HIGH' || item.action === 'SELL' || item.action === 'CONVERT')
+    .slice(0, 4)
+    .map((item) => {
+      const holding = holdings.find((holdingItem) => holdingItem.fundCode === item.fundCode)
+      return {
+        id: `SIGNAL_${item.id}`,
+        sourceType: 'STRATEGY',
+        alertType: item.signalType,
+        riskLevel: item.riskLevel,
+        title: `${item.riskLevel === 'HIGH' ? '高' : item.riskLevel === 'MEDIUM' ? '中' : '低'} · 策略预警`,
+        fundCode: item.fundCode,
+        fundName: holding?.fundName || item.fundCode,
+        content: item.reasons[0],
+        alertTime: item.signalTime
+      }
+    }),
+  ...aiSuggestions
+    .filter((item) => item.risks.length && item.riskLevel !== 'LOW')
+    .slice(0, 3)
+    .map((item) => {
+      const holding = holdings.find((holdingItem) => holdingItem.fundCode === item.fundCode)
+      return {
+        id: `AI_${item.id}`,
+        sourceType: 'AI',
+        alertType: 'AI 风险',
+        riskLevel: item.riskLevel,
+        title: `${item.riskLevel === 'HIGH' ? '高' : '中'} · AI 风险`,
+        fundCode: item.fundCode,
+        fundName: holding?.fundName || item.fundCode,
+        content: item.risks[0],
+        alertTime: item.analysisTime
+      }
+    })
+].sort((left, right) => Date.parse(right.alertTime) - Date.parse(left.alertTime))
+
+function aggregateRiskAlerts(alerts: DashboardRiskAlert[]): DashboardRiskAlert[] {
+  const groups = new Map<string, DashboardRiskAlert[]>()
+  for (const alert of alerts) {
+    const key = alert.fundCode || alert.id
+    groups.set(key, [...(groups.get(key) || []), alert])
+  }
+  return Array.from(groups.values())
+    .map((items) => {
+      const latest = [...items].sort((left, right) => Date.parse(right.alertTime) - Date.parse(left.alertTime))[0]
+      const riskLevel = [...items].sort((left, right) => riskRank(right.riskLevel) - riskRank(left.riskLevel))[0].riskLevel
+      const alertTypes = Array.from(new Set(items.map((item) => item.alertType).filter(Boolean)))
+      const contents = Array.from(new Set(items.map((item) => `${item.alertType}：${item.content}`)))
+      return {
+        ...latest,
+        id: `RISK_${latest.fundCode}`,
+        sourceType: new Set(items.map((item) => item.sourceType)).size > 1 ? 'MIXED' : latest.sourceType,
+        alertType: joinLimited(alertTypes, 3),
+        riskLevel,
+        title: `${riskLevel === 'HIGH' ? '高' : riskLevel === 'MEDIUM' ? '中' : '低'} · ${alertTypes.length > 1 ? '综合风险' : joinLimited(alertTypes, 3)}`,
+        content: `${joinLimited(contents, 3)}${contents.length > 3 ? `；等 ${contents.length} 项风险` : ''}`
+      }
+    })
+    .sort((left, right) => Date.parse(right.alertTime) - Date.parse(left.alertTime))
+}
+
+function joinLimited(values: string[], limit: number) {
+  const head = values.slice(0, limit).join(' / ')
+  return values.length > limit ? `${head} / +${values.length - limit}` : head
+}
+
+function riskRank(level: string) {
+  return level === 'HIGH' ? 3 : level === 'MEDIUM' ? 2 : level === 'LOW' ? 1 : 0
+}
+
+export const riskAlerts: DashboardRiskAlert[] = aggregateRiskAlerts(rawRiskAlerts)
+
 const trend = Array.from({ length: 18 }, (_, index) => {
   const monthIndex = index + 1
   const year = monthIndex > 12 ? 2026 : 2025
@@ -295,7 +383,7 @@ export const dashboard: DashboardOverview = {
   ],
   profitTrend: trend,
   latestStrategySignals: strategySignals,
-  todayAiSuggestions: aiSuggestions,
+  todayAiSuggestions: latestAiSuggestions(aiSuggestions),
   estimateStatus: {
     trackedFundCount: 10,
     refreshedTodayCount: 10,
@@ -303,8 +391,9 @@ export const dashboard: DashboardOverview = {
     latestEstimateTime: now,
     statusText: '估值正常'
   },
-  riskAlertCount: 3,
-  aiSuggestionCount: 12,
+  riskAlerts,
+  riskAlertCount: riskAlerts.length,
+  aiSuggestionCount: latestAiSuggestions(aiSuggestions).length,
   disclaimer: DISCLAIMER
 }
 
@@ -314,6 +403,7 @@ function buildDashboard(): DashboardOverview {
   const currentProfit = holdings.reduce((total, item) => total + item.holdingProfit, 0)
   const dailyProfit = holdings.reduce((total, item) => total + item.dailyProfit, 0)
   const officialUpdatedCount = holdings.filter((item) => item.officialNavUpdated).length
+  const visibleAiSuggestions = latestAiSuggestions(aiSuggestions)
   return {
     ...dashboard,
     summary: {
@@ -332,7 +422,9 @@ function buildDashboard(): DashboardOverview {
       refreshedTodayCount: officialUpdatedCount || dashboard.estimateStatus.refreshedTodayCount,
       latestEstimateTime: now,
       statusText: officialUpdatedCount === holdings.length ? '今日正式净值已同步' : '估值正常'
-    }
+    },
+    todayAiSuggestions: visibleAiSuggestions,
+    aiSuggestionCount: visibleAiSuggestions.length
   }
 }
 

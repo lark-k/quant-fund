@@ -24,12 +24,15 @@ import com.lk.quantfund.mapper.PortfolioAccountMapper;
 import com.lk.quantfund.mapper.RiskProfileMapper;
 import com.lk.quantfund.mapper.StrategySignalMapper;
 import com.lk.quantfund.service.AiAnalysisService;
+import com.lk.quantfund.service.StrategyService;
 import com.lk.quantfund.vo.ai.AiAnalysisReportVO;
 import com.lk.quantfund.vo.strategy.StrategySignalVO;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -37,9 +40,11 @@ import org.springframework.util.StringUtils;
 @Service
 public class AiAnalysisServiceImpl implements AiAnalysisService {
 
+    private static final Logger log = LoggerFactory.getLogger(AiAnalysisServiceImpl.class);
     private static final BigDecimal ZERO = BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP);
 
     private final AiAnalysisClient aiAnalysisClient;
+    private final StrategyService strategyService;
     private final QuantFundProperties properties;
     private final ObjectMapper objectMapper;
     private final AiAnalysisReportMapper aiAnalysisReportMapper;
@@ -49,6 +54,7 @@ public class AiAnalysisServiceImpl implements AiAnalysisService {
     private final StrategySignalMapper strategySignalMapper;
 
     public AiAnalysisServiceImpl(AiAnalysisClient aiAnalysisClient,
+                                 StrategyService strategyService,
                                  QuantFundProperties properties,
                                  ObjectMapper objectMapper,
                                  AiAnalysisReportMapper aiAnalysisReportMapper,
@@ -57,6 +63,7 @@ public class AiAnalysisServiceImpl implements AiAnalysisService {
                                  RiskProfileMapper riskProfileMapper,
                                  StrategySignalMapper strategySignalMapper) {
         this.aiAnalysisClient = aiAnalysisClient;
+        this.strategyService = strategyService;
         this.properties = properties;
         this.objectMapper = objectMapper;
         this.aiAnalysisReportMapper = aiAnalysisReportMapper;
@@ -77,9 +84,18 @@ public class AiAnalysisServiceImpl implements AiAnalysisService {
     public AiAnalysisReportVO analyzeHoldingForUser(Long userId, Long holdingId) {
         FundHolding holding = loadOwnedHolding(userId, holdingId);
         PortfolioAccount account = loadOwnedAccount(userId, holding.getAccountId());
+        refreshStrategySignals(userId, holdingId);
         AiAnalysisContext context = buildContext(userId, account, holding);
         AiAnalysisResult result = aiAnalysisClient.analyze(context);
         return toVO(saveReport(userId, context, result));
+    }
+
+    private void refreshStrategySignals(Long userId, Long holdingId) {
+        try {
+            strategyService.analyzeHoldingForUser(userId, holdingId);
+        } catch (RuntimeException exception) {
+            log.warn("Strategy analysis skipped before AI analysis for holding {}: {}", holdingId, exception.getMessage());
+        }
     }
 
     @Override
@@ -242,6 +258,7 @@ public class AiAnalysisServiceImpl implements AiAnalysisService {
                 signal.getAccountId(),
                 signal.getHoldingId(),
                 signal.getFundCode(),
+                fundName(signal),
                 signal.getSignalType(),
                 signal.getAction(),
                 signal.getActionText(),
@@ -255,12 +272,21 @@ public class AiAnalysisServiceImpl implements AiAnalysisService {
         );
     }
 
+    private String fundName(StrategySignal signal) {
+        FundHolding holding = signal.getHoldingId() == null ? null : fundHoldingMapper.selectById(signal.getHoldingId());
+        if (holding != null && StringUtils.hasText(holding.getFundName())) {
+            return holding.getFundName();
+        }
+        return signal.getFundCode();
+    }
+
     private AiAnalysisReportVO toVO(AiAnalysisReport report) {
         return new AiAnalysisReportVO(
                 report.getId(),
                 report.getAccountId(),
                 report.getHoldingId(),
                 report.getFundCode(),
+                fundName(report.getHoldingId(), report.getFundCode()),
                 report.getModelName(),
                 report.getAction(),
                 report.getActionText(),
@@ -278,6 +304,14 @@ public class AiAnalysisServiceImpl implements AiAnalysisService {
                 report.getAnalysisTime(),
                 SystemConstants.DISCLAIMER
         );
+    }
+
+    private String fundName(Long holdingId, String fundCode) {
+        FundHolding holding = holdingId == null ? null : fundHoldingMapper.selectById(holdingId);
+        if (holding != null && StringUtils.hasText(holding.getFundName())) {
+            return holding.getFundName();
+        }
+        return fundCode;
     }
 
     private boolean fallbackUsed(AiAnalysisReport report) {

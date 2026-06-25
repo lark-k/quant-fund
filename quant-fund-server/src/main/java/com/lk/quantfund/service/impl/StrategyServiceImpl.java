@@ -83,7 +83,11 @@ public class StrategyServiceImpl implements StrategyService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public StrategyAnalysisVO analyzeHolding(Long holdingId) {
-        Long userId = UserContext.getUserId();
+        return analyzeHoldingForUser(UserContext.getUserId(), holdingId);
+    }
+
+    @Override
+    public StrategyAnalysisVO analyzeHoldingForUser(Long userId, Long holdingId) {
         FundHolding holding = loadOwnedHolding(userId, holdingId);
         PortfolioAccount account = loadOwnedAccount(userId, holding.getAccountId());
         RiskProfile riskProfile = loadOrCreateRiskProfile(userId);
@@ -248,11 +252,24 @@ public class StrategyServiceImpl implements StrategyService {
 
     private StrategySignalVO saveSignal(Long userId, PortfolioAccount account, FundHolding holding, StrategySignalDraft draft) {
         LocalDateTime now = LocalDateTime.now();
-        StrategySignal signal = new StrategySignal();
-        signal.setUserId(userId);
-        signal.setAccountId(account.getId());
-        signal.setHoldingId(holding.getId());
-        signal.setFundCode(holding.getFundCode());
+        StrategySignal signal = strategySignalMapper.selectOne(new LambdaQueryWrapper<StrategySignal>()
+                .eq(StrategySignal::getUserId, userId)
+                .eq(StrategySignal::getHoldingId, holding.getId())
+                .eq(StrategySignal::getSignalType, draft.signalType().name())
+                .eq(StrategySignal::getAction, draft.action().name())
+                .eq(StrategySignal::getActionText, draft.actionText())
+                .ge(StrategySignal::getSignalTime, now.toLocalDate().atStartOfDay())
+                .orderByDesc(StrategySignal::getSignalTime)
+                .last("LIMIT 1"));
+        if (signal == null) {
+            signal = new StrategySignal();
+            signal.setUserId(userId);
+            signal.setAccountId(account.getId());
+            signal.setHoldingId(holding.getId());
+            signal.setFundCode(holding.getFundCode());
+            signal.setCreateTime(now);
+            signal.setDeleted(0);
+        }
         signal.setSignalType(draft.signalType().name());
         signal.setAction(draft.action().name());
         signal.setActionText(draft.actionText());
@@ -262,10 +279,12 @@ public class StrategyServiceImpl implements StrategyService {
         signal.setConfidence(scale(draft.confidence()));
         signal.setReasonJson(writeReasons(draft.reasons()));
         signal.setSignalTime(now);
-        signal.setCreateTime(now);
         signal.setUpdateTime(now);
-        signal.setDeleted(0);
-        strategySignalMapper.insert(signal);
+        if (signal.getId() == null) {
+            strategySignalMapper.insert(signal);
+        } else {
+            strategySignalMapper.updateById(signal);
+        }
         return toSignalVO(signal);
     }
 
@@ -379,6 +398,7 @@ public class StrategyServiceImpl implements StrategyService {
                 signal.getAccountId(),
                 signal.getHoldingId(),
                 signal.getFundCode(),
+                fundName(signal),
                 signal.getSignalType(),
                 signal.getAction(),
                 signal.getActionText(),
@@ -390,6 +410,14 @@ public class StrategyServiceImpl implements StrategyService {
                 signal.getSignalTime(),
                 SystemConstants.DISCLAIMER
         );
+    }
+
+    private String fundName(StrategySignal signal) {
+        FundHolding holding = signal.getHoldingId() == null ? null : fundHoldingMapper.selectById(signal.getHoldingId());
+        if (holding != null && StringUtils.hasText(holding.getFundName())) {
+            return holding.getFundName();
+        }
+        return signal.getFundCode();
     }
 
     private String writeReasons(List<String> reasons) {

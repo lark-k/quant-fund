@@ -18,6 +18,7 @@ import com.lk.quantfund.mapper.PortfolioAccountMapper;
 import com.lk.quantfund.service.AiAnalysisService;
 import com.lk.quantfund.service.FundQueryService;
 import com.lk.quantfund.service.PortfolioAccountService;
+import com.lk.quantfund.service.StrategyService;
 import com.lk.quantfund.service.valuation.FundValuationService;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -38,6 +39,7 @@ class ScheduledFundTaskServiceTest {
                 properties,
                 fundQueryService,
                 mock(AiAnalysisService.class),
+                mock(StrategyService.class),
                 portfolioAccountService,
                 fundHoldingMapper,
                 mock(PortfolioAccountMapper.class),
@@ -77,6 +79,7 @@ class ScheduledFundTaskServiceTest {
                 properties,
                 fundQueryService,
                 mock(AiAnalysisService.class),
+                mock(StrategyService.class),
                 portfolioAccountService,
                 fundHoldingMapper,
                 accountMapper,

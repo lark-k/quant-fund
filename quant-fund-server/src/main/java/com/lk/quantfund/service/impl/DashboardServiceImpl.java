@@ -33,6 +33,7 @@ import com.lk.quantfund.vo.dashboard.DashboardEstimateStatusVO;
 import com.lk.quantfund.vo.dashboard.DashboardOverviewVO;
 import com.lk.quantfund.vo.dashboard.DashboardPositionSliceVO;
 import com.lk.quantfund.vo.dashboard.DashboardProfitTrendPointVO;
+import com.lk.quantfund.vo.dashboard.DashboardRiskAlertVO;
 import com.lk.quantfund.vo.dashboard.MarketSessionItemVO;
 import com.lk.quantfund.vo.dashboard.MarketSessionStatusVO;
 import com.lk.quantfund.vo.holding.FundHoldingVO;
@@ -44,6 +45,7 @@ import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Comparator;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -123,31 +125,37 @@ public class DashboardServiceImpl implements DashboardService {
                 .map(holding -> toHoldingVO(holding, intradayDisplayWindow, latestOfficialNavByFund))
                 .toList();
         PortfolioSummaryVO effectiveSummary = dashboardSummary(summary, holdings, latestOfficialNavByFund, dashboardDailyProfit(holdings, intradayDisplayWindow, latestOfficialNavByFund));
-        List<StrategySignal> signals = strategySignalMapper.selectList(new LambdaQueryWrapper<StrategySignal>()
+        List<StrategySignal> signals = activeHoldingIds.isEmpty()
+                ? List.of()
+                : strategySignalMapper.selectList(new LambdaQueryWrapper<StrategySignal>()
                 .eq(StrategySignal::getUserId, userId)
+                .in(StrategySignal::getHoldingId, activeHoldingIds)
                 .orderByDesc(StrategySignal::getSignalTime)
-                .last("LIMIT 10"));
+                .orderByDesc(StrategySignal::getId));
+        Map<Long, String> holdingNameById = holdings.stream()
+                .collect(Collectors.toMap(FundHolding::getId, FundHolding::getFundName, (left, right) -> left));
+        List<StrategySignal> latestStrategySignals = latestStrategySignals(signals, activeHoldingIds);
         List<AiAnalysisReport> todayAiReports = aiAnalysisReportMapper.selectList(new LambdaQueryWrapper<AiAnalysisReport>()
                 .eq(AiAnalysisReport::getUserId, userId)
                 .ge(AiAnalysisReport::getAnalysisTime, today.atStartOfDay())
                 .orderByAsc(AiAnalysisReport::getFallbackUsed)
                 .orderByDesc(AiAnalysisReport::getAnalysisTime)
                 .last("LIMIT 50"));
-        List<AiAnalysisReportVO> todayAiSuggestions = todayAiReports.stream()
-                .filter(report -> activeHoldingIds.contains(report.getHoldingId()))
+        List<AiAnalysisReportVO> todayAiSuggestions = latestAiSuggestions(todayAiReports, activeHoldingIds)
+                .stream()
                 .map(this::toAiReportVO)
-                .filter(report -> !Boolean.TRUE.equals(report.fallbackUsed()))
-                .limit(10)
                 .toList();
+        List<DashboardRiskAlertVO> riskAlerts = riskAlerts(signals, todayAiReports, holdingNameById, activeHoldingIds);
         return new DashboardOverviewVO(
                 effectiveSummary,
                 topHoldings,
                 positionDistribution(effectiveSummary),
                 profitTrend(userId, effectiveSummary, intradayDisplayWindow, holdings),
-                signals.stream().map(this::toSignalVO).toList(),
+                latestStrategySignals.stream().map(signal -> toSignalVO(signal, holdingNameById)).toList(),
                 todayAiSuggestions,
                 estimateStatus(holdings, today, intradayWindow, latestOfficialNavByFund),
-                riskAlertCount(signals),
+                riskAlerts,
+                riskAlerts.size(),
                 todayAiSuggestions.size(),
                 SystemConstants.DISCLAIMER
         );
@@ -338,6 +346,190 @@ public class DashboardServiceImpl implements DashboardService {
                         || "SELL".equals(signal.getAction())
                         || "CONVERT".equals(signal.getAction()))
                 .count();
+    }
+
+    private List<StrategySignal> latestStrategySignals(List<StrategySignal> signals, Set<Long> activeHoldingIds) {
+        if (signals.isEmpty()) {
+            return List.of();
+        }
+        Comparator<StrategySignal> latestFirst = Comparator
+                .comparing(StrategySignal::getSignalTime, Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparing(StrategySignal::getId, Comparator.nullsLast(Comparator.naturalOrder()))
+                .reversed();
+        Map<Long, StrategySignal> latestByHolding = new LinkedHashMap<>();
+        signals.stream()
+                .filter(signal -> signal.getHoldingId() != null && activeHoldingIds.contains(signal.getHoldingId()))
+                .sorted(latestFirst)
+                .forEach(signal -> latestByHolding.putIfAbsent(signal.getHoldingId(), signal));
+        return new ArrayList<>(latestByHolding.values());
+    }
+
+    private List<AiAnalysisReport> latestAiSuggestions(List<AiAnalysisReport> reports, Set<Long> activeHoldingIds) {
+        if (reports.isEmpty()) {
+            return List.of();
+        }
+        Comparator<AiAnalysisReport> latestFirst = Comparator
+                .comparing(AiAnalysisReport::getAnalysisTime, Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparing(AiAnalysisReport::getId, Comparator.nullsLast(Comparator.naturalOrder()))
+                .reversed();
+        Map<Long, AiAnalysisReport> latestByHolding = new LinkedHashMap<>();
+        reports.stream()
+                .filter(report -> activeHoldingIds.contains(report.getHoldingId()))
+                .filter(report -> !Boolean.TRUE.equals(report.getFallbackUsed()))
+                .sorted(latestFirst)
+                .forEach(report -> latestByHolding.putIfAbsent(report.getHoldingId(), report));
+        return new ArrayList<>(latestByHolding.values());
+    }
+
+    private List<DashboardRiskAlertVO> riskAlerts(List<StrategySignal> signals,
+                                                  List<AiAnalysisReport> reports,
+                                                  Map<Long, String> holdingNameById,
+                                                  Set<Long> activeHoldingIds) {
+        List<DashboardRiskAlertVO> alerts = new ArrayList<>();
+        signals.stream()
+                .filter(signal -> activeHoldingIds.contains(signal.getHoldingId()))
+                .filter(this::isRiskAlertSignal)
+                .forEach(signal -> alerts.add(strategyRiskAlert(signal, holdingNameById)));
+        reports.stream()
+                .filter(report -> activeHoldingIds.contains(report.getHoldingId()))
+                .filter(report -> !fallbackUsed(report))
+                .filter(this::isRiskAlertReport)
+                .forEach(report -> alerts.add(aiRiskAlert(report, holdingNameById)));
+        return alerts.stream()
+                .collect(Collectors.groupingBy(this::riskAlertGroupKey, LinkedHashMap::new, Collectors.toList()))
+                .values()
+                .stream()
+                .map(this::mergeRiskAlerts)
+                .sorted(Comparator.comparing(DashboardRiskAlertVO::alertTime, Comparator.nullsLast(Comparator.naturalOrder())).reversed())
+                .limit(8)
+                .toList();
+    }
+
+    private String riskAlertGroupKey(DashboardRiskAlertVO alert) {
+        return alert.fundCode() == null || alert.fundCode().isBlank() ? alert.id() : alert.fundCode();
+    }
+
+    private DashboardRiskAlertVO mergeRiskAlerts(List<DashboardRiskAlertVO> alerts) {
+        DashboardRiskAlertVO latest = alerts.stream()
+                .max(Comparator.comparing(DashboardRiskAlertVO::alertTime, Comparator.nullsLast(Comparator.naturalOrder())))
+                .orElse(alerts.getFirst());
+        String riskLevel = alerts.stream()
+                .map(DashboardRiskAlertVO::riskLevel)
+                .max(Comparator.comparingInt(this::riskLevelRank))
+                .orElse(latest.riskLevel());
+        List<String> alertTypes = alerts.stream()
+                .map(DashboardRiskAlertVO::alertType)
+                .filter(type -> type != null && !type.isBlank())
+                .distinct()
+                .toList();
+        List<String> contents = alerts.stream()
+                .sorted(Comparator.comparing(DashboardRiskAlertVO::alertTime, Comparator.nullsLast(Comparator.naturalOrder())).reversed())
+                .map(alert -> defaultText(alert.alertType(), "风险") + "：" + alert.content())
+                .distinct()
+                .toList();
+        String typeText = joinLimited(alertTypes, 3);
+        String contentText = joinLimited(contents, 3);
+        return new DashboardRiskAlertVO(
+                "RISK_" + riskAlertGroupKey(latest),
+                alerts.stream().map(DashboardRiskAlertVO::sourceType).distinct().count() > 1 ? "MIXED" : latest.sourceType(),
+                typeText,
+                riskLevel,
+                displayRiskLevel(riskLevel) + " · " + (alertTypes.size() > 1 ? "综合风险" : typeText),
+                latest.fundCode(),
+                latest.fundName(),
+                contentText + (contents.size() > 3 ? "；等 " + contents.size() + " 项风险" : ""),
+                latest.alertTime()
+        );
+    }
+
+    private String joinLimited(List<String> values, int limit) {
+        if (values.isEmpty()) {
+            return "风险预警";
+        }
+        String joined = values.stream().limit(limit).collect(Collectors.joining(" / "));
+        return values.size() > limit ? joined + " / +" + (values.size() - limit) : joined;
+    }
+
+    private int riskLevelRank(String riskLevel) {
+        return switch (riskLevel == null ? "" : riskLevel) {
+            case "HIGH" -> 3;
+            case "MEDIUM" -> 2;
+            case "LOW" -> 1;
+            default -> 0;
+        };
+    }
+
+    private boolean isRiskAlertSignal(StrategySignal signal) {
+        return "HIGH".equals(signal.getRiskLevel())
+                || "SELL".equals(signal.getAction())
+                || "CONVERT".equals(signal.getAction())
+                || "MARKET_RISK".equals(signal.getSignalType())
+                || "POSITION_RISK".equals(signal.getSignalType())
+                || "RISK_ALERT".equals(signal.getSignalType());
+    }
+
+    private boolean isRiskAlertReport(AiAnalysisReport report) {
+        return ("HIGH".equals(report.getRiskLevel()) || "MEDIUM".equals(report.getRiskLevel()))
+                && !readStringList(report.getRisksJson()).isEmpty();
+    }
+
+    private DashboardRiskAlertVO strategyRiskAlert(StrategySignal signal, Map<Long, String> holdingNameById) {
+        List<String> reasons = readStringList(signal.getReasonJson());
+        String content = !reasons.isEmpty() ? reasons.getFirst() : defaultText(signal.getActionText(), "策略信号触发风险预警");
+        return new DashboardRiskAlertVO(
+                "SIGNAL_" + signal.getId(),
+                "STRATEGY",
+                displaySignalType(signal.getSignalType()),
+                signal.getRiskLevel(),
+                displayRiskLevel(signal.getRiskLevel()) + " · " + displaySignalType(signal.getSignalType()),
+                signal.getFundCode(),
+                holdingNameById.getOrDefault(signal.getHoldingId(), signal.getFundCode()),
+                content,
+                signal.getSignalTime()
+        );
+    }
+
+    private DashboardRiskAlertVO aiRiskAlert(AiAnalysisReport report, Map<Long, String> holdingNameById) {
+        List<String> risks = readStringList(report.getRisksJson());
+        String content = risks.isEmpty() ? defaultText(report.getFinalConclusion(), "AI 分析提示存在风险点") : risks.getFirst();
+        return new DashboardRiskAlertVO(
+                "AI_" + report.getId(),
+                "AI",
+                "AI 风险",
+                report.getRiskLevel(),
+                displayRiskLevel(report.getRiskLevel()) + " · AI 风险",
+                report.getFundCode(),
+                holdingNameById.getOrDefault(report.getHoldingId(), report.getFundCode()),
+                content,
+                report.getAnalysisTime()
+        );
+    }
+
+    private String defaultText(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
+    }
+
+    private String displayRiskLevel(String level) {
+        return switch (level == null ? "" : level) {
+            case "HIGH" -> "高";
+            case "MEDIUM" -> "中";
+            case "LOW" -> "低";
+            default -> "未知";
+        };
+    }
+
+    private String displaySignalType(String type) {
+        return switch (type == null ? "" : type) {
+            case "TAKE_PROFIT" -> "止盈回撤";
+            case "ADD_POSITION" -> "加仓信号";
+            case "POSITION_RISK" -> "仓位风险";
+            case "MARKET_RISK" -> "市场风险";
+            case "CLASSIFICATION" -> "基金分类";
+            case "WATCH" -> "观察信号";
+            case "POSITION_MONITOR" -> "仓位监控";
+            case "RISK_ALERT" -> "风险预警";
+            default -> type;
+        };
     }
 
     private FundHoldingVO toHoldingVO(FundHolding holding) {
@@ -548,12 +740,13 @@ public class DashboardServiceImpl implements DashboardService {
         return value.contains("BOND") || value.contains("FIXED_INCOME");
     }
 
-    private StrategySignalVO toSignalVO(StrategySignal signal) {
+    private StrategySignalVO toSignalVO(StrategySignal signal, Map<Long, String> holdingNameById) {
         return new StrategySignalVO(
                 signal.getId(),
                 signal.getAccountId(),
                 signal.getHoldingId(),
                 signal.getFundCode(),
+                holdingNameById.getOrDefault(signal.getHoldingId(), signal.getFundCode()),
                 signal.getSignalType(),
                 signal.getAction(),
                 signal.getActionText(),
@@ -573,6 +766,7 @@ public class DashboardServiceImpl implements DashboardService {
                 report.getAccountId(),
                 report.getHoldingId(),
                 report.getFundCode(),
+                fundName(report.getHoldingId(), report.getFundCode()),
                 report.getModelName(),
                 report.getAction(),
                 report.getActionText(),
@@ -590,6 +784,14 @@ public class DashboardServiceImpl implements DashboardService {
                 report.getAnalysisTime(),
                 SystemConstants.DISCLAIMER
         );
+    }
+
+    private String fundName(Long holdingId, String fundCode) {
+        FundHolding holding = holdingId == null ? null : fundHoldingMapper.selectById(holdingId);
+        if (holding != null && holding.getFundName() != null && !holding.getFundName().isBlank()) {
+            return holding.getFundName();
+        }
+        return fundCode;
     }
 
     private boolean fallbackUsed(AiAnalysisReport report) {

@@ -175,6 +175,41 @@ a {
   font-size: 12px;
 }
 
+.header-refresh-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #a9b7bf;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.header-refresh-button:hover {
+  border-color: var(--line-soft);
+  color: #dce8ee;
+  background: rgba(90, 178, 255, 0.08);
+}
+
+.header-refresh-button:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.spinning {
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .trade-open {
   color: var(--green);
 }
@@ -232,18 +267,18 @@ a {
 .dashboard-workspace {
   display: grid;
   grid-column: 1 / -1;
-  grid-template-columns: minmax(620px, 1.55fr) minmax(320px, 0.82fr) minmax(280px, 0.7fr);
+  grid-template-areas:
+    "holdings ai strategy"
+    "trend risk risk";
+  grid-template-columns: minmax(620px, 1.55fr) minmax(320px, 0.82fr) minmax(320px, 0.82fr);
   gap: 8px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .dashboard-primary-column,
 .dashboard-market-column,
 .dashboard-signal-column {
-  display: grid;
-  gap: 8px;
-  min-width: 0;
-  align-content: start;
+  display: contents;
 }
 
 .metric-row {
@@ -258,15 +293,11 @@ a {
 }
 
 .dashboard-holdings-panel {
-  grid-area: auto;
-}
-
-.estimate-panel {
-  grid-area: auto;
+  grid-area: holdings;
 }
 
 .ai-panel {
-  grid-area: auto;
+  grid-area: ai;
   display: flex;
   min-height: 0;
   max-height: none;
@@ -274,11 +305,11 @@ a {
 }
 
 .strategy-panel {
-  grid-area: auto;
+  grid-area: strategy;
 }
 
 .trend-panel {
-  grid-area: auto;
+  grid-area: trend;
 }
 
 .return-trend-panel {
@@ -429,12 +460,8 @@ a {
   font-size: 12px;
 }
 
-.allocation-panel {
-  grid-area: auto;
-}
-
 .risk-panel {
-  grid-area: auto;
+  grid-area: risk;
 }
 
 .panel {
@@ -598,23 +625,6 @@ a {
   align-content: center;
 }
 
-.estimate-status-line {
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.sync-badge {
-  display: inline-flex;
-  align-items: center;
-  min-height: 22px;
-  padding: 0 8px;
-  border: 1px solid rgba(47, 209, 124, 0.45);
-  border-radius: 5px;
-  color: #2fd17c;
-  background: rgba(47, 209, 124, 0.1);
-  font-size: 12px;
-}
-
 .metric-pair strong,
 .metric-pair span {
   display: block;
@@ -737,6 +747,15 @@ a {
   gap: 8px;
 }
 
+.signal-list--compact {
+  align-content: start;
+  max-height: 420px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-color: #274451 transparent;
+}
+
 .ai-panel-body {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
@@ -839,6 +858,61 @@ a {
   color: #a9bac3;
   background: rgba(8, 18, 23, 0.58);
   font-size: 12px;
+}
+
+.signal-meta-row span.risk-level-high {
+  color: #ff6b66;
+  border-color: rgba(255, 107, 102, 0.45);
+  background: rgba(255, 107, 102, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(255, 107, 102, 0.12);
+  font-weight: 700;
+}
+
+.signal-item--compact {
+  gap: 6px;
+  padding: 8px;
+}
+
+.signal-item-title {
+  align-items: flex-start;
+}
+
+.signal-title-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+
+.signal-type-row span {
+  min-height: 22px;
+  padding: 3px 8px;
+  border: 1px solid rgba(60, 156, 255, 0.35);
+  border-radius: 5px;
+  color: #9fc8ff;
+  background: rgba(60, 156, 255, 0.08);
+  font-size: 11px;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.signal-type-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.signal-reason {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.signal-toggle {
+  justify-self: start;
+  width: fit-content;
 }
 
 .disclaimer-bar {
@@ -973,15 +1047,6 @@ a {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.35;
-}
-
-.estimate-stack {
-  display: grid;
-  gap: 10px;
-}
-
-.estimate-stats {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .empty-cta {
@@ -1611,11 +1676,9 @@ button:disabled {
   }
 
   .dashboard-holdings-panel,
-  .estimate-panel,
   .ai-panel,
   .strategy-panel,
   .trend-panel,
-  .allocation-panel,
   .risk-panel {
     grid-column: 1 / -1;
   }

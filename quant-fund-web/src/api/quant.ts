@@ -75,7 +75,7 @@ export const quantApi = {
     return USE_MOCK ? mockApi.recalculateHolding(id) : http.post(`/holdings/${id}/recalculate`)
   },
   syncOfficialNav(): Promise<FundHolding[]> {
-    return USE_MOCK ? mockApi.syncOfficialNav() : http.post('/holdings/sync-official-nav')
+    return USE_MOCK ? mockApi.syncOfficialNav() : http.post('/holdings/sync-official-nav', undefined, { suppressErrorMessage: true })
   },
   strategies(): Promise<StrategySignal[]> {
     return USE_MOCK ? mockApi.strategies() : http.get('/strategies/signals')

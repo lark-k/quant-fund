@@ -29,6 +29,7 @@ const collapsed = ref(false)
 const now = ref(new Date())
 const marketReadings = ref<MarketIndex[]>([])
 const marketStatus = ref<MarketSessionStatus | null>(null)
+const estimateRefreshing = ref(false)
 
 const navItems = [
   { to: '/dashboard', label: '首页总览', icon: Grid },
@@ -99,6 +100,35 @@ function logout() {
   auth.logout()
   router.push('/login')
 }
+
+function dispatchEstimateRefresh() {
+  let completed = false
+  const detail = {
+    handled: false,
+    complete: () => {
+      completed = true
+      estimateRefreshing.value = false
+    }
+  }
+  window.dispatchEvent(new CustomEvent('quantfund:refresh-estimate', { detail }))
+  if (!detail.handled) {
+    estimateRefreshing.value = false
+  }
+  window.setTimeout(() => {
+    if (!completed) estimateRefreshing.value = false
+  }, 60000)
+}
+
+async function refreshEstimateFromHeader() {
+  if (estimateRefreshing.value) return
+  estimateRefreshing.value = true
+  if (route.path !== '/dashboard') {
+    await router.push('/dashboard')
+    window.setTimeout(dispatchEstimateRefresh, 0)
+    return
+  }
+  dispatchEstimateRefresh()
+}
 </script>
 
 <template>
@@ -149,8 +179,10 @@ function logout() {
           <span class="page-kicker">{{ pageTitle }}</span>
         </div>
         <div class="header-status">
-          <span>估算刷新</span>
-          <el-icon><Refresh /></el-icon>
+          <button class="header-refresh-button" :disabled="estimateRefreshing" type="button" @click="refreshEstimateFromHeader">
+            <span>{{ estimateRefreshing ? '同步中' : '估值刷新' }}</span>
+            <el-icon :class="{ spinning: estimateRefreshing }"><Refresh /></el-icon>
+          </button>
           <span :class="isTradingSession ? 'trade-open' : 'trade-closed'">{{ marketStatusText }} {{ nowText }}</span>
           <span>{{ dateText }}</span>
         </div>

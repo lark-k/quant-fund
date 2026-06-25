@@ -8,11 +8,11 @@ import DisclaimerBar from '@/components/common/DisclaimerBar.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
-import { estimateHoldingOption, positionOption, returnTrendOption } from '@/components/charts/chartOptions'
+import { returnTrendOption } from '@/components/charts/chartOptions'
 import { quantApi } from '@/api/quant'
 import { useDashboardStore } from '@/stores/dashboard'
 import { metricTone, money, percent, signed, toneClass } from '@/utils/format'
-import type { MarketSessionStatus, ProfitAnalysis } from '@/types/domain'
+import type { MarketSessionStatus, ProfitAnalysis, StrategySignal } from '@/types/domain'
 
 const store = useDashboardStore()
 const router = useRouter()
@@ -24,13 +24,30 @@ type TrendPoint = {
   indexReturn: number | null
   dailyProfit?: number | null
 }
+
+type StrategySignalGroup = {
+  key: string
+  count: number
+  fundCode: string
+  fundName?: string
+  latest: StrategySignal
+  types: string[]
+}
 const activeRange = ref<TrendRange>('TODAY')
 const activeIndexCode = ref<BenchmarkIndex>('000300')
 const refreshing = ref(false)
 const trendLoading = ref(false)
+const showAllStrategySignals = ref(false)
 const profitAnalysis = ref<ProfitAnalysis>()
 const intradayTrendPoints = ref<TrendPoint[]>([])
 let refreshTimer: number | undefined
+let initialOverviewPromise: Promise<unknown> | null = null
+let lastOfficialNavSyncAt = 0
+let lastEstimateRefreshAt = 0
+
+const OFFICIAL_NAV_SYNC_COOLDOWN_MS = 6000
+const ESTIMATE_REFRESH_COOLDOWN_MS = 11000
+const AUTO_ESTIMATE_REFRESH_INTERVAL_MS = 15000
 
 const trendRanges: Array<{ label: string; value: TrendRange }> = [
   { label: '今日', value: 'TODAY' },
@@ -47,13 +64,20 @@ const benchmarkIndices: Array<{ label: string; value: BenchmarkIndex }> = [
 ]
 
 onMounted(() => {
-  store.fetchOverview(true)
+  window.addEventListener('quantfund:refresh-estimate', handleHeaderRefreshEstimate)
+  initialOverviewPromise = store.fetchOverview(true)
+    .catch(() => undefined)
+    .finally(() => {
+      lastOfficialNavSyncAt = Date.now()
+      initialOverviewPromise = null
+    })
   loadReturnTrend()
-  refreshTimer = window.setInterval(autoRefreshEstimate, 60000)
+  refreshTimer = window.setInterval(autoRefreshEstimate, AUTO_ESTIMATE_REFRESH_INTERVAL_MS)
 })
 
 onBeforeUnmount(() => {
   if (refreshTimer) window.clearInterval(refreshTimer)
+  window.removeEventListener('quantfund:refresh-estimate', handleHeaderRefreshEstimate)
 })
 
 const overview = computed(() => store.overview)
@@ -72,8 +96,6 @@ const trendPoints = computed<TrendPoint[]>(() => {
 })
 const activeIndexName = computed(() => benchmarkIndices.find((item) => item.value === activeIndexCode.value)?.label || '沪深300')
 const trendOption = computed(() => returnTrendOption(trendPoints.value, activeIndexName.value))
-const allocationOption = computed(() => positionOption(overview.value?.positionDistribution || []))
-const estimateOption = computed(() => estimateHoldingOption(overview.value?.topHoldings || []))
 const buySellSuggestionCount = computed(() => {
   return overview.value?.todayAiSuggestions.filter((item) => item.action === 'BUY' || item.action === 'SELL' || item.action === 'CONVERT').length || 0
 })
@@ -86,17 +108,32 @@ const highRiskSignalCount = computed(() => {
 const activeSignalCount = computed(() => {
   return overview.value?.latestStrategySignals.filter((item) => item.action !== 'HOLD' && item.action !== 'WATCH').length || 0
 })
-const estimateRefreshRate = computed(() => {
-  const status = overview.value?.estimateStatus
-  if (!status?.trackedFundCount) return 0
-  return status.refreshedTodayCount / status.trackedFundCount * 100
+const strategySignalGroups = computed<StrategySignalGroup[]>(() => {
+  const signals = overview.value?.latestStrategySignals || []
+  const groups = new Map<string, StrategySignal[]>()
+  for (const signal of signals) {
+    const key = signal.holdingId ? `holding:${signal.holdingId}` : `fund:${signal.fundCode}`
+    const bucket = groups.get(key) || []
+    bucket.push(signal)
+    groups.set(key, bucket)
+  }
+  return Array.from(groups.entries())
+    .map(([key, items]) => {
+      const sorted = [...items].sort((a, b) => Date.parse(b.signalTime) - Date.parse(a.signalTime))
+      const latest = sorted[0]
+      return {
+        key,
+        count: sorted.length,
+        fundCode: latest.fundCode,
+        fundName: latest.fundName,
+        latest,
+        types: Array.from(new Set(sorted.map((item) => item.signalType)))
+      }
+    })
+    .sort((a, b) => Date.parse(b.latest.signalTime) - Date.parse(a.latest.signalTime))
 })
-const officialSynced = computed(() => overview.value?.estimateStatus.statusText.includes('正式净值已同步') || false)
-const finalNavUpdatedCount = computed(() => overview.value?.topHoldings.filter((item) => item.officialNavUpdated).length || 0)
-const allFinalNavUpdated = computed(() => {
-  const holdings = overview.value?.topHoldings || []
-  return holdings.length > 0 && holdings.every((item) => item.officialNavUpdated)
-})
+const visibleStrategySignalGroups = computed(() => showAllStrategySignals.value ? strategySignalGroups.value : strategySignalGroups.value.slice(0, 5))
+const strategySignalCollapsed = computed(() => strategySignalGroups.value.length > 5)
 const latestTrendPoint = computed(() => {
   const trend = overview.value?.profitTrend || []
   return trend[trend.length - 1]
@@ -120,6 +157,9 @@ const currentIndexReturn = computed(() => {
   return points.find((point) => point.indexReturn !== null)?.indexReturn ?? null
 })
 const excessReturn = computed(() => currentIndexReturn.value === null ? null : currentPortfolioReturn.value - currentIndexReturn.value)
+const holdingNameByCode = computed(() => {
+  return new Map((overview.value?.topHoldings || []).map((holding) => [holding.fundCode, holding.fundName]))
+})
 
 function safeRatio(part: number, total: number) {
   return total > 0 ? part / total * 100 : 0
@@ -200,11 +240,54 @@ function displaySignalType(type: string) {
     POSITION_MONITOR: '仓位监控',
     TAKE_PROFIT: '止盈回撤',
     LOW_BUY: '低吸观察',
-    RISK_ALERT: '风险预警'
+    RISK_ALERT: '风险预警',
+    POSITION_RISK: '仓位风险',
+    MARKET_RISK: '市场风险',
+    CLASSIFICATION: '基金分类',
+    ADD_POSITION: '加仓信号',
+    WATCH: '观察信号'
   }
   return labels[type] || type
 }
 
+function displayRiskLevel(level: string) {
+  const labels: Record<string, string> = {
+    HIGH: '高风险',
+    MEDIUM: '中风险',
+    LOW: '低风险'
+  }
+  return labels[level] || level
+}
+
+function riskLevelClass(level: string) {
+  return level === 'HIGH' ? 'risk-level-high' : ''
+}
+
+function displaySignalFund(signal: { fundCode: string; fundName?: string }) {
+  if (signal.fundName && signal.fundName !== signal.fundCode) {
+    return `${signal.fundCode} · ${signal.fundName}`
+  }
+  return signal.fundCode
+}
+
+function displaySuggestionFund(item: { fundCode: string; fundName?: string }) {
+  const fundName = item.fundName || holdingNameByCode.value.get(item.fundCode)
+  if (fundName && fundName !== item.fundCode) {
+    return `${item.fundCode} · ${fundName}`
+  }
+  return item.fundCode
+}
+
+function displayAlertFund(alert: { fundCode: string; fundName?: string }) {
+  if (alert.fundName && alert.fundName !== alert.fundCode) {
+    return `${alert.fundCode} · ${alert.fundName}`
+  }
+  return alert.fundCode
+}
+
+function alertTimeText(time: string) {
+  return time ? time.slice(11, 16) : '--:--'
+}
 function updatedBadgeText(date?: string | null) {
   if (!date) return '已更新'
   const today = new Date().toISOString().slice(0, 10)
@@ -241,10 +324,17 @@ async function refreshEstimate() {
     ElMessage.warning('暂无可刷新的持仓基金')
     return
   }
+  if (Date.now() - lastEstimateRefreshAt < ESTIMATE_REFRESH_COOLDOWN_MS) {
+    await store.fetchOverview()
+    await loadReturnTrend()
+    ElMessage.info('刚刚刷新过，已使用最新数据')
+    return
+  }
+  lastEstimateRefreshAt = Date.now()
   refreshing.value = true
   try {
     const marketStatus = await loadMarketStatus()
-    const officialHoldings = await quantApi.syncOfficialNav()
+    const officialHoldings = await syncOfficialNavWhenAllowed()
     const officialUpdatedCount = officialHoldings.filter((holding) => holding.officialNavUpdated).length
     if (!isAShareTrading(marketStatus)) {
       await store.fetchOverview()
@@ -276,13 +366,54 @@ async function refreshEstimate() {
   }
 }
 
+function handleHeaderRefreshEstimate(event: Event) {
+  const detail = (event as CustomEvent<{ handled?: boolean; complete?: () => void }>).detail
+  if (detail) detail.handled = true
+  void waitForInitialOverview()
+    .then(refreshEstimate)
+    .catch(() => undefined)
+    .finally(() => detail?.complete?.())
+}
+
+async function waitForInitialOverview() {
+  if (initialOverviewPromise) {
+    await initialOverviewPromise
+  }
+}
+
+async function syncOfficialNavWhenAllowed() {
+  if (Date.now() - lastOfficialNavSyncAt < OFFICIAL_NAV_SYNC_COOLDOWN_MS) {
+    return []
+  }
+  try {
+    const holdings = await quantApi.syncOfficialNav()
+    lastOfficialNavSyncAt = Date.now()
+    return holdings
+  } catch (error) {
+    if (isRepeatSubmitError(error)) {
+      lastOfficialNavSyncAt = Date.now()
+      return []
+    }
+    throw error
+  }
+}
+
+function isRepeatSubmitError(error: unknown) {
+  return typeof error === 'object'
+    && error !== null
+    && 'response' in error
+    && (error as { response?: { status?: number } }).response?.status === 409
+}
+
 async function autoRefreshEstimate() {
   if (refreshing.value || !overview.value?.topHoldings.length) return
+  if (Date.now() - lastEstimateRefreshAt < ESTIMATE_REFRESH_COOLDOWN_MS) return
   const marketStatus = await loadMarketStatus()
   if (!isAShareTrading(marketStatus)) return
+  lastEstimateRefreshAt = Date.now()
   refreshing.value = true
   try {
-    const officialHoldings = await quantApi.syncOfficialNav()
+    const officialHoldings = await syncOfficialNavWhenAllowed()
     const pendingHoldings = officialHoldings.length ? officialHoldings.filter((holding) => !holding.officialNavUpdated) : overview.value.topHoldings
     await Promise.allSettled(pendingHoldings.map(async (holding) => {
       await quantApi.refreshEstimate(holding.fundCode)
@@ -413,26 +544,6 @@ function go(path: string) {
       </div>
 
       <div class="dashboard-market-column">
-    <section class="panel estimate-panel">
-      <div class="panel-header">
-        <h2 class="panel-title">{{ allFinalNavUpdated ? '最新净值（已更新）' : '盘中估值（估算）' }}</h2>
-        <button class="panel-link" :disabled="refreshing" @click="refreshEstimate">{{ refreshing ? '同步中' : '同步净值' }}</button>
-      </div>
-      <div class="panel-body estimate-stack">
-        <div class="disclaimer-bar estimate-status-line">
-          <span>{{ allFinalNavUpdated ? '最新正式净值已更新，收益已按最终净值计算' : overview.estimateStatus.statusText }} · {{ overview.estimateStatus.latestEstimateTime || '--' }}</span>
-          <strong v-if="allFinalNavUpdated || officialSynced" class="sync-badge">已更新</strong>
-        </div>
-        <MetricTile label="当日估算收益（元）" :value="signed(summary.dailyProfit)" sub-label="当前仓位加权估值涨跌" :delta="percent(dailyProfitRate)" :tone="metricTone(summary.dailyProfit)" />
-        <div class="mini-stat-grid estimate-stats">
-          <div><span>跟踪基金</span><strong>{{ overview.estimateStatus.trackedFundCount }}</strong></div>
-          <div><span>最新已更新</span><strong>{{ finalNavUpdatedCount || overview.estimateStatus.refreshedTodayCount }}</strong></div>
-          <div><span>刷新覆盖</span><strong>{{ percent(estimateRefreshRate, 0) }}</strong></div>
-        </div>
-        <BaseChart :option="estimateOption" :height="180" />
-      </div>
-    </section>
-
     <section class="panel ai-panel">
       <div class="panel-header">
         <h2 class="panel-title">AI 今日建议</h2>
@@ -446,7 +557,7 @@ function go(path: string) {
               <ActionTag :action="item.action" :text="item.actionText" />
               <span class="suggestion-time">{{ item.analysisTime.slice(11, 16) }}</span>
             </div>
-            <div class="item-copy suggestion-strategy">{{ item.fundCode }} · {{ item.strategy }}</div>
+            <div class="item-copy suggestion-strategy">{{ displaySuggestionFund(item) }} · {{ item.strategy }}</div>
             <div class="item-meta suggestion-conclusion">{{ item.finalConclusion }} 置信度：{{ percent(item.confidence * 100, 0) }}</div>
           </article>
           <EmptyState v-if="!overview.todayAiSuggestions.length" title="暂无 AI 建议" description="生成新的 AI 分析后会在此展示。" />
@@ -472,19 +583,27 @@ function go(path: string) {
         <h2 class="panel-title">策略信号（实时）</h2>
         <button class="panel-link" @click="go('/strategy-config')">更多 ›</button>
       </div>
-      <div class="panel-body signal-list">
-        <article v-for="signal in overview.latestStrategySignals" :key="signal.id" class="signal-item">
-          <div class="item-title">
-            <span>{{ signal.signalTime.slice(11, 16) }} · {{ displaySignalType(signal.signalType) }}</span>
-            <ActionTag :action="signal.action" :text="signal.actionText" />
+      <div class="panel-body signal-list signal-list--compact">
+        <article v-for="signalGroup in visibleStrategySignalGroups" :key="signalGroup.key" class="signal-item signal-item--compact">
+          <div class="item-title signal-item-title">
+            <span>{{ signalGroup.latest.signalTime.slice(11, 16) }} · {{ displaySignalType(signalGroup.latest.signalType) }}</span>
+            <div class="signal-title-actions">
+              <ActionTag :action="signalGroup.latest.action" :text="signalGroup.latest.actionText" />
+            </div>
           </div>
           <div class="signal-meta-row">
-            <span>{{ signal.fundCode }}</span>
-            <span>强度 {{ percent(signal.confidence * 100, 0) }}</span>
-            <span>{{ signal.riskLevel === 'HIGH' ? '高风险' : signal.riskLevel === 'MEDIUM' ? '中风险' : '低风险' }}</span>
+            <span>{{ displaySignalFund(signalGroup.latest) }}</span>
+            <span>强度 {{ percent(signalGroup.latest.confidence * 100, 0) }}</span>
+            <span :class="riskLevelClass(signalGroup.latest.riskLevel)">{{ displayRiskLevel(signalGroup.latest.riskLevel) }}</span>
           </div>
-          <div class="item-copy">{{ signal.reasons[0] }}</div>
+          <div v-if="signalGroup.types.length > 1" class="signal-type-row">
+            <span v-for="type in signalGroup.types" :key="type">{{ displaySignalType(type) }}</span>
+          </div>
+          <div class="item-copy signal-reason">{{ signalGroup.latest.reasons[0] }}</div>
         </article>
+        <button v-if="strategySignalCollapsed" class="panel-link signal-toggle" type="button" @click="showAllStrategySignals = !showAllStrategySignals">
+          {{ showAllStrategySignals ? '收起' : `展开全部（${strategySignalGroups.length}）` }}
+        </button>
         <DisclaimerBar />
         <div class="mini-stat-grid">
           <div><span>活跃信号</span><strong>{{ activeSignalCount }}</strong></div>
@@ -497,24 +616,6 @@ function go(path: string) {
       </div>
     </section>
 
-    <section class="panel allocation-panel">
-      <div class="panel-header">
-        <h2 class="panel-title">持仓分布</h2>
-        <button class="panel-link" @click="go('/holdings')">更多 ›</button>
-      </div>
-      <div class="panel-body">
-        <BaseChart :option="allocationOption" :height="172" />
-        <table class="terminal-table">
-          <tbody>
-            <tr v-for="item in overview.positionDistribution" :key="item.name">
-              <td>{{ item.name }}</td>
-              <td>{{ percent(item.rate) }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-
     <section class="panel risk-panel">
       <div class="panel-header">
         <h2 class="panel-title">风险预警</h2>
@@ -522,14 +623,19 @@ function go(path: string) {
       </div>
       <div class="panel-body alert-list">
         <div class="disclaimer-bar">{{ overview.disclaimer }} · 共 {{ overview.riskAlertCount }} 条预警</div>
-        <article class="alert-item">
-          <div class="item-title"><span>高 · 波动预警</span><span>09:41</span></div>
-          <div class="item-copy">国投瑞银新能源混合A 波动率快速上升，近 5 日波动率 28.34%，高于历史 90% 区间。</div>
+        <article v-for="alert in overview.riskAlerts" :key="alert.id" class="alert-item">
+          <div class="item-title">
+            <span>{{ alert.title }}</span>
+            <span>{{ alertTimeText(alert.alertTime) }}</span>
+          </div>
+          <div class="signal-meta-row">
+            <span>{{ displayAlertFund(alert) }}</span>
+            <span>{{ alert.alertType }}</span>
+            <span :class="riskLevelClass(alert.riskLevel)">{{ displayRiskLevel(alert.riskLevel) }}</span>
+          </div>
+          <div class="item-copy">{{ alert.content }}</div>
         </article>
-        <article class="alert-item">
-          <div class="item-title"><span>中 · 回撤预警</span><span>09:30</span></div>
-          <div class="item-copy">易方达蓝筹精选混合回撤扩大，接近预警阈值。</div>
-        </article>
+        <EmptyState v-if="!overview.riskAlerts.length" title="暂无风险预警" description="策略信号或 AI 分析触发风险项后会在此展示。" />
       </div>
     </section>
       </div>
