@@ -194,6 +194,10 @@ public class AiAnalysisServiceImpl implements AiAnalysisService {
                 totalAsset,
                 valueOrZero(account.getEquityPositionRate()),
                 singleRate,
+                riskProfile == null ? ZERO : valueOrZero(riskProfile.getMaxEquityPositionRate()),
+                riskProfile == null ? ZERO : valueOrZero(riskProfile.getMaxSingleFundPositionRate()),
+                riskProfile == null ? ZERO : valueOrZero(riskProfile.getDailyRiseAlertRate()),
+                riskProfile == null ? ZERO : valueOrZero(riskProfile.getDrawdownAlertRate()),
                 riskProfile == null ? RiskLevel.MEDIUM.name() : riskProfile.getRiskLevel(),
                 signals
         );

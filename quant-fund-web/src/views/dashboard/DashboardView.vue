@@ -314,6 +314,16 @@ function isAShareTrading(status: MarketSessionStatus | null) {
   return aShareMarket(status)?.trading === true
 }
 
+function isAShareEstimateRefreshAllowed(status: MarketSessionStatus | null) {
+  if (isAShareTrading(status)) return true
+  if (!status) return false
+  const now = new Date()
+  const day = now.getDay()
+  if (day === 0 || day === 6) return false
+  const minutes = now.getHours() * 60 + now.getMinutes()
+  return minutes >= 9 * 60 + 30 && minutes <= 15 * 60
+}
+
 function aShareStatusText(status: MarketSessionStatus | null) {
   return aShareMarket(status)?.statusText || 'A股市场状态未同步'
 }
@@ -336,7 +346,7 @@ async function refreshEstimate() {
     const marketStatus = await loadMarketStatus()
     const officialHoldings = await syncOfficialNavWhenAllowed()
     const officialUpdatedCount = officialHoldings.filter((holding) => holding.officialNavUpdated).length
-    if (!isAShareTrading(marketStatus)) {
+    if (!isAShareEstimateRefreshAllowed(marketStatus)) {
       await store.fetchOverview()
       if (officialUpdatedCount) {
         ElMessage.success(`已同步 ${officialUpdatedCount} 只基金最新正式净值，并按最终净值重算收益`)
@@ -345,9 +355,14 @@ async function refreshEstimate() {
       }
       return
     }
-    const pendingHoldings = officialHoldings.length ? officialHoldings.filter((holding) => !holding.officialNavUpdated) : holdings
+    const officialUpdatedFundCodes = new Set(
+      officialHoldings
+        .filter((holding) => holding.officialNavUpdated)
+        .map((holding) => holding.fundCode)
+    )
+    const pendingHoldings = holdings.filter((holding) => !officialUpdatedFundCodes.has(holding.fundCode))
     const results = await Promise.allSettled(pendingHoldings.map(async (holding) => {
-      await quantApi.refreshEstimate(holding.fundCode)
+      await quantApi.refreshEstimate(holding.fundCode).catch(() => undefined)
       await quantApi.recalculateHolding(holding.id)
     }))
     await store.fetchOverview()
@@ -409,14 +424,19 @@ async function autoRefreshEstimate() {
   if (refreshing.value || !overview.value?.topHoldings.length) return
   if (Date.now() - lastEstimateRefreshAt < ESTIMATE_REFRESH_COOLDOWN_MS) return
   const marketStatus = await loadMarketStatus()
-  if (!isAShareTrading(marketStatus)) return
+  if (!isAShareEstimateRefreshAllowed(marketStatus)) return
   lastEstimateRefreshAt = Date.now()
   refreshing.value = true
   try {
     const officialHoldings = await syncOfficialNavWhenAllowed()
-    const pendingHoldings = officialHoldings.length ? officialHoldings.filter((holding) => !holding.officialNavUpdated) : overview.value.topHoldings
+    const officialUpdatedFundCodes = new Set(
+      officialHoldings
+        .filter((holding) => holding.officialNavUpdated)
+        .map((holding) => holding.fundCode)
+    )
+    const pendingHoldings = overview.value.topHoldings.filter((holding) => !officialUpdatedFundCodes.has(holding.fundCode))
     await Promise.allSettled(pendingHoldings.map(async (holding) => {
-      await quantApi.refreshEstimate(holding.fundCode)
+      await quantApi.refreshEstimate(holding.fundCode).catch(() => undefined)
       await quantApi.recalculateHolding(holding.id)
     }))
     await store.fetchOverview()

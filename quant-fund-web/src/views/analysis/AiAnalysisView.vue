@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { quantApi } from '@/api/quant'
@@ -30,6 +30,7 @@ const aiSourceText = computed(() => {
   if (!selected.value) return ''
   return selected.value.fallbackUsed ? 'AI 降级兜底' : 'DeepSeek 真实分析'
 })
+const selectedConclusion = computed(() => cleanAdvisoryText(selected.value?.finalConclusion || ''))
 const selectedDisclaimer = computed(() => selected.value?.disclaimer || DISCLAIMER)
 
 onMounted(async () => {
@@ -50,8 +51,19 @@ onMounted(async () => {
 
 function preferredReport(holdingId?: number) {
   const scoped = holdingId ? reports.value.filter((item) => item.holdingId === holdingId) : reports.value
-  return scoped.find((item) => !item.fallbackUsed) || scoped[0] || reports.value.find((item) => !item.fallbackUsed)
+  return scoped.find((item) => !item.fallbackUsed) || scoped[0]
 }
+
+function cleanAdvisoryText(value: string) {
+  return value
+    .replace(/[；;，,。\s]*(买卖建议)?仅供参考[，,、]?(不构成投资建议)?[，,、]?(不承诺收益)?[；;，,。\s]*/g, '')
+    .replace(/[；;，,。\s]*用户(须|必须)?自行到原基金平台手动操作[。.\s]*/g, '')
+    .trim()
+}
+
+watch(selectedHoldingId, (holdingId) => {
+  selected.value = preferredReport(holdingId)
+})
 
 function selectReport(report: AiAnalysisReport) {
   selected.value = report
@@ -100,7 +112,7 @@ async function generate() {
         <div class="ai-hero">
           <div class="ai-action">
             <ActionTag :action="selected.action" :text="selected.actionText" />
-            <strong>{{ selected.finalConclusion }}</strong>
+            <strong>{{ selectedConclusion }}</strong>
             <span>{{ selected.deadline }} · {{ selected.modelName }} · {{ aiSourceText }}</span>
           </div>
           <div class="fund-badges">

@@ -99,6 +99,51 @@ class FundHoldingServiceImplTest {
     }
 
     @Test
+    void syncOfficialNavDoesNotOverwriteExistingHistoricalSnapshot() {
+        FundHolding holding = holding();
+        PortfolioAccount account = account();
+        TradingCalendarService tradingCalendarService = mock(TradingCalendarService.class);
+        LocalDate snapshotDate = LocalDate.now().minusDays(1);
+        LocalDate navDate = snapshotDate.minusDays(1);
+        HoldingSnapshot existingSnapshot = new HoldingSnapshot();
+        existingSnapshot.setId(200L);
+        existingSnapshot.setHoldingId(holding.getId());
+        existingSnapshot.setSnapshotDate(snapshotDate);
+        existingSnapshot.setDailyProfit(new BigDecimal("91.6200"));
+        when(holdingMapper.selectList(any())).thenReturn(List.of(holding), List.of());
+        when(fundQueryService.getHistoricalNav(any(), any(), any())).thenReturn(List.of(
+                navPoint(navDate.minusDays(1), "1.0000"),
+                navPoint(navDate, "1.0500")
+        ));
+        when(accountMapper.selectById(10L)).thenReturn(account);
+        when(snapshotMapper.selectOne(any())).thenReturn(existingSnapshot, null);
+        when(tradingCalendarService.nextTradingDay(navDate)).thenReturn(snapshotDate);
+        FundHoldingServiceImpl service = new FundHoldingServiceImpl(
+                holdingMapper,
+                accountMapper,
+                mock(AiAnalysisReportMapper.class),
+                portfolioAccountService,
+                strategyService,
+                fundQueryService,
+                valuationService,
+                tradingCalendarService,
+                snapshotMapper,
+                backfillService,
+                tradeRecordMapper
+        );
+
+        try (MockedStatic<UserContext> userContext = Mockito.mockStatic(UserContext.class)) {
+            userContext.when(UserContext::getUserId).thenReturn(1L);
+            service.syncOfficialNav();
+        }
+
+        verify(holdingMapper).updateById(any(FundHolding.class));
+        verify(snapshotMapper, never()).insert(any(HoldingSnapshot.class));
+        verify(snapshotMapper, never()).updateById(any(HoldingSnapshot.class));
+        verify(portfolioAccountService).recalculateOwnedAccount(1L, 10L);
+    }
+
+    @Test
     void recalculateShouldRejectMissingAmountAndShareWithReadableMessage() {
         FundHolding holding = holding();
         holding.setHoldingAmount(BigDecimal.ZERO);

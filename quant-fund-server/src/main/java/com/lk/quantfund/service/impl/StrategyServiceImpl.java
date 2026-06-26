@@ -3,7 +3,9 @@ package com.lk.quantfund.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.lk.quantfund.auth.UserContext;
 import com.lk.quantfund.constants.SystemConstants;
 import com.lk.quantfund.dto.strategy.RiskProfileRequest;
@@ -201,6 +203,8 @@ public class StrategyServiceImpl implements StrategyService {
         } else {
             strategyConfigMapper.updateById(config);
         }
+        syncRiskProfileFromStrategyConfig(userId, request.paramsJson());
+        refreshTodaySignalsAfterConfigChange(userId);
         return toConfigVO(config);
     }
 
@@ -224,6 +228,8 @@ public class StrategyServiceImpl implements StrategyService {
         profile.setConfigJson(request.configJson());
         profile.setUpdateTime(LocalDateTime.now());
         riskProfileMapper.updateById(profile);
+        syncPositionConfigFromRiskProfile(userId, profile);
+        refreshTodaySignalsAfterConfigChange(userId);
         return toRiskProfileVO(profile);
     }
 
@@ -342,6 +348,88 @@ public class StrategyServiceImpl implements StrategyService {
         created.setDeleted(0);
         riskProfileMapper.insert(created);
         return created;
+    }
+
+    private void syncRiskProfileFromStrategyConfig(Long userId, String paramsJson) {
+        JsonNode params = readParams(paramsJson);
+        boolean changed = false;
+        RiskProfile profile = loadOrCreateRiskProfile(userId);
+        if (params.hasNonNull("equityLimitPct")) {
+            profile.setMaxEquityPositionRate(rateParam(params, "equityLimitPct"));
+            changed = true;
+        }
+        if (params.hasNonNull("singleFundLimitPct")) {
+            profile.setMaxSingleFundPositionRate(rateParam(params, "singleFundLimitPct"));
+            changed = true;
+        }
+        if (params.hasNonNull("largeRisePct")) {
+            profile.setDailyRiseAlertRate(rateParam(params, "largeRisePct"));
+            changed = true;
+        }
+        if (params.hasNonNull("heavyDrawdownPct")) {
+            profile.setDrawdownAlertRate(rateParam(params, "heavyDrawdownPct"));
+            changed = true;
+        }
+        if (changed) {
+            profile.setUpdateTime(LocalDateTime.now());
+            riskProfileMapper.updateById(profile);
+        }
+    }
+
+    private void syncPositionConfigFromRiskProfile(Long userId, RiskProfile profile) {
+        StrategyConfig config = strategyConfigMapper.selectOne(new LambdaQueryWrapper<StrategyConfig>()
+                .eq(StrategyConfig::getUserId, userId)
+                .eq(StrategyConfig::getStrategyType, StrategyType.POSITION_MONITOR.name())
+                .isNull(StrategyConfig::getFundType)
+                .last("LIMIT 1"));
+        if (config == null) {
+            return;
+        }
+        JsonNode params = readParams(StringUtils.hasText(config.getParamsJson()) ? config.getParamsJson() : "{}");
+        ObjectNode merged = params != null && params.isObject()
+                ? (ObjectNode) params.deepCopy()
+                : objectMapper.createObjectNode();
+        merged.put("equityLimitPct", scale(profile.getMaxEquityPositionRate()));
+        merged.put("singleFundLimitPct", scale(profile.getMaxSingleFundPositionRate()));
+        merged.put("largeRisePct", scale(profile.getDailyRiseAlertRate()));
+        try {
+            config.setParamsJson(objectMapper.writeValueAsString(merged));
+        } catch (JsonProcessingException exception) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "strategy params must be valid JSON");
+        }
+        config.setUpdateTime(LocalDateTime.now());
+        strategyConfigMapper.updateById(config);
+    }
+
+    private void refreshTodaySignalsAfterConfigChange(Long userId) {
+        strategySignalMapper.delete(new LambdaQueryWrapper<StrategySignal>()
+                .eq(StrategySignal::getUserId, userId)
+                .ge(StrategySignal::getSignalTime, LocalDate.now().atStartOfDay()));
+        fundHoldingMapper.selectList(new LambdaQueryWrapper<FundHolding>()
+                        .eq(FundHolding::getUserId, userId)
+                        .orderByAsc(FundHolding::getFundCode))
+                .forEach(holding -> analyzeHoldingForUser(userId, holding.getId()));
+    }
+
+    private JsonNode readParams(String paramsJson) {
+        try {
+            return objectMapper.readTree(paramsJson);
+        } catch (Exception exception) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "strategy params must be valid JSON");
+        }
+    }
+
+    private BigDecimal rateParam(JsonNode params, String field) {
+        BigDecimal value;
+        try {
+            value = new BigDecimal(params.get(field).asText());
+        } catch (RuntimeException exception) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "strategy rate param must be numeric: " + field);
+        }
+        if (value.compareTo(BigDecimal.ZERO) < 0 || value.compareTo(new BigDecimal("100.0000")) > 0) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "strategy rate param out of range: " + field);
+        }
+        return scale(value);
     }
 
     private FundHolding loadOwnedHolding(Long userId, Long holdingId) {

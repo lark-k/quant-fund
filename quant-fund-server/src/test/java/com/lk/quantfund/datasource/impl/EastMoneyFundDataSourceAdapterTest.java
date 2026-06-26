@@ -7,6 +7,7 @@ import com.lk.quantfund.config.QuantFundProperties;
 import com.lk.quantfund.datasource.model.FundEstimateDTO;
 import com.lk.quantfund.datasource.model.FundNavPointDTO;
 import com.lk.quantfund.datasource.model.FundSearchResultDTO;
+import com.lk.quantfund.datasource.model.FundThemeDTO;
 import com.lk.quantfund.service.ApiCallLogService;
 import java.time.LocalDate;
 import java.util.Optional;
@@ -128,5 +129,49 @@ class EastMoneyFundDataSourceAdapterTest {
         assertThat(points.getFirst().navDate()).isEqualTo(LocalDate.of(2026, 6, 24));
         assertThat(points.getFirst().unitNav()).isEqualByComparingTo("2.4778");
         assertThat(points.getFirst().dailyGrowthRate()).isEqualByComparingTo("4.52");
+    }
+
+    @Test
+    void shouldEstimateOverseasActiveFundFromOverseasHoldingsOnly() {
+        String heavyStocksHtml = """
+                <table><tbody>
+                <tr><td>1</td><td><a href='//quote.eastmoney.com/unify/r/106.TSM'>TSM</a></td><td>台积电</td><td>--</td><td>--</td><td>资讯</td><td>60.00%</td></tr>
+                <tr><td>2</td><td><a href='//quote.eastmoney.com/unify/r/105.LITE'>LITE</a></td><td>Lumentum Holdings Inc</td><td>--</td><td>--</td><td>资讯</td><td>40.00%</td></tr>
+                <tr><td>3</td><td><a href='//quote.eastmoney.com/unify/r/0.300502'>300502</a></td><td>新易盛</td><td>--</td><td>--</td><td>资讯</td><td>100.00%</td></tr>
+                </tbody></table>
+                """;
+        String quotes = """
+                {"data":{"diff":[
+                {"f12":"TSM","f14":"台积电","f2":100.00,"f3":2.00},
+                {"f12":"LITE","f14":"Lumentum Holdings Inc","f2":100.00,"f3":3.925},
+                {"f12":"300502","f14":"新易盛","f2":100.00,"f3":-9.00}
+                ]}}
+                """;
+        ExchangeFunction exchangeFunction = request -> {
+            String url = request.url().toString();
+            if (url.contains("FundArchivesDatas")) {
+                return Mono.just(ClientResponse.create(HttpStatus.OK).body(heavyStocksHtml).build());
+            }
+            if (url.contains("ulist.np/get")) {
+                return Mono.just(ClientResponse.create(HttpStatus.OK).body(quotes).build());
+            }
+            return Mono.just(ClientResponse.create(HttpStatus.OK).body("{}").build());
+        };
+        WebClient webClient = WebClient.builder().exchangeFunction(exchangeFunction).build();
+        ApiCallLogService apiCallLogService = (provider, apiName, requestUrl, requestMethod, success, statusCode, errorMessage, costTimeMs, fallbackUsed) -> { };
+        EastMoneyFundDataSourceAdapter adapter = new EastMoneyFundDataSourceAdapter(
+                webClient,
+                new ObjectMapper(),
+                new QuantFundProperties(),
+                apiCallLogService
+        );
+
+        List<FundThemeDTO> themes = adapter.getRelatedThemes("012922");
+
+        assertThat(themes).hasSize(1);
+        assertThat(themes.getFirst().themeName()).isEqualTo("海外基金");
+        assertThat(themes.getFirst().themeType()).isEqualTo("OVERSEAS_HEAVY_STOCK_WEIGHTED");
+        assertThat(themes.getFirst().weight()).isEqualByComparingTo("100.0000");
+        assertThat(themes.getFirst().estimatedRate()).isEqualByComparingTo("2.7700");
     }
 }

@@ -46,7 +46,7 @@ public class AiResponseValidator {
                     textList(root, "reasons"),
                     textList(root, "risks"),
                     textOrDefault(root, "dataSummary", ""),
-                    textOrDefault(root, "finalConclusion", ""),
+                    cleanAdvisoryText(textOrDefault(root, "finalConclusion", "")),
                     false,
                     rawResponse
             );
@@ -87,6 +87,16 @@ public class AiResponseValidator {
         return node == null || node.isNull() ? fallback : node.asText();
     }
 
+    private String cleanAdvisoryText(String value) {
+        if (!StringUtils.hasText(value)) {
+            return value;
+        }
+        return value
+                .replaceAll("[；;，,。\\s]*(买卖建议)?仅供参考[，,、]?(不构成投资建议)?[，,、]?(不承诺收益)?[；;，,。\\s]*", "")
+                .replaceAll("[；;，,。\\s]*用户(须|必须)?自行到原基金平台手动操作[。.\\s]*", "")
+                .trim();
+    }
+
     private BigDecimal decimal(JsonNode root, String field) {
         JsonNode node = root.get(field);
         if (node == null || node.isNull()) {
@@ -104,4 +114,3 @@ public class AiResponseValidator {
         return result;
     }
 }
-

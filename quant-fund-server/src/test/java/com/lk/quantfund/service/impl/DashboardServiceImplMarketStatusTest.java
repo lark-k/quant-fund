@@ -314,7 +314,7 @@ class DashboardServiceImplMarketStatusTest {
     }
 
     @Test
-    void overviewShouldRecalculateHoldingProfitFromOfficialNavForDisplay() {
+    void overviewShouldKeepPlatformHoldingProfitAfterOfficialNavForDisplay() {
         LocalDate fixedToday = LocalDate.of(2026, 6, 25);
         PortfolioAccountService portfolioAccountService = mock(PortfolioAccountService.class);
         FundHoldingMapper fundHoldingMapper = mock(FundHoldingMapper.class);
@@ -362,12 +362,12 @@ class DashboardServiceImplMarketStatusTest {
             assertThat(overview.topHoldings()).singleElement()
                     .satisfies(item -> {
                         assertThat(item.officialNavUpdated()).isTrue();
-                        assertThat(item.holdingAmount()).isEqualByComparingTo("10200.0000");
-                        assertThat(item.holdingProfit()).isEqualByComparingTo("700.0000");
-                        assertThat(item.holdingProfitRate()).isEqualByComparingTo("7.3684");
+                        assertThat(item.holdingAmount()).isEqualByComparingTo("10000.0000");
+                        assertThat(item.holdingProfit()).isEqualByComparingTo("500.0000");
+                        assertThat(item.holdingProfitRate()).isEqualByComparingTo("5.0000");
                     });
-            assertThat(overview.summary().totalAsset()).isEqualByComparingTo("10200.0000");
-            assertThat(overview.summary().currentProfit()).isEqualByComparingTo("700.0000");
+            assertThat(overview.summary().totalAsset()).isEqualByComparingTo("10000.0000");
+            assertThat(overview.summary().currentProfit()).isEqualByComparingTo("500.0000");
         }
     }
 

@@ -146,7 +146,7 @@ public class FundQueryServiceImpl implements FundQueryService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public FundEstimateDTO getIntradayEstimate(String fundCode, boolean manualRefresh) {
-        if (!tradingCalendarService.isIntradayEstimateWindow(LocalDateTime.now())) {
+        if (!tradingCalendarService.isIntradayEstimateDisplayWindow(LocalDateTime.now())) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "当前不在盘中估值时间，暂不刷新盘中估值");
         }
         String cacheKey = RedisKeyConstants.estimateCacheKey(fundCode);

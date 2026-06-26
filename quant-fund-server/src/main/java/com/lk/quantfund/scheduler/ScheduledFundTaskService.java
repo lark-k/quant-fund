@@ -28,6 +28,7 @@ import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -82,9 +83,6 @@ public class ScheduledFundTaskService {
         Map<String, List<FundHolding>> holdingsByFundCode = holdingsByFundCode(loadAllHoldings());
         for (Map.Entry<String, List<FundHolding>> entry : holdingsByFundCode.entrySet()) {
             try {
-                if (!entry.getValue().isEmpty() && delayedOfficialNavFund(entry.getValue().getFirst())) {
-                    continue;
-                }
                 FundEstimateDTO estimate = fundQueryService.getIntradayEstimate(entry.getKey(), false);
                 for (FundHolding holding : entry.getValue()) {
                     applyEstimate(holding, estimate);
@@ -237,36 +235,77 @@ public class ScheduledFundTaskService {
     private void applyEstimate(FundHolding holding, FundEstimateDTO estimate) {
         BigDecimal estimateNav = scale(estimate.estimateNav());
         BigDecimal holdingShare = scale(holding.getHoldingShare());
-        BigDecimal holdingAmount = holdingShare.multiply(estimateNav).setScale(4, RoundingMode.HALF_UP);
+        BigDecimal frozenHoldingAmount = frozenHoldingAmount(holding, holdingShare, holding.getLatestOfficialNav());
         holding.setCurrentEstimateNav(estimateNav);
-        holding.setHoldingAmount(holdingAmount);
-        holding.setHoldingProfit(holdingAmount.subtract(scale(holding.getHoldingCost())).setScale(4, RoundingMode.HALF_UP));
+        holding.setHoldingAmount(frozenHoldingAmount);
+        BigDecimal dailyProfit;
+        if (holding.getLatestOfficialNav() != null
+                && holding.getLatestOfficialNav().compareTo(BigDecimal.ZERO) > 0
+                && estimateNav.compareTo(holding.getLatestOfficialNav()) != 0) {
+            BigDecimal estimateRate = rate(estimateNav.subtract(holding.getLatestOfficialNav()), holding.getLatestOfficialNav());
+            dailyProfit = amountChangeByRate(frozenHoldingAmount, estimateRate);
+        } else {
+            BigDecimal estimateRate = estimate.estimateGrowthRate() == null ? null : estimate.estimateGrowthRate();
+            FundValuationResult valuation = fundValuationService.estimate(
+                    holding.getFundCode(), holding.getFundName(), holding.getFundType(), estimateRate);
+            dailyProfit = dailyProfitByRate(frozenHoldingAmount, valuation.themeRate(), holdingShare, holding.getLatestOfficialNav());
+        }
+        holding.setDailyProfit(dailyProfit);
+        BigDecimal estimatedProfit = frozenHoldingAmount.add(dailyProfit).subtract(scale(holding.getHoldingCost()));
+        holding.setHoldingProfit(scale(estimatedProfit));
         holding.setHoldingProfitRate(rate(holding.getHoldingProfit(), holding.getHoldingCost()));
-        BigDecimal estimateRate = estimate.estimateGrowthRate() == null ? null : estimate.estimateGrowthRate();
-        FundValuationResult valuation = fundValuationService.estimate(
-                holding.getFundCode(), holding.getFundName(), holding.getFundType(), estimateRate);
-        holding.setDailyProfit(dailyProfitByRate(holdingAmount, valuation.themeRate(), holdingShare, holding.getLatestOfficialNav()));
         holding.setUpdateTime(LocalDateTime.now());
         if (StringUtils.hasText(estimate.fundName())) {
             holding.setFundName(estimate.fundName());
         }
     }
 
+    private BigDecimal frozenHoldingAmount(FundHolding holding, BigDecimal holdingShare, BigDecimal fallbackNav) {
+        BigDecimal holdingAmount = scale(holding.getHoldingAmount());
+        if (holdingAmount.compareTo(BigDecimal.ZERO) > 0) {
+            return holdingAmount;
+        }
+        if (fallbackNav != null && fallbackNav.compareTo(BigDecimal.ZERO) > 0
+                && holdingShare != null && holdingShare.compareTo(BigDecimal.ZERO) > 0) {
+            return scale(holdingShare.multiply(fallbackNav));
+        }
+        return ZERO;
+    }
+
     private void applyOfficialNav(FundHolding holding, FundNavPointDTO navPoint, BigDecimal previousUnitNav) {
         BigDecimal unitNav = scale(navPoint.unitNav());
         BigDecimal previousNav = previousUnitNav == null ? holding.getLatestOfficialNav() : previousUnitNav;
         BigDecimal holdingShare = scale(holding.getHoldingShare());
-        BigDecimal holdingAmount = holdingShare.multiply(unitNav).setScale(4, RoundingMode.HALF_UP);
+        BigDecimal baseAmount = frozenHoldingAmount(holding, holdingShare, previousNav);
+        boolean sameOfficialNavAlreadyApplied = holding.getLatestOfficialNav() != null
+                && holding.getLatestOfficialNav().compareTo(unitNav) == 0
+                && holding.getCurrentEstimateNav() != null
+                && holding.getCurrentEstimateNav().compareTo(unitNav) == 0;
         holding.setLatestOfficialNav(unitNav);
         holding.setCurrentEstimateNav(unitNav);
-        holding.setHoldingAmount(holdingAmount);
-        holding.setHoldingProfit(holdingAmount.subtract(scale(holding.getHoldingCost())).setScale(4, RoundingMode.HALF_UP));
-        holding.setHoldingProfitRate(rate(holding.getHoldingProfit(), holding.getHoldingCost()));
-        if (previousNav != null && previousNav.compareTo(BigDecimal.ZERO) > 0) {
-            holding.setDailyProfit(dailyProfit(holdingShare, unitNav, previousNav));
+        if (sameOfficialNavAlreadyApplied) {
+            holding.setHoldingAmount(baseAmount);
+            holding.setHoldingProfit(baseAmount.subtract(scale(holding.getHoldingCost())).setScale(4, RoundingMode.HALF_UP));
+            holding.setHoldingProfitRate(rate(holding.getHoldingProfit(), holding.getHoldingCost()));
+        } else if (previousNav != null && previousNav.compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal dailyRate = rate(unitNav.subtract(previousNav), previousNav);
+            BigDecimal dailyProfit = amountChangeByRate(baseAmount, dailyRate);
+            BigDecimal holdingAmount = baseAmount.add(dailyProfit).setScale(4, RoundingMode.HALF_UP);
+            holding.setHoldingAmount(holdingAmount);
+            holding.setHoldingProfit(holdingAmount.subtract(scale(holding.getHoldingCost())).setScale(4, RoundingMode.HALF_UP));
+            holding.setHoldingProfitRate(rate(holding.getHoldingProfit(), holding.getHoldingCost()));
+            holding.setDailyProfit(dailyProfit);
         } else if (navPoint.dailyGrowthRate() != null) {
-            holding.setDailyProfit(dailyProfitByRate(holdingAmount, navPoint.dailyGrowthRate(), holdingShare, null));
+            BigDecimal dailyProfit = dailyProfitByRate(baseAmount, navPoint.dailyGrowthRate(), holdingShare, null);
+            BigDecimal holdingAmount = baseAmount.add(dailyProfit).setScale(4, RoundingMode.HALF_UP);
+            holding.setHoldingAmount(holdingAmount);
+            holding.setHoldingProfit(holdingAmount.subtract(scale(holding.getHoldingCost())).setScale(4, RoundingMode.HALF_UP));
+            holding.setHoldingProfitRate(rate(holding.getHoldingProfit(), holding.getHoldingCost()));
+            holding.setDailyProfit(dailyProfit);
         } else {
+            holding.setHoldingAmount(baseAmount);
+            holding.setHoldingProfit(baseAmount.subtract(scale(holding.getHoldingCost())).setScale(4, RoundingMode.HALF_UP));
+            holding.setHoldingProfitRate(rate(holding.getHoldingProfit(), holding.getHoldingCost()));
             holding.setDailyProfit(ZERO);
         }
         holding.setUpdateTime(LocalDateTime.now());
@@ -298,19 +337,17 @@ public class ScheduledFundTaskService {
     private BigDecimal dailyProfitByRate(BigDecimal holdingAmount, BigDecimal estimateRate,
                                          BigDecimal holdingShare, BigDecimal previousNav) {
         if (estimateRate != null) {
-            BigDecimal ratio = estimateRate.divide(HUNDRED, 8, RoundingMode.HALF_UP);
-            if (previousNav != null && previousNav.compareTo(BigDecimal.ZERO) > 0
-                    && holdingShare != null && holdingShare.compareTo(BigDecimal.ZERO) > 0) {
-                return scale(holdingShare.multiply(previousNav).multiply(ratio));
-            }
-            BigDecimal factor = BigDecimal.ONE.add(ratio);
-            if (factor.compareTo(BigDecimal.ZERO) > 0) {
-                BigDecimal originalAmount = scale(holdingAmount).divide(factor, 4, RoundingMode.HALF_UP);
-                return scale(originalAmount.multiply(ratio));
-            }
-            return ZERO;
+            return amountChangeByRate(holdingAmount, estimateRate);
         }
         return ZERO;
+    }
+
+    private BigDecimal amountChangeByRate(BigDecimal baseAmount, BigDecimal changeRate) {
+        if (changeRate == null) {
+            return ZERO;
+        }
+        BigDecimal ratio = changeRate.divide(HUNDRED, 8, RoundingMode.HALF_UP);
+        return scale(scale(baseAmount).multiply(ratio));
     }
 
     private BigDecimal positionRate(BigDecimal holdingAmount, BigDecimal totalAsset) {
@@ -366,6 +403,11 @@ public class ScheduledFundTaskService {
                 .eq(HoldingSnapshot::getSnapshotDate, snapshot.getSnapshotDate())
                 .last("LIMIT 1"));
         if (existing == null) {
+            existing = holdingSnapshotMapper.selectByHoldingAndDateIncludingDeleted(
+                    snapshot.getHoldingId(), snapshot.getSnapshotDate());
+            restoreSnapshotIfDeleted(existing);
+        }
+        if (existing == null) {
             if (legacyDelayedSnapshot != null) {
                 snapshot.setId(legacyDelayedSnapshot.getId());
                 snapshot.setCreateTime(legacyDelayedSnapshot.getCreateTime());
@@ -373,16 +415,35 @@ public class ScheduledFundTaskService {
                 holdingSnapshotMapper.updateById(snapshot);
                 return;
             }
-            holdingSnapshotMapper.insert(snapshot);
+            try {
+                holdingSnapshotMapper.insert(snapshot);
+            } catch (DuplicateKeyException exception) {
+                restoreSnapshotIfDeleted(holdingSnapshotMapper.selectByHoldingAndDateIncludingDeleted(
+                        snapshot.getHoldingId(), snapshot.getSnapshotDate()));
+            }
             return;
         }
         if (legacyDelayedSnapshot != null && legacyDelayedSnapshot.getId() != null) {
             holdingSnapshotMapper.deleteById(legacyDelayedSnapshot.getId());
         }
+        if (historicalSnapshotDate(snapshot.getSnapshotDate())) {
+            return;
+        }
         snapshot.setId(existing.getId());
         snapshot.setCreateTime(existing.getCreateTime());
         snapshot.setDeleted(existing.getDeleted());
         holdingSnapshotMapper.updateById(snapshot);
+    }
+
+    private void restoreSnapshotIfDeleted(HoldingSnapshot snapshot) {
+        if (snapshot != null && Integer.valueOf(1).equals(snapshot.getDeleted())) {
+            holdingSnapshotMapper.restoreById(snapshot.getId());
+            snapshot.setDeleted(0);
+        }
+    }
+
+    private boolean historicalSnapshotDate(LocalDate snapshotDate) {
+        return snapshotDate != null && snapshotDate.isBefore(LocalDate.now());
     }
 
     private HoldingSnapshot legacyDelayedSnapshot(FundHolding holding, LocalDate navDate, LocalDate snapshotDate) {

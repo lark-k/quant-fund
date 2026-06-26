@@ -13,6 +13,7 @@ import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -104,6 +105,10 @@ public class HoldingSnapshotBackfillService {
                 .eq(HoldingSnapshot::getHoldingId, holding.getId())
                 .eq(HoldingSnapshot::getSnapshotDate, snapshotDate)
                 .last("LIMIT 1"));
+        if (snapshot == null) {
+            snapshot = holdingSnapshotMapper.selectByHoldingAndDateIncludingDeleted(holding.getId(), snapshotDate);
+            restoreSnapshotIfDeleted(snapshot);
+        }
         if (snapshot != null) {
             return;
         }
@@ -120,6 +125,18 @@ public class HoldingSnapshotBackfillService {
         snapshot.setDailyProfit(scale(holding.getDailyProfit()));
         snapshot.setPositionRate(positionRate(holding.getHoldingAmount(), account.getTotalAsset()));
         snapshot.setUpdateTime(now);
-        holdingSnapshotMapper.insert(snapshot);
+        try {
+            holdingSnapshotMapper.insert(snapshot);
+        } catch (DuplicateKeyException exception) {
+            restoreSnapshotIfDeleted(holdingSnapshotMapper.selectByHoldingAndDateIncludingDeleted(
+                    holding.getId(), snapshotDate));
+        }
+    }
+
+    private void restoreSnapshotIfDeleted(HoldingSnapshot snapshot) {
+        if (snapshot != null && Integer.valueOf(1).equals(snapshot.getDeleted())) {
+            holdingSnapshotMapper.restoreById(snapshot.getId());
+            snapshot.setDeleted(0);
+        }
     }
 }

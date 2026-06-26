@@ -280,6 +280,9 @@ public class PortfolioAccountServiceImpl implements PortfolioAccountService {
         BigDecimal dailyProfit = delayedOfficialNavFund(holding) && !officialUpdated ? ZERO : valueOrZero(holding.getDailyProfit());
         FundValuationResult valuation = fundValuationService.estimate(
                 holding.getFundCode(), holding.getFundName(), holding.getFundType(), estimateRate);
+        if (officialUpdated) {
+            valuation = officialNavValuation(valuation, estimateRate);
+        }
         return new FundHoldingVO(
                 holding.getId(),
                 holding.getAccountId(),
@@ -312,6 +315,16 @@ public class PortfolioAccountServiceImpl implements PortfolioAccountService {
                 toBool(holding.getWatchFocus()),
                 holding.getUpdateTime(),
                 SystemConstants.DISCLAIMER
+        );
+    }
+
+    private FundValuationResult officialNavValuation(FundValuationResult valuation, BigDecimal officialRate) {
+        return new FundValuationResult(
+                valuation.themeName(),
+                scale(officialRate),
+                "OFFICIAL_NAV",
+                "正式净值涨跌率",
+                valuation.marketStatus()
         );
     }
 

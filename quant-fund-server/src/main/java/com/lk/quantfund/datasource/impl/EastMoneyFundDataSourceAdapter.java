@@ -50,6 +50,7 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter {
     private static final Pattern CELL_PATTERN = Pattern.compile("<td[^>]*>(.*?)</td>", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
     private static final Pattern SECID_PATTERN = Pattern.compile("unify/r/([^'\" >]+)", Pattern.CASE_INSENSITIVE);
     private static final Pattern REPORT_DATE_PATTERN = Pattern.compile("截止至：<font[^>]*>(\\d{4}-\\d{2}-\\d{2})</font>");
+    private static final DateTimeFormatter COMPACT_DATE = DateTimeFormatter.BASIC_ISO_DATE;
 
     private final WebClient fundDataWebClient;
     private final ObjectMapper objectMapper;
@@ -231,6 +232,9 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter {
 
     @Override
     public List<FundThemeDTO> getRelatedThemes(String fundCode) {
+        if (isOverseasActiveFund(fundCode)) {
+            return List.of(overseasFundTheme(fundCode));
+        }
         List<FundThemeDTO> mappedThemes = mappedActiveFundThemes(fundCode);
         if (!mappedThemes.isEmpty()) {
             return mappedThemes;
@@ -272,16 +276,83 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter {
                     mappedTheme(fundCode, "PCB", new BigDecimal("55.0000")),
                     mappedTheme(fundCode, "CPO", new BigDecimal("45.0000"))
             );
-            case "012922", "012921" -> List.of(new FundThemeDTO(
-                    fundCode,
-                    "海外基金",
-                    "FUND_RULE",
-                    new BigDecimal("100.0000"),
-                    null,
-                    SOURCE_NAME + "_RULE"
-            ));
             default -> List.of();
         };
+    }
+
+    private boolean isOverseasActiveFund(String fundCode) {
+        return "012922".equals(fundCode) || "012921".equals(fundCode);
+    }
+
+    private FundThemeDTO overseasFundTheme(String fundCode) {
+        List<FundStockHoldingDTO> stocks;
+        try {
+            stocks = getHeavyStocks(fundCode);
+        } catch (RuntimeException exception) {
+            stocks = List.of();
+        }
+        BigDecimal overseasHoldingRate = overseasHoldingChangeRate(stocks);
+        Optional<BigDecimal> overseasIndexRate = overseasHoldingRate == null ? overseasFundRate() : Optional.empty();
+        BigDecimal estimatedRate = overseasHoldingRate == null ? overseasIndexRate.orElse(null) : overseasHoldingRate;
+        return new FundThemeDTO(
+                fundCode,
+                "海外基金",
+                overseasHoldingRate == null ? "OVERSEAS_FUND_INDEX" : "OVERSEAS_HEAVY_STOCK_WEIGHTED",
+                new BigDecimal("100.0000"),
+                estimatedRate,
+                overseasHoldingRate == null ? SOURCE_NAME + "_OVERSEAS" : SOURCE_NAME
+        );
+    }
+
+    private BigDecimal overseasHoldingChangeRate(List<FundStockHoldingDTO> stocks) {
+        return weightedChangeRate(stocks.stream()
+                .filter(stock -> isOverseasMarketSecId(stock.marketSecId()))
+                .toList());
+    }
+
+    private boolean isOverseasMarketSecId(String marketSecId) {
+        String secid = marketSecId == null ? "" : marketSecId;
+        return secid.startsWith("105.") || secid.startsWith("106.") || secid.startsWith("116.");
+    }
+
+    private Optional<BigDecimal> overseasFundRate() {
+        BigDecimal nasdaqRate = latestDailyIndexRate("100.NDX");
+        BigDecimal sp500Rate = latestDailyIndexRate("100.SPX");
+        if (nasdaqRate != null && sp500Rate != null) {
+            return Optional.of(nasdaqRate.multiply(new BigDecimal("0.7000"))
+                    .add(sp500Rate.multiply(new BigDecimal("0.3000")))
+                    .setScale(4, RoundingMode.HALF_UP));
+        }
+        if (nasdaqRate != null) {
+            return Optional.of(nasdaqRate.setScale(4, RoundingMode.HALF_UP));
+        }
+        if (sp500Rate != null) {
+            return Optional.of(sp500Rate.setScale(4, RoundingMode.HALF_UP));
+        }
+        return Optional.empty();
+    }
+
+    private BigDecimal latestDailyIndexRate(String secid) {
+        String today = LocalDate.now().format(COMPACT_DATE);
+        String url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
+                + "?secid=" + secid
+                + "&fields1=f1,f2,f3,f4,f5,f6"
+                + "&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61"
+                + "&klt=101&fqt=1&beg=" + LocalDate.now().minusDays(10).format(COMPACT_DATE)
+                + "&end=" + today;
+        try {
+            String body = get("overseas_index_daily", url);
+            JsonNode klines = objectMapper.readTree(stripJsonp(body)).path("data").path("klines");
+            if (!klines.isArray() || klines.isEmpty()) {
+                return null;
+            }
+            String[] fields = klines.get(klines.size() - 1).asText().split(",");
+            return fields.length > 8 ? decimal(fields[8]) : null;
+        } catch (RuntimeException exception) {
+            return null;
+        } catch (Exception exception) {
+            return null;
+        }
     }
 
     private FundThemeDTO mappedTheme(String fundCode, String themeName, BigDecimal weight) {

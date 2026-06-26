@@ -23,8 +23,11 @@ public record AiAnalysisContext(
         BigDecimal accountTotalAsset,
         BigDecimal accountEquityPositionRate,
         BigDecimal accountSingleFundPositionRate,
+        BigDecimal maxEquityPositionRate,
+        BigDecimal maxSingleFundPositionRate,
+        BigDecimal dailyRiseAlertRate,
+        BigDecimal drawdownAlertRate,
         String userRiskLevel,
         List<StrategySignalVO> strategySignals
 ) {
 }
-

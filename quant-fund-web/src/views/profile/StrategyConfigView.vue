@@ -3,7 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Check, Close, Switch } from '@element-plus/icons-vue'
 import { quantApi } from '@/api/quant'
-import type { StrategyConfig, StrategyConfigRequest } from '@/types/domain'
+import type { RiskProfile, StrategyConfig, StrategyConfigRequest } from '@/types/domain'
 import DisclaimerBar from '@/components/common/DisclaimerBar.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
@@ -23,6 +23,7 @@ type StrategyForm = {
 }
 
 const configs = ref<StrategyConfig[]>([])
+const riskProfile = ref<RiskProfile | null>(null)
 const activeType = ref('DRAWDOWN_STOP_PROFIT')
 const loading = ref(true)
 const saving = ref(false)
@@ -54,13 +55,28 @@ onMounted(loadConfigs)
 
 async function loadConfigs() {
   try {
-    configs.value = await quantApi.strategyConfigs()
-    if (configs.value[0]) {
-      selectConfig(configs.value[0].strategyType)
+    const [profile, items] = await Promise.all([
+      quantApi.riskProfile(),
+      quantApi.strategyConfigs()
+    ])
+    riskProfile.value = profile
+    applyRiskDefaults()
+    configs.value = items
+    const defaultConfig = configs.value.find((item) => item.strategyType === activeType.value) || configs.value[0]
+    if (defaultConfig) {
+      selectConfig(defaultConfig.strategyType)
     }
   } finally {
     loading.value = false
   }
+}
+
+function applyRiskDefaults() {
+  if (!riskProfile.value) return
+  form.equityLimitPct = Number(riskProfile.value.maxEquityPositionRate)
+  form.singleFundLimitPct = Number(riskProfile.value.maxSingleFundPositionRate)
+  form.heavyDrawdownPct = Number(riskProfile.value.drawdownAlertRate)
+  form.largeRisePct = Number(riskProfile.value.dailyRiseAlertRate)
 }
 
 function readNumber(params: Record<string, unknown>, key: string, fallback: number) {
@@ -82,13 +98,13 @@ function selectConfig(strategyType: string) {
   form.strategyType = config.strategyType
   form.fundType = config.fundType || ''
   form.enabled = config.enabled
-  form.profitActivationPct = readNumber(params, 'profitActivationPct', form.profitActivationPct)
-  form.lightDrawdownPct = readNumber(params, 'lightDrawdownPct', form.lightDrawdownPct)
-  form.mediumDrawdownPct = readNumber(params, 'mediumDrawdownPct', form.mediumDrawdownPct)
-  form.heavyDrawdownPct = readNumber(params, 'heavyDrawdownPct', form.heavyDrawdownPct)
-  form.equityLimitPct = readNumber(params, 'equityLimitPct', form.equityLimitPct)
-  form.singleFundLimitPct = readNumber(params, 'singleFundLimitPct', form.singleFundLimitPct)
-  form.largeRisePct = readNumber(params, 'largeRisePct', form.largeRisePct)
+  form.profitActivationPct = readNumber(params, 'profitActivationPct', 15)
+  form.lightDrawdownPct = readNumber(params, 'lightDrawdownPct', 3)
+  form.mediumDrawdownPct = readNumber(params, 'mediumDrawdownPct', 5)
+  form.heavyDrawdownPct = readNumber(params, 'heavyDrawdownPct', Number(riskProfile.value?.drawdownAlertRate ?? 8))
+  form.equityLimitPct = readNumber(params, 'equityLimitPct', Number(riskProfile.value?.maxEquityPositionRate ?? 70))
+  form.singleFundLimitPct = readNumber(params, 'singleFundLimitPct', Number(riskProfile.value?.maxSingleFundPositionRate ?? 25))
+  form.largeRisePct = readNumber(params, 'largeRisePct', Number(riskProfile.value?.dailyRiseAlertRate ?? 2))
 }
 
 function buildParamsJson() {
@@ -132,6 +148,8 @@ async function saveStrategy() {
     const index = configs.value.findIndex((item) => item.id === saved.id || item.strategyType === saved.strategyType)
     if (index >= 0) configs.value.splice(index, 1, saved)
     else configs.value.unshift(saved)
+    riskProfile.value = await quantApi.riskProfile()
+    selectConfig(saved.strategyType)
     ElMessage.success('策略参数已保存')
   } finally {
     saving.value = false

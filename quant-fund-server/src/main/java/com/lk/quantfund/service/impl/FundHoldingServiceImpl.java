@@ -42,6 +42,7 @@ import java.util.List;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -262,7 +263,7 @@ public class FundHoldingServiceImpl implements FundHoldingService {
     public FundHoldingVO recalculate(Long holdingId) {
         Long userId = UserContext.getUserId();
         FundHolding holding = loadOwnedHolding(userId, holdingId);
-        refreshMarketData(holding);
+        refreshMarketDataForEstimateRefresh(holding);
         recalculateEntity(holding);
         holding.setUpdateTime(LocalDateTime.now());
         fundHoldingMapper.updateById(holding);
@@ -359,11 +360,19 @@ public class FundHoldingServiceImpl implements FundHoldingService {
                 && amount.compareTo(BigDecimal.ZERO) > 0) {
             holding.setHoldingShare(amount.divide(nav, 4, RoundingMode.HALF_UP));
         }
-        BigDecimal profit = amount.subtract(valueOrZero(holding.getHoldingCost()));
+        BigDecimal dailyProfit = calculateDailyProfit(holding);
+        BigDecimal profitBaseAmount = shouldApplyIntradayProfitToHoldingProfit(holding) ? amount.add(dailyProfit) : amount;
+        BigDecimal profit = profitBaseAmount.subtract(valueOrZero(holding.getHoldingCost()));
         holding.setHoldingAmount(amount);
         holding.setHoldingProfit(scale(profit));
         holding.setHoldingProfitRate(rate(profit, holding.getHoldingCost()));
-        holding.setDailyProfit(calculateDailyProfit(holding));
+        holding.setDailyProfit(dailyProfit);
+    }
+
+    private boolean shouldApplyIntradayProfitToHoldingProfit(FundHolding holding) {
+        Optional<OfficialNavContext> officialNav = officialNavContext(holding.getFundCode());
+        return (officialNav.isEmpty() || !officialNavCountsAsToday(holding, officialNav.get()))
+                && intradayEstimateAllowed(holding);
     }
 
     private void applyUserProfitInput(FundHolding holding, BigDecimal holdingProfit) {
@@ -412,16 +421,25 @@ public class FundHoldingServiceImpl implements FundHoldingService {
     }
 
     private void refreshMarketData(FundHolding holding) {
-        refreshMarketData(holding, null, null);
+        refreshMarketData(holding, null, null, false);
     }
 
     private void refreshMarketData(FundHolding holding, String previousFundCode, BigDecimal previousCurrentEstimateNav) {
+        refreshMarketData(holding, previousFundCode, previousCurrentEstimateNav, false);
+    }
+
+    private void refreshMarketDataForEstimateRefresh(FundHolding holding) {
+        refreshMarketData(holding, null, null, true);
+    }
+
+    private void refreshMarketData(FundHolding holding, String previousFundCode, BigDecimal previousCurrentEstimateNav,
+                                   boolean allowDisplayWindowFetch) {
         Optional<OfficialNavContext> officialNav = officialNavContext(holding.getFundCode());
         if (officialNav.isPresent() && officialNavPublishedFor(holding, officialNav.get())) {
             applyOfficialNav(holding, officialNav.get());
             return;
         }
-        if (intradayEstimateFetchAllowed(holding)) {
+        if (intradayEstimateFetchAllowed(holding, allowDisplayWindowFetch)) {
             try {
                 FundEstimateDTO estimate = fundQueryService.getIntradayEstimate(holding.getFundCode(), false);
                 if (StringUtils.hasText(estimate.fundName())) {
@@ -508,6 +526,14 @@ public class FundHoldingServiceImpl implements FundHoldingService {
         if (!intradayEstimateAllowed(holding)) {
             return ZERO;
         }
+        if (holding.getCurrentEstimateNav() != null
+                && holding.getLatestOfficialNav() != null
+                && holding.getLatestOfficialNav().compareTo(BigDecimal.ZERO) > 0
+                && holding.getCurrentEstimateNav().compareTo(holding.getLatestOfficialNav()) != 0) {
+            return scale(holding.getCurrentEstimateNav()
+                    .subtract(holding.getLatestOfficialNav())
+                    .multiply(valueOrZero(holding.getHoldingShare())));
+        }
         FundValuationResult valuation = valuation(holding);
         if (valuation.themeRate() != null) {
             return dailyProfitByRate(holding, valuation.themeRate());
@@ -522,8 +548,6 @@ public class FundHoldingServiceImpl implements FundHoldingService {
 
     private void applyOfficialNav(FundHolding holding, OfficialNavContext context) {
         BigDecimal previousStoredNav = holding.getLatestOfficialNav();
-        holding.setLatestOfficialNav(context.todayNav());
-        holding.setCurrentEstimateNav(context.todayNav());
         BigDecimal share = valueOrZero(holding.getHoldingShare());
         if (share.compareTo(BigDecimal.ZERO) <= 0
                 && valueOrZero(holding.getHoldingAmount()).compareTo(BigDecimal.ZERO) > 0
@@ -531,20 +555,44 @@ public class FundHoldingServiceImpl implements FundHoldingService {
             share = valueOrZero(holding.getHoldingAmount()).divide(context.todayNav(), 4, RoundingMode.HALF_UP);
             holding.setHoldingShare(share);
         }
-        BigDecimal amount = scale(share.multiply(context.todayNav()));
+        BigDecimal baseAmount = officialBaseAmount(holding, share, context.previousNav(), previousStoredNav);
+        boolean sameOfficialNavAlreadyApplied = previousStoredNav != null
+                && previousStoredNav.compareTo(context.todayNav()) == 0
+                && holding.getCurrentEstimateNav() != null
+                && holding.getCurrentEstimateNav().compareTo(context.todayNav()) == 0;
+        BigDecimal dailyProfit = ZERO;
+        if (!sameOfficialNavAlreadyApplied) {
+            if (context.previousNav() != null && context.previousNav().compareTo(BigDecimal.ZERO) > 0) {
+                BigDecimal dailyRate = rate(context.todayNav().subtract(context.previousNav()), context.previousNav());
+                dailyProfit = amountChangeByRate(baseAmount, dailyRate);
+            } else if (context.dailyGrowthRate() != null) {
+                dailyProfit = amountChangeByRate(baseAmount, context.dailyGrowthRate());
+            }
+        } else {
+            dailyProfit = valueOrZero(holding.getDailyProfit());
+        }
+        BigDecimal amount = sameOfficialNavAlreadyApplied ? baseAmount : scale(baseAmount.add(dailyProfit));
+        holding.setLatestOfficialNav(context.todayNav());
+        holding.setCurrentEstimateNav(context.todayNav());
         holding.setHoldingAmount(amount);
         BigDecimal profit = amount.subtract(valueOrZero(holding.getHoldingCost()));
         holding.setHoldingProfit(scale(profit));
         holding.setHoldingProfitRate(rate(profit, holding.getHoldingCost()));
-        if (context.previousNav() != null && context.previousNav().compareTo(BigDecimal.ZERO) > 0) {
-            holding.setDailyProfit(scale(share.multiply(context.todayNav().subtract(context.previousNav()))));
-        } else if (context.dailyGrowthRate() != null) {
-            BigDecimal baseNav = previousStoredNav != null && previousStoredNav.compareTo(BigDecimal.ZERO) > 0
-                    && previousStoredNav.compareTo(context.todayNav()) != 0 ? previousStoredNav : null;
-            holding.setDailyProfit(dailyProfitByRate(amount, share, baseNav, context.dailyGrowthRate()));
-        } else {
-            holding.setDailyProfit(ZERO);
+        holding.setDailyProfit(dailyProfit);
+    }
+
+    private BigDecimal officialBaseAmount(FundHolding holding, BigDecimal share, BigDecimal previousNav, BigDecimal previousStoredNav) {
+        BigDecimal amount = valueOrZero(holding.getHoldingAmount());
+        if (amount.compareTo(BigDecimal.ZERO) > 0) {
+            return scale(amount);
         }
+        BigDecimal fallbackNav = previousNav != null && previousNav.compareTo(BigDecimal.ZERO) > 0
+                ? previousNav
+                : previousStoredNav;
+        if (fallbackNav != null && fallbackNav.compareTo(BigDecimal.ZERO) > 0 && share.compareTo(BigDecimal.ZERO) > 0) {
+            return scale(share.multiply(fallbackNav));
+        }
+        return ZERO;
     }
 
     private BigDecimal dailyProfitByRate(FundHolding holding, BigDecimal rate) {
@@ -558,16 +606,15 @@ public class FundHoldingServiceImpl implements FundHoldingService {
         if (rate == null) {
             return ZERO;
         }
-        BigDecimal ratio = rate.divide(ONE_HUNDRED, 8, RoundingMode.HALF_UP);
-        if (baseNav != null && baseNav.compareTo(BigDecimal.ZERO) > 0 && share.compareTo(BigDecimal.ZERO) > 0) {
-            return scale(share.multiply(baseNav).multiply(ratio));
+        return amountChangeByRate(currentAmount, rate);
+    }
+
+    private BigDecimal amountChangeByRate(BigDecimal baseAmount, BigDecimal changeRate) {
+        if (changeRate == null) {
+            return ZERO;
         }
-        BigDecimal factor = BigDecimal.ONE.add(ratio);
-        if (factor.compareTo(BigDecimal.ZERO) > 0) {
-            BigDecimal originalAmount = valueOrZero(currentAmount).divide(factor, 4, RoundingMode.HALF_UP);
-            return scale(originalAmount.multiply(ratio));
-        }
-        return ZERO;
+        BigDecimal ratio = changeRate.divide(ONE_HUNDRED, 8, RoundingMode.HALF_UP);
+        return scale(valueOrZero(baseAmount).multiply(ratio));
     }
 
     private BigDecimal yesterdayProfit(FundHolding holding) {
@@ -661,6 +708,9 @@ public class FundHoldingServiceImpl implements FundHoldingService {
                 holding.getFundType(),
                 displayEstimateRate
         );
+        if (officialUpdated) {
+            valuation = officialNavValuation(valuation, displayEstimateRate);
+        }
         if (!officialUpdated && !intradayAllowed) {
             valuation = new FundValuationResult(
                     valuation.themeName(),
@@ -705,6 +755,16 @@ public class FundHoldingServiceImpl implements FundHoldingService {
         );
     }
 
+    private FundValuationResult officialNavValuation(FundValuationResult valuation, BigDecimal officialRate) {
+        return new FundValuationResult(
+                valuation.themeName(),
+                scale(officialRate),
+                "OFFICIAL_NAV",
+                "正式净值涨跌率",
+                valuation.marketStatus()
+        );
+    }
+
     private FundValuationResult valuation(FundHolding holding) {
         return fundValuationService.estimate(
                 holding.getFundCode(),
@@ -735,6 +795,10 @@ public class FundHoldingServiceImpl implements FundHoldingService {
         LocalDate snapshotDate = officialNavEffectiveDate(holding, officialNav.navDate());
         LocalDateTime now = LocalDateTime.now();
         HoldingSnapshot snapshot = findSnapshot(holding.getId(), snapshotDate);
+        if (snapshot == null) {
+            snapshot = holdingSnapshotMapper.selectByHoldingAndDateIncludingDeleted(holding.getId(), snapshotDate);
+            restoreSnapshotIfDeleted(snapshot);
+        }
         HoldingSnapshot legacyDelayedSnapshot = legacyDelayedSnapshot(holding, officialNav.navDate(), snapshotDate);
         boolean insert = snapshot == null;
         if (insert) {
@@ -747,6 +811,9 @@ public class FundHoldingServiceImpl implements FundHoldingService {
         } else if (legacyDelayedSnapshot != null && legacyDelayedSnapshot.getId() != null) {
             holdingSnapshotMapper.deleteById(legacyDelayedSnapshot.getId());
         }
+        if (!insert && historicalSnapshotDate(snapshotDate)) {
+            return;
+        }
         snapshot.setUserId(holding.getUserId());
         snapshot.setAccountId(holding.getAccountId());
         snapshot.setHoldingId(holding.getId());
@@ -758,10 +825,26 @@ public class FundHoldingServiceImpl implements FundHoldingService {
         snapshot.setPositionRate(rate(holding.getHoldingAmount(), account.getTotalAsset()));
         snapshot.setUpdateTime(now);
         if (insert) {
-            holdingSnapshotMapper.insert(snapshot);
+            try {
+                holdingSnapshotMapper.insert(snapshot);
+            } catch (DuplicateKeyException exception) {
+                restoreSnapshotIfDeleted(holdingSnapshotMapper.selectByHoldingAndDateIncludingDeleted(
+                        holding.getId(), snapshotDate));
+            }
         } else {
             holdingSnapshotMapper.updateById(snapshot);
         }
+    }
+
+    private void restoreSnapshotIfDeleted(HoldingSnapshot snapshot) {
+        if (snapshot != null && Integer.valueOf(1).equals(snapshot.getDeleted())) {
+            holdingSnapshotMapper.restoreById(snapshot.getId());
+            snapshot.setDeleted(0);
+        }
+    }
+
+    private boolean historicalSnapshotDate(LocalDate snapshotDate) {
+        return snapshotDate != null && snapshotDate.isBefore(now().toLocalDate());
     }
 
     private HoldingSnapshot findSnapshot(Long holdingId, LocalDate snapshotDate) {
@@ -783,11 +866,19 @@ public class FundHoldingServiceImpl implements FundHoldingService {
     }
 
     private boolean intradayEstimateAllowed(FundHolding holding) {
-        return tradingCalendarService.isIntradayEstimateDisplayWindow(now()) && !delayedOfficialNavFund(holding);
+        return tradingCalendarService.isIntradayEstimateDisplayWindow(now());
     }
 
     private boolean intradayEstimateFetchAllowed(FundHolding holding) {
-        return tradingCalendarService.isIntradayEstimateWindow(now()) && !delayedOfficialNavFund(holding);
+        return intradayEstimateFetchAllowed(holding, false);
+    }
+
+    private boolean intradayEstimateFetchAllowed(FundHolding holding, boolean allowDisplayWindowFetch) {
+        LocalDateTime current = now();
+        boolean estimateWindow = allowDisplayWindowFetch
+                ? tradingCalendarService.isIntradayEstimateDisplayWindow(current)
+                : tradingCalendarService.isIntradayEstimateWindow(current);
+        return estimateWindow;
     }
 
     protected LocalDateTime now() {
