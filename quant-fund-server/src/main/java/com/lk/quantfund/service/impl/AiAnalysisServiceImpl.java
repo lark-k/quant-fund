@@ -42,6 +42,7 @@ public class AiAnalysisServiceImpl implements AiAnalysisService {
 
     private static final Logger log = LoggerFactory.getLogger(AiAnalysisServiceImpl.class);
     private static final BigDecimal ZERO = BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP);
+    private static final int AI_HISTORY_LIMIT = 5;
 
     private final AiAnalysisClient aiAnalysisClient;
     private final StrategyService strategyService;
@@ -113,6 +114,7 @@ public class AiAnalysisServiceImpl implements AiAnalysisService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public List<AiAnalysisReportVO> history(Long accountId, Long holdingId, String fundCode) {
         Long userId = UserContext.getUserId();
         List<Long> activeHoldingIds = fundHoldingMapper.selectList(new LambdaQueryWrapper<FundHolding>()
@@ -123,6 +125,7 @@ public class AiAnalysisServiceImpl implements AiAnalysisService {
         if (activeHoldingIds.isEmpty()) {
             return List.of();
         }
+        activeHoldingIds.forEach(activeHoldingId -> pruneHistory(userId, activeHoldingId));
         LambdaQueryWrapper<AiAnalysisReport> wrapper = new LambdaQueryWrapper<AiAnalysisReport>()
                 .eq(AiAnalysisReport::getUserId, userId)
                 .in(AiAnalysisReport::getHoldingId, activeHoldingIds);
@@ -231,7 +234,27 @@ public class AiAnalysisServiceImpl implements AiAnalysisService {
         report.setUpdateTime(now);
         report.setDeleted(0);
         aiAnalysisReportMapper.insert(report);
+        pruneHistory(userId, context.holdingId());
         return report;
+    }
+
+    private void pruneHistory(Long userId, Long holdingId) {
+        List<Long> expiredIds = aiAnalysisReportMapper.selectList(new LambdaQueryWrapper<AiAnalysisReport>()
+                        .select(AiAnalysisReport::getId)
+                        .eq(AiAnalysisReport::getUserId, userId)
+                        .eq(AiAnalysisReport::getHoldingId, holdingId)
+                        .orderByDesc(AiAnalysisReport::getAnalysisTime)
+                        .orderByDesc(AiAnalysisReport::getId))
+                .stream()
+                .skip(AI_HISTORY_LIMIT)
+                .map(AiAnalysisReport::getId)
+                .toList();
+        if (expiredIds.isEmpty()) {
+            return;
+        }
+        aiAnalysisReportMapper.delete(new LambdaQueryWrapper<AiAnalysisReport>()
+                .eq(AiAnalysisReport::getUserId, userId)
+                .in(AiAnalysisReport::getId, expiredIds));
     }
 
     private FundHolding loadOwnedHolding(Long userId, Long holdingId) {

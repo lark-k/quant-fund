@@ -10,7 +10,7 @@ import DisclaimerBar from '@/components/common/DisclaimerBar.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import MetricTile from '@/components/common/MetricTile.vue'
-import { money, percent, signed, toneClass } from '@/utils/format'
+import { formatDateTime, money, percent, signed, toneClass } from '@/utils/format'
 
 const route = useRoute()
 const holdings = ref<FundHolding[]>([])
@@ -26,10 +26,6 @@ const filteredReports = computed(() => {
   return reports.value.filter((item) => item.holdingId === selectedHoldingId.value)
 })
 
-const aiSourceText = computed(() => {
-  if (!selected.value) return ''
-  return selected.value.fallbackUsed ? 'AI 降级兜底' : 'DeepSeek 真实分析'
-})
 const selectedConclusion = computed(() => cleanAdvisoryText(selected.value?.finalConclusion || ''))
 const selectedDisclaimer = computed(() => selected.value?.disclaimer || DISCLAIMER)
 
@@ -113,7 +109,6 @@ async function generate() {
           <div class="ai-action">
             <ActionTag :action="selected.action" :text="selected.actionText" />
             <strong>{{ selectedConclusion }}</strong>
-            <span>{{ selected.deadline }} · {{ selected.modelName }} · {{ aiSourceText }}</span>
           </div>
           <div class="fund-badges">
             <span>{{ selected.fundCode }}</span>
@@ -191,11 +186,11 @@ async function generate() {
         <span class="item-meta">{{ filteredReports.length }} 条</span>
       </div>
       <div class="panel-body">
-        <table v-if="filteredReports.length" class="terminal-table">
+        <table v-if="filteredReports.length" class="terminal-table ai-history-table">
           <thead><tr><th>时间</th><th>基金</th><th>动作</th><th>建议金额</th><th>风险</th><th>模型</th><th>摘要</th></tr></thead>
           <tbody>
             <tr v-for="item in filteredReports" :key="item.id" @click="selectReport(item)">
-              <td>{{ item.analysisTime }}</td>
+              <td>{{ formatDateTime(item.analysisTime) }}</td>
               <td>{{ item.fundCode }}</td>
               <td><ActionTag :action="item.action" :text="item.actionText" /></td>
               <td>{{ money(item.suggestAmount) }}</td>

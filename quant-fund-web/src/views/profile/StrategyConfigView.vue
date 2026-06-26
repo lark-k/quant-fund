@@ -7,6 +7,7 @@ import type { RiskProfile, StrategyConfig, StrategyConfigRequest } from '@/types
 import DisclaimerBar from '@/components/common/DisclaimerBar.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
+import { formatDateTime } from '@/utils/format'
 
 type StrategyForm = {
   configName: string
@@ -287,7 +288,7 @@ async function saveStrategy() {
                   {{ item.enabled ? '启用' : '停用' }}
                 </span>
               </td>
-              <td>{{ item.updateTime }}</td>
+              <td>{{ formatDateTime(item.updateTime) }}</td>
             </tr>
           </tbody>
         </table>

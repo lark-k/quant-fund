@@ -261,6 +261,26 @@ export const aiSuggestions: AiAnalysisReport[] = [
   }
 ]
 
+const AI_HISTORY_LIMIT = 5
+
+function pruneAiHistory(holdingId?: number) {
+  const scopedReports = holdingId == null ? aiSuggestions : aiSuggestions.filter((report) => report.holdingId === holdingId)
+  scopedReports.sort((left, right) => {
+    const timeDiff = new Date(right.analysisTime).getTime() - new Date(left.analysisTime).getTime()
+    if (timeDiff !== 0) return timeDiff
+    return right.id - left.id
+  })
+  const expiredIds = new Set(scopedReports.slice(AI_HISTORY_LIMIT).map((report) => report.id))
+  if (!expiredIds.size) {
+    return
+  }
+  for (let index = aiSuggestions.length - 1; index >= 0; index -= 1) {
+    if (expiredIds.has(aiSuggestions[index].id)) {
+      aiSuggestions.splice(index, 1)
+    }
+  }
+}
+
 function latestAiSuggestions(items: AiAnalysisReport[]) {
   const latestByHolding = new Map<number, AiAnalysisReport>()
   for (const item of [...items].sort((left, right) => {
@@ -1096,6 +1116,7 @@ export const mockApi = {
   },
   async aiHistory() {
     const activeHoldingIds = new Set(holdings.map((holding) => holding.id))
+    activeHoldingIds.forEach((holdingId) => pruneAiHistory(holdingId))
     return aiSuggestions.filter((report) => activeHoldingIds.has(report.holdingId))
   },
   async profit() {
@@ -1274,6 +1295,7 @@ export const mockApi = {
       disclaimer: DISCLAIMER
     }
     aiSuggestions.unshift(report)
+    pruneAiHistory(holding.id)
     return report
   },
   async createTrade(request: TradeRecordRequest) {

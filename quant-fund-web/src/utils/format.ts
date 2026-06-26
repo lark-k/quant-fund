@@ -15,6 +15,14 @@ export function signed(value: number, digits = 2) {
   return `${sign}${money(value, digits)}`
 }
 
+export function formatDateTime(value?: string | null) {
+  if (!value) return '--'
+  const trimmed = value.trim()
+  const match = trimmed.match(/^(\d{4}-\d{2}-\d{2})[T\s](\d{2}:\d{2}:\d{2})(?:\.\d+)?/)
+  if (!match) return trimmed
+  return `${match[1]} ${match[2]}`
+}
+
 export function toneClass(value: number) {
   if (value > 0) return 'text-rise'
   if (value < 0) return 'text-fall'

@@ -105,8 +105,22 @@ const watchSuggestionCount = computed(() => {
 const highRiskSignalCount = computed(() => {
   return overview.value?.latestStrategySignals.filter((item) => item.riskLevel === 'HIGH').length || 0
 })
+const mediumRiskSignalCount = computed(() => {
+  return overview.value?.latestStrategySignals.filter((item) => item.riskLevel === 'MEDIUM').length || 0
+})
+const lowRiskSignalCount = computed(() => {
+  return overview.value?.latestStrategySignals.filter((item) => item.riskLevel === 'LOW').length || 0
+})
 const activeSignalCount = computed(() => {
   return overview.value?.latestStrategySignals.filter((item) => item.action !== 'HOLD' && item.action !== 'WATCH').length || 0
+})
+const signalRiskBuckets = computed(() => {
+  const total = Math.max(overview.value?.latestStrategySignals.length || 0, 1)
+  return [
+    { label: '高', level: 'HIGH', count: highRiskSignalCount.value, width: highRiskSignalCount.value / total * 100 },
+    { label: '中', level: 'MEDIUM', count: mediumRiskSignalCount.value, width: mediumRiskSignalCount.value / total * 100 },
+    { label: '低', level: 'LOW', count: lowRiskSignalCount.value, width: lowRiskSignalCount.value / total * 100 }
+  ]
 })
 const strategySignalGroups = computed<StrategySignalGroup[]>(() => {
   const signals = overview.value?.latestStrategySignals || []
@@ -263,6 +277,13 @@ function riskLevelClass(level: string) {
   return level === 'HIGH' ? 'risk-level-high' : ''
 }
 
+function riskCellClass(level?: string | null) {
+  if (level === 'HIGH') return 'risk-cell-high'
+  if (level === 'MEDIUM') return 'risk-cell-medium'
+  if (level === 'LOW') return 'risk-cell-low'
+  return 'risk-cell-none'
+}
+
 function displaySignalFund(signal: { fundCode: string; fundName?: string }) {
   if (signal.fundName && signal.fundName !== signal.fundCode) {
     return `${signal.fundCode} · ${signal.fundName}`
@@ -276,17 +297,6 @@ function displaySuggestionFund(item: { fundCode: string; fundName?: string }) {
     return `${item.fundCode} · ${fundName}`
   }
   return item.fundCode
-}
-
-function displayAlertFund(alert: { fundCode: string; fundName?: string }) {
-  if (alert.fundName && alert.fundName !== alert.fundCode) {
-    return `${alert.fundCode} · ${alert.fundName}`
-  }
-  return alert.fundCode
-}
-
-function alertTimeText(time: string) {
-  return time ? time.slice(11, 16) : '--:--'
 }
 function updatedBadgeText(date?: string | null) {
   if (!date) return '已更新'
@@ -569,30 +579,30 @@ function go(path: string) {
         <h2 class="panel-title">AI 今日建议</h2>
         <button class="panel-link" @click="go('/ai-analysis')">更多 ›</button>
       </div>
-      <div class="panel-body ai-panel-body">
-        <DisclaimerBar />
-        <div class="suggestion-scroll">
-          <article v-for="item in overview.todayAiSuggestions" :key="item.id" class="suggestion-item">
-            <div class="item-title">
-              <ActionTag :action="item.action" :text="item.actionText" />
-              <span class="suggestion-time">{{ item.analysisTime.slice(11, 16) }}</span>
-            </div>
-            <div class="item-copy suggestion-strategy">{{ displaySuggestionFund(item) }} · {{ item.strategy }}</div>
-            <div class="item-meta suggestion-conclusion">{{ item.finalConclusion }} 置信度：{{ percent(item.confidence * 100, 0) }}</div>
-          </article>
-          <EmptyState v-if="!overview.todayAiSuggestions.length" title="暂无 AI 建议" description="生成新的 AI 分析后会在此展示。" />
+      <div class="panel-body visual-panel-body">
+        <div class="insight-stat-row">
+          <div><span>买卖/转换</span><strong>{{ buySellSuggestionCount }}</strong></div>
+          <div><span>观察/持有</span><strong>{{ watchSuggestionCount }}</strong></div>
+          <div><span>覆盖持仓</span><strong>{{ overview.todayAiSuggestions.length }}</strong></div>
         </div>
-        <div class="ai-panel-footer">
-          <button class="muted-link" @click="go('/ai-analysis')">查看全部建议 ›</button>
-          <div class="mini-stat-grid">
-            <div><span>买卖/转换</span><strong>{{ buySellSuggestionCount }}</strong></div>
-            <div><span>观察/持有</span><strong>{{ watchSuggestionCount }}</strong></div>
-            <div><span>覆盖持仓</span><strong>{{ overview.todayAiSuggestions.length }}</strong></div>
-          </div>
-          <div class="item-copy">
-            {{ overview.disclaimer }}，最终买卖由用户在原平台手动确认。
-          </div>
+        <div v-if="overview.todayAiSuggestions.length" class="visual-table-wrap">
+          <table class="visual-table ai-table">
+            <thead>
+              <tr><th>基金</th><th>建议</th><th>风险</th><th>置信</th><th>时间</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in overview.todayAiSuggestions" :key="item.id">
+                <td class="visual-name-cell">{{ displaySuggestionFund(item) }}</td>
+                <td><ActionTag :action="item.action" :text="item.actionText" /></td>
+                <td><span :class="['risk-pill', riskCellClass(item.riskLevel)]">{{ displayRiskLevel(item.riskLevel) }}</span></td>
+                <td>{{ percent(item.confidence * 100, 0) }}</td>
+                <td>{{ item.analysisTime.slice(11, 16) }}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
+        <EmptyState v-else title="暂无 AI 建议" description="生成新的 AI 分析后会在此展示。" />
+        <div class="visual-footnote">{{ overview.disclaimer }}</div>
       </div>
     </section>
       </div>
@@ -603,59 +613,38 @@ function go(path: string) {
         <h2 class="panel-title">策略信号（实时）</h2>
         <button class="panel-link" @click="go('/strategy-config')">更多 ›</button>
       </div>
-      <div class="panel-body signal-list signal-list--compact">
-        <article v-for="signalGroup in visibleStrategySignalGroups" :key="signalGroup.key" class="signal-item signal-item--compact">
-          <div class="item-title signal-item-title">
-            <span>{{ signalGroup.latest.signalTime.slice(11, 16) }} · {{ displaySignalType(signalGroup.latest.signalType) }}</span>
-            <div class="signal-title-actions">
-              <ActionTag :action="signalGroup.latest.action" :text="signalGroup.latest.actionText" />
+      <div class="panel-body visual-panel-body">
+        <div class="signal-risk-bars">
+          <div v-for="bucket in signalRiskBuckets" :key="bucket.level" :class="['risk-bar-row', riskCellClass(bucket.level)]">
+            <span>{{ bucket.label }}</span>
+            <div class="risk-bar-track">
+              <i :class="riskCellClass(bucket.level)" :style="{ width: `${Math.max(bucket.width, bucket.count ? 8 : 0)}%` }"></i>
             </div>
+            <strong>{{ bucket.count }}</strong>
           </div>
-          <div class="signal-meta-row">
-            <span>{{ displaySignalFund(signalGroup.latest) }}</span>
-            <span>强度 {{ percent(signalGroup.latest.confidence * 100, 0) }}</span>
-            <span :class="riskLevelClass(signalGroup.latest.riskLevel)">{{ displayRiskLevel(signalGroup.latest.riskLevel) }}</span>
-          </div>
-          <div v-if="signalGroup.types.length > 1" class="signal-type-row">
-            <span v-for="type in signalGroup.types" :key="type">{{ displaySignalType(type) }}</span>
-          </div>
-          <div class="item-copy signal-reason">{{ signalGroup.latest.reasons[0] }}</div>
-        </article>
+        </div>
+        <div v-if="visibleStrategySignalGroups.length" class="visual-table-wrap">
+          <table class="visual-table signal-table">
+            <thead>
+              <tr><th>基金</th><th>信号</th><th>动作</th><th>风险</th><th>强度</th><th>时间</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="signalGroup in visibleStrategySignalGroups" :key="signalGroup.key">
+                <td class="visual-name-cell">{{ displaySignalFund(signalGroup.latest) }}</td>
+                <td>{{ displaySignalType(signalGroup.latest.signalType) }}</td>
+                <td><ActionTag :action="signalGroup.latest.action" :text="signalGroup.latest.actionText" /></td>
+                <td><span :class="['risk-pill', riskCellClass(signalGroup.latest.riskLevel)]">{{ displayRiskLevel(signalGroup.latest.riskLevel) }}</span></td>
+                <td>{{ percent(signalGroup.latest.confidence * 100, 0) }}</td>
+                <td>{{ signalGroup.latest.signalTime.slice(11, 16) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <EmptyState v-else title="暂无策略信号" description="策略规则触发后会在此展示。" />
         <button v-if="strategySignalCollapsed" class="panel-link signal-toggle" type="button" @click="showAllStrategySignals = !showAllStrategySignals">
           {{ showAllStrategySignals ? '收起' : `展开全部（${strategySignalGroups.length}）` }}
         </button>
-        <DisclaimerBar />
-        <div class="mini-stat-grid">
-          <div><span>活跃信号</span><strong>{{ activeSignalCount }}</strong></div>
-          <div><span>高风险</span><strong>{{ highRiskSignalCount }}</strong></div>
-          <div><span>监控基金</span><strong>{{ summary.holdingCount }}</strong></div>
-        </div>
-        <div class="item-copy">
-          策略信号用于盘中复盘，不触发真实下单。
-        </div>
-      </div>
-    </section>
-
-    <section class="panel risk-panel">
-      <div class="panel-header">
-        <h2 class="panel-title">风险预警</h2>
-        <button class="panel-link" @click="go('/ai-analysis')">更多 ›</button>
-      </div>
-      <div class="panel-body alert-list">
-        <div class="disclaimer-bar">{{ overview.disclaimer }} · 共 {{ overview.riskAlertCount }} 条预警</div>
-        <article v-for="alert in overview.riskAlerts" :key="alert.id" class="alert-item">
-          <div class="item-title">
-            <span>{{ alert.title }}</span>
-            <span>{{ alertTimeText(alert.alertTime) }}</span>
-          </div>
-          <div class="signal-meta-row">
-            <span>{{ displayAlertFund(alert) }}</span>
-            <span>{{ alert.alertType }}</span>
-            <span :class="riskLevelClass(alert.riskLevel)">{{ displayRiskLevel(alert.riskLevel) }}</span>
-          </div>
-          <div class="item-copy">{{ alert.content }}</div>
-        </article>
-        <EmptyState v-if="!overview.riskAlerts.length" title="暂无风险预警" description="策略信号或 AI 分析触发风险项后会在此展示。" />
+        <div class="visual-footnote">活跃 {{ activeSignalCount }} · 高风险 {{ highRiskSignalCount }} · 监控 {{ summary.holdingCount }} 只基金</div>
       </div>
     </section>
       </div>

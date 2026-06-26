@@ -9,7 +9,7 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import MetricTile from '@/components/common/MetricTile.vue'
 import { fundNavOption } from '@/components/charts/chartOptions'
-import { metricTone, money, percent, signed, toneClass } from '@/utils/format'
+import { formatDateTime, metricTone, money, percent, signed, toneClass } from '@/utils/format'
 import { DISCLAIMER } from '@/types/domain'
 import type { FundBasicInfo, FundEstimate, FundHolding, FundNavPoint, FundPeerRank, FundStockHolding, FundTheme, TradeRecord } from '@/types/domain'
 
@@ -317,7 +317,7 @@ async function generateAiAnalysis() {
           <MetricTile label="持仓占比" :value="hasMatchedHolding ? percent(holding.positionRate || 0) : '--'" />
           <MetricTile label="持仓成本" :value="hasMatchedHolding ? money(holding.holdingCost) : '--'" />
           <MetricTile label="持有收益" :value="hasMatchedHolding ? signed(holding.holdingProfit) : '--'" :delta="hasMatchedHolding ? percent(holding.holdingProfitRate) : ''" :tone="hasMatchedHolding ? metricTone(holding.holdingProfit) : 'neutral'" />
-          <MetricTile label="当日收益" :value="hasMatchedHolding ? signed(holding.dailyProfit) : '--'" :delta="hasMatchedHolding ? (holding.updateTime || estimate?.estimateTime || '--') : '未加入持仓'" :tone="hasMatchedHolding ? metricTone(holding.dailyProfit) : 'neutral'" />
+          <MetricTile label="当日收益" :value="hasMatchedHolding ? signed(holding.dailyProfit) : '--'" :delta="hasMatchedHolding ? formatDateTime(holding.updateTime || estimate?.estimateTime) : '未加入持仓'" :tone="hasMatchedHolding ? metricTone(holding.dailyProfit) : 'neutral'" />
           <MetricTile label="昨日收益" :value="hasMatchedHolding ? signed(holding.yesterdayProfit || 0) : '--'" :tone="hasMatchedHolding ? metricTone(holding.yesterdayProfit || 0) : 'neutral'" />
           <MetricTile label="持有天数" :value="hasMatchedHolding ? `${holding.holdingDays} 天` : '--'" />
           <MetricTile label="最大回撤" :value="percent(maxDrawdown)" sub-label="净值曲线估算" tone="fall" />
