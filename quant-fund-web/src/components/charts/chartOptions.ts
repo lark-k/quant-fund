@@ -214,13 +214,15 @@ function legacyFundNavOption(data: FundNavPoint[], trades: TradeRecord[] = []) {
     color: ['#6e91ff', '#ff9657', '#ff514b', '#2fd17c'],
     tooltip: { trigger: 'axis', backgroundColor: '#101a20', borderColor: '#283b46', textStyle: { color: '#d7e3ea' } },
     legend: { top: 0, textStyle: { color: '#8ea0ad' } },
-    grid: { top: 48, right: 68, bottom: 28, left: 64 },
+    grid: { top: 52, right: 84, bottom: 28, left: 78 },
     xAxis: { type: 'category', data: data.map((item) => item.date.slice(5)), ...axis },
     yAxis: [
       {
         name: '累计涨跌幅',
-        nameGap: 22,
-        nameTextStyle: { color: '#8ea0ad', fontSize: 11, align: 'left' },
+        nameLocation: 'end',
+        nameGap: 16,
+        nameRotate: 0,
+        nameTextStyle: { color: '#8ea0ad', fontSize: 11, align: 'left', verticalAlign: 'bottom', padding: [0, 0, 6, 0] },
         type: 'value',
         axisLabel: { color: '#7f93a1', fontSize: 11, formatter: '{value}%' },
         axisLine: axis.axisLine,
@@ -228,8 +230,10 @@ function legacyFundNavOption(data: FundNavPoint[], trades: TradeRecord[] = []) {
       },
       {
         name: '当前回撤',
-        nameGap: 24,
-        nameTextStyle: { color: '#8ea0ad', fontSize: 11, align: 'right' },
+        nameLocation: 'end',
+        nameGap: 16,
+        nameRotate: 0,
+        nameTextStyle: { color: '#8ea0ad', fontSize: 11, align: 'right', verticalAlign: 'bottom', padding: [0, 0, 6, 0] },
         type: 'value',
         axisLabel: { color: '#7f93a1', fontSize: 11, formatter: '{value}%', margin: 8 },
         axisLine: axis.axisLine,
@@ -243,6 +247,7 @@ function legacyFundNavOption(data: FundNavPoint[], trades: TradeRecord[] = []) {
 type FundNavChartOptions = {
   costNav?: number | null
   indexName?: string
+  showLegend?: boolean
 }
 
 function threePointAxisLabels(data: FundNavPoint[]) {
@@ -255,6 +260,34 @@ function threePointAxisLabels(data: FundNavPoint[]) {
   ])
 }
 
+function rebaseReturnRates(rates: Array<number | null | undefined>) {
+  const base = rates.find((value) => value !== null && value !== undefined)
+  if (base === null || base === undefined) {
+    return rates.map(() => null)
+  }
+  const baseFactor = 1 + base / 100
+  if (baseFactor <= 0) {
+    return rates.map((value) => value ?? null)
+  }
+  return rates.map((value) => {
+    if (value === null || value === undefined) return null
+    return Number((((1 + value / 100) / baseFactor - 1) * 100).toFixed(2))
+  })
+}
+
+function latestDefined(values: Array<number | null>) {
+  for (let index = values.length - 1; index >= 0; index--) {
+    const value = values[index]
+    if (value !== null && value !== undefined) return value
+  }
+  return null
+}
+
+function signedPercentText(value: number | null) {
+  if (value === null || value === undefined) return '--'
+  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`
+}
+
 export function fundNavOption(data: FundNavPoint[], trades: TradeRecord[] = [], options: FundNavChartOptions = {}) {
   const xAxisDates = data.map((item) => item.date)
   const axisLabelDates = threePointAxisLabels(data)
@@ -265,11 +298,15 @@ export function fundNavOption(data: FundNavPoint[], trades: TradeRecord[] = [], 
     return Number(((item.nav - peak) / peak * 100).toFixed(2))
   })
   const fundReturn = data.map((item) => Number(((item.nav - firstNav) / Math.max(firstNav, 0.0001) * 100).toFixed(2)))
-  const indexReturn = data.map((item) => item.indexReturnRate ?? null)
+  const indexReturn = rebaseReturnRates(data.map((item) => item.indexReturnRate))
   const hasIndexReturn = indexReturn.some((value) => value !== null)
   const indexName = options.indexName || data.find((item) => item.indexReturnRate !== null && item.indexReturnRate !== undefined)?.indexName || '沪深300'
+  const showLegend = options.showLegend !== false
   const costNav = options.costNav && options.costNav > 0 ? options.costNav : null
   const costReturn = costNav ? Number(((costNav - firstNav) / Math.max(firstNav, 0.0001) * 100).toFixed(2)) : null
+  const costSeriesName = costNav ? `成本价 ${costNav.toFixed(4)}` : null
+  const latestFundReturn = fundReturn[fundReturn.length - 1] ?? null
+  const latestIndexReturn = latestDefined(indexReturn)
   const tradeByDate = new Map<string, TradeRecord[]>()
   for (const trade of trades) {
     const day = trade.tradeTime.slice(0, 10)
@@ -295,7 +332,7 @@ export function fundNavOption(data: FundNavPoint[], trades: TradeRecord[] = [], 
   }
   if (costReturn !== null) {
     series.splice(hasIndexReturn ? 2 : 1, 0, {
-      name: `成本价 ${costNav?.toFixed(4)}`,
+      name: costSeriesName,
       type: 'line',
       showSymbol: false,
       data: data.map(() => costReturn),
@@ -321,6 +358,26 @@ export function fundNavOption(data: FundNavPoint[], trades: TradeRecord[] = [], 
     return rows.join('<br/>')
   }
 
+  const legendFormatter = (name: string) => {
+    if (name === '本基金') {
+      const tone = latestFundReturn !== null && latestFundReturn < 0 ? 'fall' : 'rise'
+      return `{label|本基金} {${tone}|${signedPercentText(latestFundReturn)}}`
+    }
+    if (name === indexName) {
+      const tone = latestIndexReturn !== null && latestIndexReturn < 0 ? 'fall' : 'rise'
+      return `{label|${indexName} ▼} {${tone}|${signedPercentText(latestIndexReturn)}}`
+    }
+    if (costSeriesName && name === costSeriesName) {
+      return `{label|成本价 ${costNav?.toFixed(4)}}`
+    }
+    return name
+  }
+  const legendData = [
+    '本基金',
+    ...(hasIndexReturn ? [indexName] : []),
+    ...(costSeriesName ? [costSeriesName] : [])
+  ]
+
   return {
     color: ['#6e91ff', '#ff9657', '#aeb6c2', '#ff514b', '#2fd17c'],
     tooltip: {
@@ -330,8 +387,27 @@ export function fundNavOption(data: FundNavPoint[], trades: TradeRecord[] = [], 
       textStyle: { color: '#d7e3ea' },
       formatter: tooltipFormatter
     },
-    legend: { top: 0, textStyle: { color: '#8ea0ad' } },
-    grid: { top: 48, right: 68, bottom: 28, left: 64 },
+    legend: showLegend
+      ? {
+          top: 0,
+          left: 'center',
+          orient: 'horizontal',
+          selectedMode: false,
+          itemGap: 18,
+          data: legendData,
+          formatter: legendFormatter,
+          textStyle: {
+            color: '#8ea0ad',
+            fontSize: 12,
+            rich: {
+              label: { color: '#8ea0ad', fontSize: 12 },
+              rise: { color: '#ff514b', fontSize: 12 },
+              fall: { color: '#2fd17c', fontSize: 12 },
+            }
+          }
+        }
+      : { show: false },
+    grid: { top: showLegend ? 52 : 42, right: 84, bottom: 28, left: 78 },
     xAxis: {
       type: 'category',
       data: xAxisDates,
@@ -351,8 +427,10 @@ export function fundNavOption(data: FundNavPoint[], trades: TradeRecord[] = [], 
     yAxis: [
       {
         name: '累计涨跌幅',
-        nameGap: 22,
-        nameTextStyle: { color: '#8ea0ad', fontSize: 11, align: 'left' },
+        nameLocation: 'end',
+        nameGap: 16,
+        nameRotate: 0,
+        nameTextStyle: { color: '#8ea0ad', fontSize: 11, align: 'left', verticalAlign: 'bottom', padding: [0, 0, 6, 0] },
         type: 'value',
         axisLabel: { color: '#7f93a1', fontSize: 11, formatter: '{value}%' },
         axisLine: axis.axisLine,
@@ -360,8 +438,10 @@ export function fundNavOption(data: FundNavPoint[], trades: TradeRecord[] = [], 
       },
       {
         name: '当前回撤',
-        nameGap: 24,
-        nameTextStyle: { color: '#8ea0ad', fontSize: 11, align: 'right' },
+        nameLocation: 'end',
+        nameGap: 16,
+        nameRotate: 0,
+        nameTextStyle: { color: '#8ea0ad', fontSize: 11, align: 'right', verticalAlign: 'bottom', padding: [0, 0, 6, 0] },
         type: 'value',
         axisLabel: { color: '#7f93a1', fontSize: 11, formatter: '{value}%', margin: 8 },
         axisLine: axis.axisLine,

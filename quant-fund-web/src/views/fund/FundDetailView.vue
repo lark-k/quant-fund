@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { quantApi } from '@/api/quant'
@@ -23,6 +23,12 @@ const holding = ref<FundHolding>()
 const basicInfo = ref<FundBasicInfo>()
 const estimate = ref<FundEstimate | null>(null)
 const navPoints = ref<FundNavPoint[]>([])
+type NavCacheEntry = {
+  points: FundNavPoint[]
+  fetchedAt: number
+  latestDate: string
+}
+const navCache = ref<Record<string, NavCacheEntry>>({})
 const tradePoints = ref<TradeRecord[]>([])
 const heavyStocks = ref<FundStockHolding[]>([])
 const themes = ref<FundTheme[]>([])
@@ -31,6 +37,8 @@ const hasMatchedHolding = ref(false)
 const infoLoadFailed = ref(false)
 const activeNavRange = ref('1M')
 const selectedIndexCode = ref('000300')
+const NAV_CACHE_TTL_MS = 2 * 60 * 1000
+const NAV_REFRESH_INTERVAL_MS = 2 * 60 * 1000
 
 const navRangeOptions = [
   { label: '近1月', value: '1M', months: 1 },
@@ -59,9 +67,27 @@ const costNav = computed(() => {
   if (!hasMatchedHolding.value || !holding.value || holding.value.holdingShare <= 0 || holding.value.holdingCost <= 0) return null
   return holding.value.holdingCost / holding.value.holdingShare
 })
+const latestFundReturn = computed(() => {
+  const points = chartNavPoints.value
+  if (points.length < 2) return null
+  const firstNav = points[0].nav
+  const latestNav = points[points.length - 1].nav
+  return firstNav > 0 ? (latestNav - firstNav) / firstNav * 100 : null
+})
+const latestIndexReturn = computed(() => {
+  const rates = chartNavPoints.value
+    .map((point) => point.indexReturnRate)
+    .filter((value): value is number => value !== null && value !== undefined)
+  if (!rates.length) return null
+  const base = rates[0]
+  const latest = rates[rates.length - 1]
+  const baseFactor = 1 + base / 100
+  return baseFactor > 0 ? ((1 + latest / 100) / baseFactor - 1) * 100 : latest
+})
 const chart = computed(() => fundNavOption(chartNavPoints.value, tradePoints.value, {
   costNav: costNav.value,
-  indexName: selectedIndexName.value
+  indexName: selectedIndexName.value,
+  showLegend: false
 }))
 const effectiveEstimateRate = computed(() => holding.value?.relatedThemeRate ?? estimate.value?.estimateGrowthRate ?? 0)
 const canGenerateAiAnalysis = computed(() => Boolean(hasMatchedHolding.value && holding.value?.id))
@@ -94,10 +120,13 @@ const rankText = computed(() => {
   if (peerRank.value.rank && peerRank.value.total) return `${peerRank.value.rank}/${peerRank.value.total}`
   return peerRank.value.rankText || '--'
 })
+let navRequestSeq = 0
+let navRefreshTimer: ReturnType<typeof window.setInterval> | null = null
 
 onMounted(loadDetail)
+onBeforeUnmount(stopNavRefreshTimer)
 watch(() => route.fullPath, loadDetail)
-watch(selectedIndexCode, loadSelectedIndexNav)
+watch(selectedIndexCode, () => loadSelectedIndexNav(false))
 
 function navText(value: number | null | undefined) {
   return value === null || value === undefined ? '--' : value.toFixed(4)
@@ -105,6 +134,11 @@ function navText(value: number | null | undefined) {
 
 function nullablePercent(value: number | null | undefined, digits = 2) {
   return value === null || value === undefined ? '--' : percent(value, digits)
+}
+
+function legendTone(value: number | null | undefined) {
+  if (value === null || value === undefined) return 'neutral'
+  return value >= 0 ? 'rise' : 'fall'
 }
 
 function isoDate(date: Date) {
@@ -134,17 +168,83 @@ function filterNavPoints(points: FundNavPoint[], range: string) {
   return filtered.length >= 2 ? filtered : points.slice(-2)
 }
 
-async function loadSelectedIndexNav() {
+function sortNavPoints(points: FundNavPoint[]) {
+  return points
+    .slice()
+    .sort((left, right) => left.date.localeCompare(right.date))
+}
+
+function latestNavDate(points: FundNavPoint[]) {
+  return points[points.length - 1]?.date || ''
+}
+
+function freshCacheEntry(indexCode: string) {
+  const entry = navCache.value[indexCode]
+  if (!entry?.points.length) return null
+  return Date.now() - entry.fetchedAt <= NAV_CACHE_TTL_MS ? entry : null
+}
+
+function cacheNav(indexCode: string, points: FundNavPoint[]) {
+  const sorted = sortNavPoints(points)
+  const nextEntry = {
+    points: sorted,
+    fetchedAt: Date.now(),
+    latestDate: latestNavDate(sorted)
+  }
+  const currentLatestDate = latestNavDate(navPoints.value)
+  navCache.value = currentLatestDate && nextEntry.latestDate && nextEntry.latestDate !== currentLatestDate
+    ? { [indexCode]: nextEntry }
+    : { ...navCache.value, [indexCode]: nextEntry }
+  return nextEntry
+}
+
+function stopNavRefreshTimer() {
+  if (navRefreshTimer !== null) {
+    window.clearInterval(navRefreshTimer)
+    navRefreshTimer = null
+  }
+}
+
+function startNavRefreshTimer() {
+  stopNavRefreshTimer()
+  navRefreshTimer = window.setInterval(() => {
+    void loadSelectedIndexNav(true)
+  }, NAV_REFRESH_INTERVAL_MS)
+}
+
+async function loadSelectedIndexNav(force = false) {
   const code = fundCode.value
   if (!code) return
+  const indexCode = selectedIndexCode.value
+  const cached = freshCacheEntry(indexCode)
+  if (!force && cached) {
+    navPoints.value = cached.points
+    return
+  }
+  const requestSeq = ++navRequestSeq
   const nav = await quiet(quantApi.fundNav(code, {
     startDate: navHistoryStartDate('3Y'),
     endDate: navHistoryEndDate(),
-    indexCode: selectedIndexCode.value
+    indexCode
   }))
-  navPoints.value = (nav || [])
-    .slice()
-    .sort((left, right) => left.date.localeCompare(right.date))
+  const entry = cacheNav(indexCode, nav || [])
+  if (requestSeq === navRequestSeq && selectedIndexCode.value === indexCode) {
+    navPoints.value = entry.points
+  }
+}
+
+function prefetchIndexNavs(code: string) {
+  for (const option of indexOptions) {
+    if (option.value === selectedIndexCode.value || freshCacheEntry(option.value)) continue
+    void quantApi.fundNav(code, {
+      startDate: navHistoryStartDate('3Y'),
+      endDate: navHistoryEndDate(),
+      indexCode: option.value
+    }).then((nav) => {
+      if (fundCode.value !== code) return
+      cacheNav(option.value, nav)
+    }).catch(() => undefined)
+  }
 }
 
 function stockRatio(stock: FundStockHolding) {
@@ -160,6 +260,7 @@ function resetDetailState() {
   basicInfo.value = undefined
   estimate.value = null
   navPoints.value = []
+  navCache.value = {}
   tradePoints.value = []
   heavyStocks.value = []
   themes.value = []
@@ -177,6 +278,7 @@ async function quiet<T>(request: Promise<T>): Promise<T | null> {
 }
 
 async function loadDetail() {
+  stopNavRefreshTimer()
   loading.value = true
   try {
     const holdings = await quiet(quantApi.holdings()) || []
@@ -219,9 +321,9 @@ async function loadDetail() {
     }
     basicInfo.value = info
     estimate.value = estimateResult
-    navPoints.value = (nav || [])
-      .slice()
-      .sort((left, right) => left.date.localeCompare(right.date))
+    const sortedNav = sortNavPoints(nav || [])
+    navPoints.value = sortedNav
+    cacheNav(selectedIndexCode.value, sortedNav)
     tradePoints.value = (tradeList || []).filter((trade) => trade.fundCode === code)
     heavyStocks.value = stocks || []
     themes.value = themeList || []
@@ -259,6 +361,8 @@ async function loadDetail() {
       updateTime: estimateResult?.estimateTime || '',
       disclaimer: DISCLAIMER
     }
+    prefetchIndexNavs(code)
+    startNavRefreshTimer()
   } finally {
     loading.value = false
   }
@@ -404,18 +508,29 @@ async function generateAiAnalysis() {
     <section class="panel">
       <div class="panel-header">
         <h2 class="panel-title">净值走势</h2>
-        <div class="fund-chart-toolbar">
-          <span class="item-meta">本基金 / 匹配指数 / 成本价 / 买卖点</span>
-          <label class="index-select-label">
-            <span>对比指数</span>
-            <select v-model="selectedIndexCode" class="form-control compact-select">
-              <option v-for="item in indexOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
-            </select>
-          </label>
-        </div>
       </div>
       <div class="panel-body">
-        <BaseChart v-if="chartNavPoints.length >= 2" :key="chartKey" :option="chart" :height="340" />
+        <div v-if="chartNavPoints.length >= 2" class="fund-chart-wrap">
+          <div class="fund-chart-legend">
+            <span class="legend-line fund-line"></span>
+            <span>本基金</span>
+            <strong :class="legendTone(latestFundReturn)">{{ nullablePercent(latestFundReturn, 2) }}</strong>
+
+            <span class="legend-line index-line"></span>
+            <label class="legend-index-picker">
+              <select v-model="selectedIndexCode" aria-label="切换对比指数">
+                <option v-for="item in indexOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
+              </select>
+              <span>{{ selectedIndexName }}</span>
+              <span class="legend-caret">▼</span>
+            </label>
+            <strong :class="legendTone(latestIndexReturn)">{{ nullablePercent(latestIndexReturn, 2) }}</strong>
+
+            <span v-if="costNav" class="legend-line cost-line"></span>
+            <span v-if="costNav" class="legend-cost">成本价 {{ navText(costNav) }}</span>
+          </div>
+          <BaseChart :key="chartKey" :option="chart" :height="320" />
+        </div>
         <div v-if="navPoints.length >= 2" class="fund-range-tabs">
           <button
             v-for="item in navRangeOptions"
