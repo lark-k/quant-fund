@@ -53,8 +53,9 @@ public class FundController {
     public ApiResponse<List<FundNavPointDTO>> historicalNav(
             @PathVariable String fundCode,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate) {
-        return ApiResponse.success(fundQueryService.getHistoricalNav(fundCode, startDate, endDate));
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate,
+            @RequestParam(required = false) String indexCode) {
+        return ApiResponse.success(fundQueryService.getHistoricalNav(fundCode, startDate, endDate, indexCode));
     }
 
     @GetMapping("/{fundCode}/estimate")

@@ -18,7 +18,11 @@ public interface FundQueryService {
 
     FundBasicInfoDTO getBasicInfo(String fundCode);
 
-    List<FundNavPointDTO> getHistoricalNav(String fundCode, LocalDate startDate, LocalDate endDate);
+    default List<FundNavPointDTO> getHistoricalNav(String fundCode, LocalDate startDate, LocalDate endDate) {
+        return getHistoricalNav(fundCode, startDate, endDate, null);
+    }
+
+    List<FundNavPointDTO> getHistoricalNav(String fundCode, LocalDate startDate, LocalDate endDate, String indexCode);
 
     FundEstimateDTO getIntradayEstimate(String fundCode, boolean manualRefresh);
 

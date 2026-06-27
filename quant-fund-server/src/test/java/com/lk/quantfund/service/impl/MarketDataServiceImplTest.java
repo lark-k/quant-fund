@@ -96,6 +96,43 @@ class MarketDataServiceImplTest {
     }
 
     @Test
+    void historicalIndexShouldRefreshWhenCachedRangeIsTooShort() {
+        String body = """
+                {"data":{"code":"399006","name":"创业板指","klines":[
+                "2025-06-26,2000.00,2010.00,2020.00,1990.00,100,200,1.00,0.50,10.00,0.10",
+                "2026-06-26,2600.00,2620.00,2630.00,2590.00,100,200,1.00,0.77,20.00,0.10"
+                ]}}
+                """;
+        AtomicReference<ClientRequest> request = new AtomicReference<>();
+        ExchangeFunction exchangeFunction = clientRequest -> {
+            request.set(clientRequest);
+            return Mono.just(ClientResponse.create(HttpStatus.OK).body(body).build());
+        };
+        when(marketIndexDailyMapper.selectList(any(LambdaQueryWrapper.class)))
+                .thenReturn(List.of(
+                        point(LocalDate.of(2026, 6, 22), "2550.0000", "0.1000"),
+                        point(LocalDate.of(2026, 6, 26), "2620.0000", "0.7700")
+                ))
+                .thenReturn(List.of(
+                        point(LocalDate.of(2025, 6, 26), "2010.0000", "0.5000"),
+                        point(LocalDate.of(2026, 6, 26), "2620.0000", "0.7700")
+                ));
+        when(marketIndexDailyMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(null);
+        MarketDataServiceImpl service = new MarketDataServiceImpl(
+                WebClient.builder().exchangeFunction(exchangeFunction),
+                new QuantFundProperties(),
+                new ObjectMapper(),
+                marketIndexDailyMapper
+        );
+
+        var history = service.historicalIndex("399006", LocalDate.of(2025, 6, 26), LocalDate.of(2026, 6, 26));
+
+        assertThat(request.get().url().toString()).contains("secid=0.399006");
+        assertThat(history).hasSize(2);
+        assertThat(history.getFirst().tradeDate()).isEqualTo(LocalDate.of(2025, 6, 26));
+    }
+
+    @Test
     void historicalIndexShouldUseGlobalMarketSecidForNasdaq() {
         AtomicReference<ClientRequest> request = new AtomicReference<>();
         ExchangeFunction exchangeFunction = clientRequest -> {

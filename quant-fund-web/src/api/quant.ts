@@ -134,14 +134,14 @@ export const quantApi = {
   searchFunds(keyword: string, mode: FundSearchMode = 'FUZZY'): Promise<FundSearchResult[]> {
     return USE_MOCK ? mockApi.searchFunds(keyword, mode) : http.get('/funds/search', { params: { keyword, mode } })
   },
-  async fundNav(fundCode: string): Promise<FundNavPoint[]> {
+  async fundNav(fundCode: string, params?: { startDate?: string; endDate?: string; indexCode?: string }): Promise<FundNavPoint[]> {
     if (USE_MOCK) return mockApi.fundNav(fundCode)
     type RawFundNavPoint = FundNavPoint & {
       navDate?: string
       unitNav?: number
       sourceName?: string
     }
-    const points = await http.get(`/funds/${fundCode}/nav`) as unknown as RawFundNavPoint[]
+    const points = await http.get(`/funds/${fundCode}/nav`, { params }) as unknown as RawFundNavPoint[]
     return points.map((point) => ({
       ...point,
       date: point.date || point.navDate || '',

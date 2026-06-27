@@ -173,7 +173,7 @@ export function calendarBarOption(data: ProfitCalendar['days']) {
   }
 }
 
-export function fundNavOption(data: FundNavPoint[], trades: TradeRecord[] = []) {
+function legacyFundNavOption(data: FundNavPoint[], trades: TradeRecord[] = []) {
   const peakSeries: number[] = []
   let peak = data[0]?.nav || 1
   const firstNav = data[0]?.nav || 1
@@ -214,11 +214,159 @@ export function fundNavOption(data: FundNavPoint[], trades: TradeRecord[] = []) 
     color: ['#6e91ff', '#ff9657', '#ff514b', '#2fd17c'],
     tooltip: { trigger: 'axis', backgroundColor: '#101a20', borderColor: '#283b46', textStyle: { color: '#d7e3ea' } },
     legend: { top: 0, textStyle: { color: '#8ea0ad' } },
-    grid: { top: 34, right: 16, bottom: 24, left: 46 },
+    grid: { top: 48, right: 68, bottom: 28, left: 64 },
     xAxis: { type: 'category', data: data.map((item) => item.date.slice(5)), ...axis },
     yAxis: [
-      { type: 'value', axisLabel: { color: '#7f93a1', fontSize: 11, formatter: '{value}%' }, axisLine: axis.axisLine, splitLine: axis.splitLine },
-      { type: 'value', axisLabel: { color: '#7f93a1', fontSize: 11, formatter: '{value}%' }, axisLine: axis.axisLine, splitLine: { show: false } }
+      {
+        name: '累计涨跌幅',
+        nameGap: 22,
+        nameTextStyle: { color: '#8ea0ad', fontSize: 11, align: 'left' },
+        type: 'value',
+        axisLabel: { color: '#7f93a1', fontSize: 11, formatter: '{value}%' },
+        axisLine: axis.axisLine,
+        splitLine: axis.splitLine
+      },
+      {
+        name: '当前回撤',
+        nameGap: 24,
+        nameTextStyle: { color: '#8ea0ad', fontSize: 11, align: 'right' },
+        type: 'value',
+        axisLabel: { color: '#7f93a1', fontSize: 11, formatter: '{value}%', margin: 8 },
+        axisLine: axis.axisLine,
+        splitLine: { show: false }
+      }
+    ],
+    series
+  }
+}
+
+type FundNavChartOptions = {
+  costNav?: number | null
+  indexName?: string
+}
+
+function threePointAxisLabels(data: FundNavPoint[]) {
+  if (!data.length) return new Set<string>()
+  const middleIndex = Math.floor((data.length - 1) / 2)
+  return new Set([
+    data[0].date,
+    data[middleIndex].date,
+    data[data.length - 1].date
+  ])
+}
+
+export function fundNavOption(data: FundNavPoint[], trades: TradeRecord[] = [], options: FundNavChartOptions = {}) {
+  const xAxisDates = data.map((item) => item.date)
+  const axisLabelDates = threePointAxisLabels(data)
+  const firstNav = data[0]?.nav || 1
+  let peak = data[0]?.nav || 1
+  const drawdown = data.map((item) => {
+    peak = Math.max(peak, item.nav)
+    return Number(((item.nav - peak) / peak * 100).toFixed(2))
+  })
+  const fundReturn = data.map((item) => Number(((item.nav - firstNav) / Math.max(firstNav, 0.0001) * 100).toFixed(2)))
+  const indexReturn = data.map((item) => item.indexReturnRate ?? null)
+  const hasIndexReturn = indexReturn.some((value) => value !== null)
+  const indexName = options.indexName || data.find((item) => item.indexReturnRate !== null && item.indexReturnRate !== undefined)?.indexName || '沪深300'
+  const costNav = options.costNav && options.costNav > 0 ? options.costNav : null
+  const costReturn = costNav ? Number(((costNav - firstNav) / Math.max(firstNav, 0.0001) * 100).toFixed(2)) : null
+  const tradeByDate = new Map<string, TradeRecord[]>()
+  for (const trade of trades) {
+    const day = trade.tradeTime.slice(0, 10)
+    tradeByDate.set(day, [...(tradeByDate.get(day) || []), trade])
+  }
+  const buyPoints = data.flatMap((point, index) => {
+    const tradesOnDay = (tradeByDate.get(point.date) || []).filter((trade) => ['BUY', 'REGULAR_INVEST', 'CONVERT_IN'].includes(trade.tradeType))
+    return tradesOnDay.map(() => [point.date, fundReturn[index]])
+  })
+  const sellPoints = data.flatMap((point, index) => {
+    const tradesOnDay = (tradeByDate.get(point.date) || []).filter((trade) => ['SELL', 'CONVERT_OUT'].includes(trade.tradeType))
+    return tradesOnDay.map(() => [point.date, fundReturn[index]])
+  })
+
+  const series: Array<Record<string, unknown>> = [
+    { name: '本基金', type: 'line', smooth: true, showSymbol: false, data: fundReturn, areaStyle: { opacity: 0.08 } },
+    { name: '买入', type: 'scatter', symbolSize: 9, data: buyPoints, itemStyle: { color: '#ff514b' }, z: 8 },
+    { name: '卖出', type: 'scatter', symbolSize: 9, data: sellPoints, itemStyle: { color: '#2fd17c' }, z: 8 },
+    { name: '当前回撤', type: 'line', yAxisIndex: 1, smooth: true, showSymbol: false, data: drawdown, lineStyle: { width: 0 }, areaStyle: { opacity: 0.12 } }
+  ]
+  if (hasIndexReturn) {
+    series.splice(1, 0, { name: indexName, type: 'line', smooth: true, showSymbol: false, data: indexReturn })
+  }
+  if (costReturn !== null) {
+    series.splice(hasIndexReturn ? 2 : 1, 0, {
+      name: `成本价 ${costNav?.toFixed(4)}`,
+      type: 'line',
+      showSymbol: false,
+      data: data.map(() => costReturn),
+      lineStyle: { width: 2, type: 'dashed', color: '#aeb6c2' },
+      itemStyle: { color: '#aeb6c2' }
+    })
+  }
+
+  const tooltipFormatter = (params: Array<{ axisValue?: string, seriesName: string, value: unknown, marker: string }>) => {
+    const rows = [params[0]?.axisValue || '']
+    for (const item of params) {
+      const value = Array.isArray(item.value) ? item.value[1] : item.value
+      if (item.seriesName.startsWith('成本价')) {
+        rows.push(`${item.marker}${item.seriesName}`)
+      } else if (item.seriesName === '买入' || item.seriesName === '卖出') {
+        rows.push(`${item.marker}${item.seriesName}`)
+      } else if (value === null || value === undefined || value === '-') {
+        rows.push(`${item.marker}${item.seriesName} --`)
+      } else {
+        rows.push(`${item.marker}${item.seriesName} ${Number(value).toFixed(2)}%`)
+      }
+    }
+    return rows.join('<br/>')
+  }
+
+  return {
+    color: ['#6e91ff', '#ff9657', '#aeb6c2', '#ff514b', '#2fd17c'],
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: '#101a20',
+      borderColor: '#283b46',
+      textStyle: { color: '#d7e3ea' },
+      formatter: tooltipFormatter
+    },
+    legend: { top: 0, textStyle: { color: '#8ea0ad' } },
+    grid: { top: 48, right: 68, bottom: 28, left: 64 },
+    xAxis: {
+      type: 'category',
+      data: xAxisDates,
+      axisLine: axis.axisLine,
+      axisTick: {
+        alignWithLabel: true,
+        interval: (_index: number, value: string) => axisLabelDates.has(value)
+      },
+      axisLabel: {
+        color: '#7f93a1',
+        fontSize: 11,
+        interval: 0,
+        formatter: (value: string) => axisLabelDates.has(value) ? value : ''
+      },
+      splitLine: { show: false }
+    },
+    yAxis: [
+      {
+        name: '累计涨跌幅',
+        nameGap: 22,
+        nameTextStyle: { color: '#8ea0ad', fontSize: 11, align: 'left' },
+        type: 'value',
+        axisLabel: { color: '#7f93a1', fontSize: 11, formatter: '{value}%' },
+        axisLine: axis.axisLine,
+        splitLine: axis.splitLine
+      },
+      {
+        name: '当前回撤',
+        nameGap: 24,
+        nameTextStyle: { color: '#8ea0ad', fontSize: 11, align: 'right' },
+        type: 'value',
+        axisLabel: { color: '#7f93a1', fontSize: 11, formatter: '{value}%', margin: 8 },
+        axisLine: axis.axisLine,
+        splitLine: { show: false }
+      }
     ],
     series
   }

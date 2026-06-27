@@ -29,9 +29,40 @@ const themes = ref<FundTheme[]>([])
 const peerRank = ref<FundPeerRank | null>(null)
 const hasMatchedHolding = ref(false)
 const infoLoadFailed = ref(false)
+const activeNavRange = ref('1M')
+const selectedIndexCode = ref('000300')
+
+const navRangeOptions = [
+  { label: '近1月', value: '1M', months: 1 },
+  { label: '近3月', value: '3M', months: 3 },
+  { label: '近6月', value: '6M', months: 6 },
+  { label: '近1年', value: '1Y', months: 12 },
+  { label: '近3年', value: '3Y', months: 36 }
+]
+
+const indexOptions = [
+  { label: '沪深300', value: '000300' },
+  { label: '创业板指', value: '399006' },
+  { label: '上证指数', value: '000001' },
+  { label: '深证成指', value: '399001' }
+]
 
 const fundCode = computed(() => String(route.query.fundCode || holding.value?.fundCode || ''))
-const chart = computed(() => fundNavOption(navPoints.value, tradePoints.value))
+const selectedIndexName = computed(() => indexOptions.find((item) => item.value === selectedIndexCode.value)?.label || '沪深300')
+const chartNavPoints = computed(() => filterNavPoints(navPoints.value, activeNavRange.value))
+const chartKey = computed(() => {
+  const first = chartNavPoints.value[0]?.date || ''
+  const last = chartNavPoints.value[chartNavPoints.value.length - 1]?.date || ''
+  return `${fundCode.value}-${activeNavRange.value}-${selectedIndexCode.value}-${chartNavPoints.value.length}-${first}-${last}`
+})
+const costNav = computed(() => {
+  if (!hasMatchedHolding.value || !holding.value || holding.value.holdingShare <= 0 || holding.value.holdingCost <= 0) return null
+  return holding.value.holdingCost / holding.value.holdingShare
+})
+const chart = computed(() => fundNavOption(chartNavPoints.value, tradePoints.value, {
+  costNav: costNav.value,
+  indexName: selectedIndexName.value
+}))
 const effectiveEstimateRate = computed(() => holding.value?.relatedThemeRate ?? estimate.value?.estimateGrowthRate ?? 0)
 const canGenerateAiAnalysis = computed(() => Boolean(hasMatchedHolding.value && holding.value?.id))
 const detailStatusText = computed(() => {
@@ -66,6 +97,7 @@ const rankText = computed(() => {
 
 onMounted(loadDetail)
 watch(() => route.fullPath, loadDetail)
+watch(selectedIndexCode, loadSelectedIndexNav)
 
 function navText(value: number | null | undefined) {
   return value === null || value === undefined ? '--' : value.toFixed(4)
@@ -73,6 +105,46 @@ function navText(value: number | null | undefined) {
 
 function nullablePercent(value: number | null | undefined, digits = 2) {
   return value === null || value === undefined ? '--' : percent(value, digits)
+}
+
+function isoDate(date: Date) {
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
+function navHistoryStartDate(range = activeNavRange.value) {
+  const option = navRangeOptions.find((item) => item.value === range) || navRangeOptions[0]
+  const date = new Date()
+  date.setMonth(date.getMonth() - option.months)
+  date.setDate(date.getDate() - 10)
+  return isoDate(date)
+}
+
+function navHistoryEndDate() {
+  return isoDate(new Date())
+}
+
+function filterNavPoints(points: FundNavPoint[], range: string) {
+  if (!points.length) return []
+  const option = navRangeOptions.find((item) => item.value === range) || navRangeOptions[0]
+  const lastDate = new Date(`${points[points.length - 1].date}T00:00:00`)
+  const start = new Date(lastDate)
+  start.setMonth(start.getMonth() - option.months)
+  const filtered = points.filter((point) => new Date(`${point.date}T00:00:00`) >= start)
+  return filtered.length >= 2 ? filtered : points.slice(-2)
+}
+
+async function loadSelectedIndexNav() {
+  const code = fundCode.value
+  if (!code) return
+  const nav = await quiet(quantApi.fundNav(code, {
+    startDate: navHistoryStartDate('3Y'),
+    endDate: navHistoryEndDate(),
+    indexCode: selectedIndexCode.value
+  }))
+  navPoints.value = (nav || [])
+    .slice()
+    .sort((left, right) => left.date.localeCompare(right.date))
 }
 
 function stockRatio(stock: FundStockHolding) {
@@ -128,7 +200,11 @@ async function loadDetail() {
     const [infoResult, estimateResult, nav, stocks, themeList, rank, tradeList] = await Promise.all([
       quiet(quantApi.fundBasicInfo(code)),
       quiet(quantApi.fundEstimate(code)),
-      quiet(quantApi.fundNav(code)),
+      quiet(quantApi.fundNav(code, {
+        startDate: navHistoryStartDate('3Y'),
+        endDate: navHistoryEndDate(),
+        indexCode: selectedIndexCode.value
+      })),
       quiet(quantApi.heavyStocks(code)),
       quiet(quantApi.themes(code)),
       quiet(quantApi.peerRank(code)),
@@ -146,7 +222,6 @@ async function loadDetail() {
     navPoints.value = (nav || [])
       .slice()
       .sort((left, right) => left.date.localeCompare(right.date))
-      .slice(-260)
     tradePoints.value = (tradeList || []).filter((trade) => trade.fundCode === code)
     heavyStocks.value = stocks || []
     themes.value = themeList || []
@@ -315,7 +390,7 @@ async function generateAiAnalysis() {
           <MetricTile label="持有金额" :value="hasMatchedHolding ? money(holding.holdingAmount) : '--'" />
           <MetricTile label="持有份额" :value="hasMatchedHolding ? money(holding.holdingShare, 2) : '--'" />
           <MetricTile label="持仓占比" :value="hasMatchedHolding ? percent(holding.positionRate || 0) : '--'" />
-          <MetricTile label="持仓成本" :value="hasMatchedHolding ? money(holding.holdingCost) : '--'" />
+          <MetricTile label="成本价" :value="hasMatchedHolding && costNav ? navText(costNav) : '--'" />
           <MetricTile label="持有收益" :value="hasMatchedHolding ? signed(holding.holdingProfit) : '--'" :delta="hasMatchedHolding ? percent(holding.holdingProfitRate) : ''" :tone="hasMatchedHolding ? metricTone(holding.holdingProfit) : 'neutral'" />
           <MetricTile label="当日收益" :value="hasMatchedHolding ? signed(holding.dailyProfit) : '--'" :delta="hasMatchedHolding ? formatDateTime(holding.updateTime || estimate?.estimateTime) : '未加入持仓'" :tone="hasMatchedHolding ? metricTone(holding.dailyProfit) : 'neutral'" />
           <MetricTile label="昨日收益" :value="hasMatchedHolding ? signed(holding.yesterdayProfit || 0) : '--'" :tone="hasMatchedHolding ? metricTone(holding.yesterdayProfit || 0) : 'neutral'" />
@@ -329,10 +404,29 @@ async function generateAiAnalysis() {
     <section class="panel">
       <div class="panel-header">
         <h2 class="panel-title">净值走势</h2>
-        <span class="item-meta">本基金 / 匹配指数（有历史数据时）/ 买卖点；红点买入，绿点卖出</span>
+        <div class="fund-chart-toolbar">
+          <span class="item-meta">本基金 / 匹配指数 / 成本价 / 买卖点</span>
+          <label class="index-select-label">
+            <span>对比指数</span>
+            <select v-model="selectedIndexCode" class="form-control compact-select">
+              <option v-for="item in indexOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
+            </select>
+          </label>
+        </div>
       </div>
       <div class="panel-body">
-        <BaseChart v-if="navPoints.length >= 2" :option="chart" :height="340" />
+        <BaseChart v-if="chartNavPoints.length >= 2" :key="chartKey" :option="chart" :height="340" />
+        <div v-if="navPoints.length >= 2" class="fund-range-tabs">
+          <button
+            v-for="item in navRangeOptions"
+            :key="item.value"
+            type="button"
+            :class="{ active: activeNavRange === item.value }"
+            @click="activeNavRange = item.value"
+          >
+            {{ item.label }}
+          </button>
+        </div>
         <EmptyState v-else title="暂无净值走势" description="真实数据源暂未返回足够的历史净值点。" />
       </div>
     </section>

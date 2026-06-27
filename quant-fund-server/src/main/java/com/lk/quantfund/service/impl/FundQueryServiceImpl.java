@@ -36,6 +36,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.NavigableMap;
+import java.util.TreeMap;
 import java.util.function.Function;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -128,19 +130,25 @@ public class FundQueryServiceImpl implements FundQueryService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public List<FundNavPointDTO> getHistoricalNav(String fundCode, LocalDate startDate, LocalDate endDate) {
+    public List<FundNavPointDTO> getHistoricalNav(String fundCode, LocalDate startDate, LocalDate endDate, String indexCode) {
         String cacheKey = RedisKeyConstants.fundNavCacheKey(fundCode, String.valueOf(startDate), String.valueOf(endDate));
         boolean includesToday = endDate == null || !endDate.isBefore(LocalDate.now());
-        List<FundNavPointDTO> points = includesToday
-                ? queryAdapters(adapter -> adapter.getHistoricalNav(fundCode, startDate, endDate))
-                : readCache(cacheKey, new TypeReference<List<FundNavPointDTO>>() {})
-                        .orElseGet(() -> {
-                            List<FundNavPointDTO> result = queryAdapters(adapter -> adapter.getHistoricalNav(fundCode, startDate, endDate));
-                            writeCache(cacheKey, result, Duration.ofHours(12));
-                            return result;
-                        });
+        List<FundNavPointDTO> points;
+        try {
+            points = includesToday
+                    ? queryAdapters(adapter -> adapter.getHistoricalNav(fundCode, startDate, endDate))
+                    : readCache(cacheKey, new TypeReference<List<FundNavPointDTO>>() {})
+                            .orElseGet(() -> {
+                                List<FundNavPointDTO> result = queryAdapters(adapter -> adapter.getHistoricalNav(fundCode, startDate, endDate));
+                                writeCache(cacheKey, result, Duration.ofHours(12));
+                                return result;
+                            });
+        } catch (RuntimeException exception) {
+            log.warn("Historical NAV datasource failed for {}, fallback to local cache: {}", fundCode, exception.getMessage());
+            points = cachedNavPoints(fundCode, startDate, endDate);
+        }
         points.forEach(this::saveNavPoint);
-        return attachIndexReturnRates(points, startDate, endDate);
+        return attachIndexReturnRates(points, startDate, endDate, indexCode);
     }
 
     @Override
@@ -204,6 +212,28 @@ public class FundQueryServiceImpl implements FundQueryService {
 
     private boolean equalsIgnoreCase(String value, String target) {
         return value != null && value.equalsIgnoreCase(target);
+    }
+
+    private List<FundNavPointDTO> cachedNavPoints(String fundCode, LocalDate startDate, LocalDate endDate) {
+        LambdaQueryWrapper<FundNavDaily> wrapper = new LambdaQueryWrapper<FundNavDaily>()
+                .eq(FundNavDaily::getFundCode, fundCode);
+        if (startDate != null) {
+            wrapper.ge(FundNavDaily::getNavDate, startDate);
+        }
+        if (endDate != null) {
+            wrapper.le(FundNavDaily::getNavDate, endDate);
+        }
+        wrapper.orderByAsc(FundNavDaily::getNavDate);
+        return fundNavDailyMapper.selectList(wrapper).stream()
+                .map(point -> new FundNavPointDTO(
+                        point.getFundCode(),
+                        point.getNavDate(),
+                        point.getUnitNav(),
+                        point.getAccumulatedNav(),
+                        point.getDailyGrowthRate(),
+                        point.getSourceName()
+                ))
+                .toList();
     }
 
     private <T> T queryAdapters(Function<FundDataSourceAdapter, T> query) {
@@ -305,11 +335,11 @@ public class FundQueryServiceImpl implements FundQueryService {
         );
     }
 
-    private List<FundNavPointDTO> attachIndexReturnRates(List<FundNavPointDTO> points, LocalDate startDate, LocalDate endDate) {
+    private List<FundNavPointDTO> attachIndexReturnRates(List<FundNavPointDTO> points, LocalDate startDate, LocalDate endDate, String requestedIndexCode) {
         if (points.isEmpty()) {
             return points;
         }
-        IndexMatch index = indexMatch(points.getFirst().fundCode());
+        IndexMatch index = StringUtils.hasText(requestedIndexCode) ? indexMatchByCode(requestedIndexCode) : indexMatch(points.getFirst().fundCode());
         LocalDate actualStart = startDate != null ? startDate : points.stream()
                 .map(FundNavPointDTO::navDate)
                 .min(LocalDate::compareTo)
@@ -328,10 +358,10 @@ public class FundQueryServiceImpl implements FundQueryService {
             return points;
         }
         BigDecimal baseClose = history.getFirst().closePrice();
-        Map<LocalDate, BigDecimal> indexRateByDate = new LinkedHashMap<>();
+        NavigableMap<LocalDate, BigDecimal> indexCloseByDate = new TreeMap<>();
         for (MarketIndexDailyVO point : history) {
             if (point.tradeDate() != null && point.closePrice() != null) {
-                indexRateByDate.put(point.tradeDate(), point.closePrice().subtract(baseClose).multiply(new BigDecimal("100.0000")).divide(baseClose, 4, RoundingMode.HALF_UP));
+                indexCloseByDate.put(point.tradeDate(), point.closePrice());
             }
         }
         return points.stream()
@@ -342,11 +372,36 @@ public class FundQueryServiceImpl implements FundQueryService {
                         point.accumulatedNav(),
                         point.dailyGrowthRate(),
                         point.sourceName(),
-                        indexRateByDate.get(point.navDate()),
+                        indexReturnRate(indexCloseByDate, point.navDate(), baseClose),
                         index.code(),
                         index.name()
                 ))
                 .toList();
+    }
+
+    private IndexMatch indexMatchByCode(String indexCode) {
+        return switch (indexCode.trim()) {
+            case "399006" -> new IndexMatch("399006", "创业板指");
+            case "000001" -> new IndexMatch("000001", "上证指数");
+            case "399001" -> new IndexMatch("399001", "深证成指");
+            default -> new IndexMatch("000300", "沪深300");
+        };
+    }
+
+    private BigDecimal indexReturnRate(NavigableMap<LocalDate, BigDecimal> indexCloseByDate,
+                                       LocalDate navDate,
+                                       BigDecimal baseClose) {
+        if (navDate == null || baseClose == null || baseClose.compareTo(BigDecimal.ZERO) <= 0) {
+            return null;
+        }
+        Map.Entry<LocalDate, BigDecimal> matched = indexCloseByDate.floorEntry(navDate);
+        if (matched == null || matched.getValue() == null) {
+            return null;
+        }
+        return matched.getValue()
+                .subtract(baseClose)
+                .multiply(new BigDecimal("100.0000"))
+                .divide(baseClose, 4, RoundingMode.HALF_UP);
     }
 
     private IndexMatch indexMatch(String fundCode) {

@@ -132,6 +132,55 @@ class EastMoneyFundDataSourceAdapterTest {
     }
 
     @Test
+    void shouldContinueHistoricalNavPaginationWhenEastMoneyCapsPageSizeToTwenty() {
+        AtomicReference<String> lastRequestedUrl = new AtomicReference<>();
+        final int[] requestCount = {0};
+        ExchangeFunction exchangeFunction = request -> {
+            requestCount[0]++;
+            lastRequestedUrl.set(request.url().toString());
+            String body = requestCount[0] == 1 ? historicalNavBody(20) : historicalNavBody(1);
+            return Mono.just(ClientResponse.create(HttpStatus.OK).body(body).build());
+        };
+        WebClient webClient = WebClient.builder().exchangeFunction(exchangeFunction).build();
+        ApiCallLogService apiCallLogService = (provider, apiName, requestUrl, requestMethod, success, statusCode, errorMessage, costTimeMs, fallbackUsed) -> { };
+
+        EastMoneyFundDataSourceAdapter adapter = new EastMoneyFundDataSourceAdapter(
+                webClient,
+                new ObjectMapper(),
+                new QuantFundProperties(),
+                apiCallLogService
+        );
+
+        List<FundNavPointDTO> points = adapter.getHistoricalNav(
+                "016874",
+                LocalDate.of(2025, 12, 17),
+                LocalDate.of(2026, 6, 26)
+        );
+
+        assertThat(points).hasSize(21);
+        assertThat(requestCount[0]).isEqualTo(2);
+        assertThat(lastRequestedUrl.get()).contains("pageIndex=2").contains("pageSize=20");
+    }
+
+    private String historicalNavBody(int count) {
+        StringBuilder builder = new StringBuilder("{\"Data\":{\"LSJZList\":[");
+        for (int index = 0; index < count; index++) {
+            if (index > 0) {
+                builder.append(',');
+            }
+            builder.append("{\"FSRQ\":\"")
+                    .append(LocalDate.of(2026, 6, 26).minusDays(index))
+                    .append("\",\"DWJZ\":\"2.")
+                    .append(String.format("%04d", index))
+                    .append("\",\"LJJZ\":\"2.")
+                    .append(String.format("%04d", index))
+                    .append("\",\"JZZZL\":\"0.10\"}");
+        }
+        builder.append("]},\"ErrCode\":0}");
+        return builder.toString();
+    }
+
+    @Test
     void shouldEstimateOverseasActiveFundFromOverseasHoldingsOnly() {
         String heavyStocksHtml = """
                 <table><tbody>

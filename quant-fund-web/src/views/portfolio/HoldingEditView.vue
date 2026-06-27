@@ -68,7 +68,7 @@ const operationCards = [
 
 onMounted(loadHoldings)
 
-const referenceNav = computed(() => activeHolding.value?.currentEstimateNav || activeHolding.value?.latestOfficialNav || 0)
+const referenceNav = computed(() => activeHolding.value?.latestOfficialNav || 0)
 const previewAmount = computed(() => {
   if (editMode.value === 'SHARE_COST' && referenceNav.value > 0) {
     return Number(form.value.holdingShare || 0) * referenceNav.value
@@ -83,6 +83,20 @@ const previewCost = computed(() => {
 })
 const previewProfit = computed(() => previewAmount.value - previewCost.value)
 const previewProfitRate = computed(() => previewCost.value > 0 ? previewProfit.value / previewCost.value * 100 : 0)
+const previewCostNav = computed(() => {
+  if (editMode.value === 'AMOUNT_PROFIT') {
+    const factor = 1 + previewProfitRate.value / 100
+    return referenceNav.value > 0 && factor > 0 ? referenceNav.value / factor : 0
+  }
+  const share = Number(form.value.holdingShare || 0)
+  return share > 0 ? Number(form.value.holdingCost || 0) / share : 0
+})
+const previewShare = computed(() => {
+  if (editMode.value === 'AMOUNT_PROFIT') {
+    return previewCostNav.value > 0 ? previewCost.value / previewCostNav.value : 0
+  }
+  return Number(form.value.holdingShare || 0)
+})
 const isNewHoldingDraft = computed(() => {
   const holding = activeHolding.value
   if (!holding) return false
@@ -139,7 +153,7 @@ function selectHolding(id: number) {
 async function saveHolding() {
   if (!activeHolding.value) return
   if (shareModeMissingNav.value) {
-    ElMessage.warning('份额+成本模式需要先从数据源同步到有效净值')
+    ElMessage.warning('份额+总成本模式需要先从数据源同步到最新正式净值')
     return
   }
   saving.value = true
@@ -148,12 +162,15 @@ async function saveHolding() {
     const profit = Number(form.value.holdingProfit || 0)
     const cost = Number(form.value.holdingCost || 0)
     const share = Number(form.value.holdingShare || 0)
-    const derivedShare = referenceNav.value > 0 ? amount / referenceNav.value : activeHolding.value.holdingShare
+    if (editMode.value === 'AMOUNT_PROFIT' && amount > 0 && referenceNav.value <= 0) {
+      ElMessage.warning('金额+收益模式需要先同步到最新正式净值，不能使用盘中估值反推持有份额')
+      return
+    }
     const saved = await quantApi.updateHolding(activeHolding.value.id, {
       ...form.value,
       fundType: normalizeFundType(form.value.fundType),
       holdingAmount: editMode.value === 'AMOUNT_PROFIT' ? amount : previewAmount.value,
-      holdingShare: editMode.value === 'AMOUNT_PROFIT' ? Math.max(derivedShare, 0) : share,
+      holdingShare: editMode.value === 'AMOUNT_PROFIT' ? 0 : share,
       holdingCost: editMode.value === 'SHARE_COST' ? cost : previewCost.value,
       holdingProfit: editMode.value === 'AMOUNT_PROFIT' ? profit : undefined
     })
@@ -344,8 +361,8 @@ async function saveTrade() {
           </div>
           <div class="fund-badges">
             <span>{{ relatedThemeText(activeHolding.relatedThemeName) }}</span>
-            <span>估值 {{ activeHolding.currentEstimateNav ? activeHolding.currentEstimateNav.toFixed(4) : '--' }}</span>
-            <span>正式净值 {{ activeHolding.latestOfficialNav ? activeHolding.latestOfficialNav.toFixed(4) : '--' }}</span>
+          <span>盘中估值 {{ activeHolding.currentEstimateNav ? activeHolding.currentEstimateNav.toFixed(4) : '--' }}</span>
+          <span>最新正式净值 {{ activeHolding.latestOfficialNav ? activeHolding.latestOfficialNav.toFixed(4) : '--' }}</span>
           </div>
         </div>
 
@@ -366,18 +383,18 @@ async function saveTrade() {
           <h2 class="panel-title">持仓字段</h2>
           <div class="segmented">
             <button :class="{ active: editMode === 'AMOUNT_PROFIT' }" @click="editMode = 'AMOUNT_PROFIT'">金额+收益</button>
-            <button :class="{ active: editMode === 'SHARE_COST' }" @click="editMode = 'SHARE_COST'">份额+成本</button>
+            <button :class="{ active: editMode === 'SHARE_COST' }" @click="editMode = 'SHARE_COST'">份额+总成本</button>
           </div>
         </div>
         <div class="panel-body config-grid compact-form">
           <p class="form-hint full-span">
-            只需二选一填写：金额+收益适合从原平台抄当前持有金额和累计收益；份额+成本适合从确认份额和总成本录入。
+            只需二选一填写：金额+收益适合从原平台抄当前持有金额和累计收益，系统用最新正式净值反推份额；份额+总成本适合从确认份额和总投入成本录入。
           </p>
           <p class="form-hint full-span">
             净值、持仓金额、收益率和当日收益由数据源与后端统一重算，不在这里手动维护净值。
           </p>
           <p v-if="shareModeMissingNav" class="form-warning full-span">
-            当前没有有效参考净值，份额+成本模式暂不能测算金额；请先点击“刷新净值并重算”，或切换到金额+收益模式。
+            当前没有最新正式净值，暂不能测算金额、份额和成本价；请先点击“刷新净值并重算”，盘中估值不会参与持仓份额计算。
           </p>
           <template v-if="editMode === 'AMOUNT_PROFIT'">
             <label>持有金额<input v-model.number="form.holdingAmount" class="form-control" type="number" min="0" /></label>
@@ -385,7 +402,7 @@ async function saveTrade() {
           </template>
           <template v-else>
             <label>持有份额<input v-model.number="form.holdingShare" class="form-control" type="number" min="0" /></label>
-            <label>持有成本<input v-model.number="form.holdingCost" class="form-control" type="number" min="0" /></label>
+            <label>总成本<input v-model.number="form.holdingCost" class="form-control" type="number" min="0" /></label>
           </template>
           <label>原平台<input v-model="form.sourcePlatform" class="form-control" /></label>
           <label class="switch-row"><input v-model="form.regularInvestment" type="checkbox" /> 定投计划</label>
@@ -399,9 +416,11 @@ async function saveTrade() {
         <div class="panel-body">
           <table class="terminal-table">
             <tbody>
-              <tr><td>参考净值</td><td>{{ referenceNav ? referenceNav.toFixed(4) : '--' }}</td><td>来自盘中估值或最新正式净值</td></tr>
+              <tr><td>参考净值</td><td>{{ referenceNav ? referenceNav.toFixed(4) : '--' }}</td><td>仅使用最新正式净值，不使用盘中估值</td></tr>
               <tr><td>测算金额</td><td>{{ money(previewAmount) }}</td><td>份额模式下由份额 × 净值计算</td></tr>
+              <tr><td>测算份额</td><td>{{ money(previewShare, 2) }}</td><td>金额收益模式下由总成本 ÷ 成本价计算</td></tr>
               <tr><td>测算成本</td><td>{{ money(previewCost) }}</td><td>金额收益模式下由金额 - 收益计算</td></tr>
+              <tr><td>测算成本价</td><td>{{ previewCostNav ? previewCostNav.toFixed(4) : '--' }}</td><td>由最新净值 ÷ (1 + 持有收益率) 反推</td></tr>
               <tr><td>测算收益率</td><td :class="toneClass(previewProfitRate)">{{ percent(previewProfitRate) }}</td><td>保存后以后端真实净值重算为准</td></tr>
             </tbody>
           </table>

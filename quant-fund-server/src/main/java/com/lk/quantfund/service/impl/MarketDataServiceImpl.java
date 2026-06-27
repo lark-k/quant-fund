@@ -73,7 +73,7 @@ public class MarketDataServiceImpl implements MarketDataService {
             return List.of();
         }
         List<MarketIndexDailyVO> cached = safeCachedHistory(indexCode, startDate, endDate);
-        if (!cached.isEmpty()) {
+        if (cacheCoversRange(cached, startDate, endDate)) {
             return cached;
         }
         try {
@@ -263,6 +263,16 @@ public class MarketDataServiceImpl implements MarketDataService {
         } catch (Exception exception) {
             return List.of();
         }
+    }
+
+    private boolean cacheCoversRange(List<MarketIndexDailyVO> cached, LocalDate startDate, LocalDate endDate) {
+        if (cached.isEmpty()) {
+            return false;
+        }
+        LocalDate firstDate = cached.getFirst().tradeDate();
+        LocalDate lastDate = cached.getLast().tradeDate();
+        return !firstDate.isAfter(startDate.plusDays(7))
+                && !lastDate.isBefore(endDate.minusDays(7));
     }
 
     private void upsertHistory(List<MarketIndexDaily> points) {

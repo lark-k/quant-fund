@@ -101,6 +101,9 @@ public class FundHoldingServiceImpl implements FundHoldingService {
         holding.setAccountId(request.accountId());
         applyCreateFields(holding, request);
         refreshMarketData(holding);
+        if (request.holdingProfit() != null) {
+            deriveShareFromAmountUsingLatestNav(holding);
+        }
         recalculateEntity(holding);
         holding.setCreateTime(now);
         holding.setUpdateTime(now);
@@ -122,6 +125,9 @@ public class FundHoldingServiceImpl implements FundHoldingService {
         ensureAccountOwned(userId, request.accountId());
         applyUpdateFields(holding, request);
         refreshMarketData(holding, oldFundCode, previousCurrentEstimateNav);
+        if (request.holdingProfit() != null) {
+            deriveShareFromAmountUsingLatestNav(holding);
+        }
         recalculateEntity(holding);
         holding.setUpdateTime(LocalDateTime.now());
         fundHoldingMapper.updateById(holding);
@@ -338,7 +344,9 @@ public class FundHoldingServiceImpl implements FundHoldingService {
         holding.setHoldingShare(valueOrZero(request.holdingShare()));
         holding.setHoldingCost(valueOrZero(request.holdingCost()));
         applyUserProfitInput(holding, request.holdingProfit());
-        deriveShareFromAmountIfNeeded(holding, previousCurrentEstimateNav, previousLatestOfficialNav);
+        if (request.holdingProfit() == null) {
+            deriveShareFromAmountIfNeeded(holding, previousCurrentEstimateNav, previousLatestOfficialNav);
+        }
         holding.setCurrentEstimateNav(request.currentEstimateNav() == null
                 ? previousCurrentEstimateNav
                 : valueOrZero(request.currentEstimateNav()));
@@ -391,6 +399,27 @@ public class FundHoldingServiceImpl implements FundHoldingService {
         BigDecimal nav = currentEstimateNav != null ? currentEstimateNav : latestOfficialNav;
         if (nav != null && nav.compareTo(BigDecimal.ZERO) > 0) {
             holding.setHoldingShare(valueOrZero(holding.getHoldingAmount()).divide(nav, 4, RoundingMode.HALF_UP));
+        }
+    }
+
+    private void deriveShareFromAmountUsingLatestNav(FundHolding holding) {
+        BigDecimal amount = valueOrZero(holding.getHoldingAmount());
+        if (amount.compareTo(BigDecimal.ZERO) <= 0) {
+            return;
+        }
+        BigDecimal nav = holding.getLatestOfficialNav();
+        BigDecimal cost = valueOrZero(holding.getHoldingCost());
+        if (nav != null && nav.compareTo(BigDecimal.ZERO) > 0 && cost.compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal profitRate = rate(amount.subtract(cost), cost).divide(ONE_HUNDRED, 8, RoundingMode.HALF_UP);
+            BigDecimal factor = BigDecimal.ONE.add(profitRate);
+            if (factor.compareTo(BigDecimal.ZERO) > 0) {
+                BigDecimal costNav = nav.divide(factor, 4, RoundingMode.HALF_UP);
+                if (costNav.compareTo(BigDecimal.ZERO) > 0) {
+                    holding.setHoldingShare(cost.divide(costNav, 4, RoundingMode.HALF_UP));
+                }
+            }
+        } else if (cost.compareTo(BigDecimal.ZERO) > 0) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "缺少最新正式净值，不能使用盘中估值反推持有份额");
         }
     }
 

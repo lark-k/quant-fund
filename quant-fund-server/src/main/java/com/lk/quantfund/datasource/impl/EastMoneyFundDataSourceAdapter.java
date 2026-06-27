@@ -135,38 +135,53 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter {
 
     @Override
     public List<FundNavPointDTO> getHistoricalNav(String fundCode, LocalDate startDate, LocalDate endDate) {
-        String url = properties.getFundDataSource().getEastMoneyHistoricalNavUrl()
-                + "?fundCode=" + fundCode
-                + "&pageIndex=1&pageSize=120"
-                + "&startDate=" + (startDate == null ? "" : startDate)
-                + "&endDate=" + (endDate == null ? "" : endDate)
-                + "&_=" + System.currentTimeMillis();
-        String body = get("historical_nav", url);
-        try {
-            JsonNode root = objectMapper.readTree(stripJsonp(body));
-            int errCode = root.path("ErrCode").asInt(0);
-            if (errCode != 0) {
-                throw new FundDataSourceException("东方财富历史净值接口返回错误: " + errCode);
-            }
-            JsonNode list = root.path("Data").path("LSJZList");
-            if (!list.isArray()) {
-                throw new FundDataSourceException("东方财富历史净值接口未返回净值列表");
-            }
-            List<FundNavPointDTO> points = new ArrayList<>();
-            if (list.isArray()) {
-                for (JsonNode item : list) {
-                    LocalDate navDate = LocalDate.parse(text(item, "FSRQ"), DateTimeFormatter.ISO_LOCAL_DATE);
-                    points.add(new FundNavPointDTO(fundCode, navDate,
-                            decimal(text(item, "DWJZ")),
-                            decimal(text(item, "LJJZ")),
-                            decimal(text(item, "JZZZL")),
-                            SOURCE_NAME));
+        int pageSize = 20;
+        List<FundNavPointDTO> points = new ArrayList<>();
+        for (int pageIndex = 1; pageIndex <= 80; pageIndex++) {
+            String url = properties.getFundDataSource().getEastMoneyHistoricalNavUrl()
+                    + "?fundCode=" + fundCode
+                    + "&pageIndex=" + pageIndex + "&pageSize=" + pageSize
+                    + "&startDate=" + (startDate == null ? "" : startDate)
+                    + "&endDate=" + (endDate == null ? "" : endDate)
+                    + "&_=" + System.currentTimeMillis();
+            try {
+                List<FundNavPointDTO> pagePoints = parseHistoricalNavPage(fundCode, get("historical_nav", url));
+                points.addAll(pagePoints);
+                if (pagePoints.size() < pageSize) {
+                    break;
                 }
+            } catch (Exception exception) {
+                if (points.isEmpty()) {
+                    throw new FundDataSourceException("东方财富历史净值解析失败", exception);
+                }
+                break;
             }
-            return points;
-        } catch (Exception exception) {
-            throw new FundDataSourceException("东方财富历史净值解析失败", exception);
         }
+        return points.stream()
+                .sorted(Comparator.comparing(FundNavPointDTO::navDate))
+                .toList();
+    }
+
+    private List<FundNavPointDTO> parseHistoricalNavPage(String fundCode, String body) throws Exception {
+        JsonNode root = objectMapper.readTree(stripJsonp(body));
+        int errCode = root.path("ErrCode").asInt(0);
+        if (errCode != 0) {
+            throw new FundDataSourceException("东方财富历史净值接口返回错误: " + errCode);
+        }
+        JsonNode list = root.path("Data").path("LSJZList");
+        if (!list.isArray()) {
+            throw new FundDataSourceException("东方财富历史净值接口未返回净值列表");
+        }
+        List<FundNavPointDTO> points = new ArrayList<>();
+        for (JsonNode item : list) {
+            LocalDate navDate = LocalDate.parse(text(item, "FSRQ"), DateTimeFormatter.ISO_LOCAL_DATE);
+            points.add(new FundNavPointDTO(fundCode, navDate,
+                    decimal(text(item, "DWJZ")),
+                    decimal(text(item, "LJJZ")),
+                    decimal(text(item, "JZZZL")),
+                    SOURCE_NAME));
+        }
+        return points;
     }
 
     @Override

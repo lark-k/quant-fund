@@ -1286,6 +1286,58 @@ a {
   padding: 0 10px;
 }
 
+.compact-select {
+  min-height: 30px;
+  height: 30px;
+  min-width: 118px;
+  padding: 0 28px 0 10px;
+}
+
+.fund-chart-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.index-select-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.fund-range-tabs {
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+  padding-top: 12px;
+}
+
+.fund-range-tabs button {
+  min-width: 72px;
+  height: 34px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.fund-range-tabs button:hover {
+  color: var(--text);
+  border-color: var(--line);
+}
+
+.fund-range-tabs button.active {
+  color: #dce8ff;
+  background: rgba(60, 156, 255, 0.2);
+  border-color: rgba(60, 156, 255, 0.34);
+}
+
 .panel-subtitle {
   margin: 4px 0 0;
   color: var(--muted);
