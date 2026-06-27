@@ -37,8 +37,10 @@ const hasMatchedHolding = ref(false)
 const infoLoadFailed = ref(false)
 const activeNavRange = ref('1M')
 const selectedIndexCode = ref('000300')
+const navHistoryPage = ref(1)
 const NAV_CACHE_TTL_MS = 2 * 60 * 1000
 const NAV_REFRESH_INTERVAL_MS = 2 * 60 * 1000
+const NAV_HISTORY_PAGE_SIZE = 10
 
 const navRangeOptions = [
   { label: '近1月', value: '1M', months: 1 },
@@ -84,6 +86,14 @@ const latestIndexReturn = computed(() => {
   const baseFactor = 1 + base / 100
   return baseFactor > 0 ? ((1 + latest / 100) / baseFactor - 1) * 100 : latest
 })
+const navHistoryRows = computed(() => chartNavPoints.value.slice().reverse())
+const navHistoryTotalPages = computed(() => Math.max(1, Math.ceil(navHistoryRows.value.length / NAV_HISTORY_PAGE_SIZE)))
+const navHistoryPageRows = computed(() => {
+  const safePage = Math.min(navHistoryPage.value, navHistoryTotalPages.value)
+  const start = (safePage - 1) * NAV_HISTORY_PAGE_SIZE
+  return navHistoryRows.value.slice(start, start + NAV_HISTORY_PAGE_SIZE)
+})
+const activeNavRangeLabel = computed(() => navRangeOptions.find((item) => item.value === activeNavRange.value)?.label || '近1月')
 const chart = computed(() => fundNavOption(chartNavPoints.value, tradePoints.value, {
   costNav: costNav.value,
   indexName: selectedIndexName.value,
@@ -127,6 +137,12 @@ onMounted(loadDetail)
 onBeforeUnmount(stopNavRefreshTimer)
 watch(() => route.fullPath, loadDetail)
 watch(selectedIndexCode, () => loadSelectedIndexNav(false))
+watch(activeNavRange, () => {
+  navHistoryPage.value = 1
+})
+watch(navHistoryTotalPages, (total) => {
+  if (navHistoryPage.value > total) navHistoryPage.value = total
+})
 
 function navText(value: number | null | undefined) {
   return value === null || value === undefined ? '--' : value.toFixed(4)
@@ -139,6 +155,18 @@ function nullablePercent(value: number | null | undefined, digits = 2) {
 function legendTone(value: number | null | undefined) {
   if (value === null || value === undefined) return 'neutral'
   return value >= 0 ? 'rise' : 'fall'
+}
+
+function navHistoryPageText() {
+  return `${navHistoryPage.value}/${navHistoryTotalPages.value}`
+}
+
+function previousNavHistoryPage() {
+  navHistoryPage.value = Math.max(1, navHistoryPage.value - 1)
+}
+
+function nextNavHistoryPage() {
+  navHistoryPage.value = Math.min(navHistoryTotalPages.value, navHistoryPage.value + 1)
 }
 
 function isoDate(date: Date) {
@@ -501,6 +529,17 @@ async function generateAiAnalysis() {
           <MetricTile label="持有天数" :value="hasMatchedHolding ? `${holding.holdingDays} 天` : '--'" />
           <MetricTile label="最大回撤" :value="percent(maxDrawdown)" sub-label="净值曲线估算" tone="fall" />
           <MetricTile label="同类排名" :value="rankText" :delta="peerRank?.percentile !== undefined ? `百分位 ${percent(peerRank.percentile, 1)}` : peerRank?.category || ''" tone="info" />
+          <div class="theme-summary-tile">
+            <div class="theme-section-title">关联板块 / 估算收益率</div>
+            <div class="tag-cloud compact-tag-cloud">
+              <div v-for="theme in themes" :key="theme.themeName" class="theme-chip">
+                <span>{{ theme.themeName }}</span>
+                <strong :class="toneClass(theme.estimatedRate || 0)">{{ nullablePercent(theme.estimatedRate, 2) }}</strong>
+                <small>{{ percent(theme.weight || 0, 1) }}</small>
+              </div>
+              <EmptyState v-if="!themes.length" title="暂无关联板块" description="真实数据源暂未返回板块或持仓信息。" />
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -548,24 +587,40 @@ async function generateAiAnalysis() {
 
     <div class="insight-grid two">
       <section class="panel">
-        <div class="panel-header"><h2 class="panel-title">关联板块 / 估算收益率</h2></div>
-        <div class="panel-body tag-cloud">
-          <div v-for="theme in themes" :key="theme.themeName" class="theme-chip">
-            <span>{{ theme.themeName }}</span>
-            <strong :class="toneClass(theme.estimatedRate || 0)">{{ nullablePercent(theme.estimatedRate, 2) }}</strong>
-            <small>{{ percent(theme.weight || 0, 1) }}</small>
+        <div class="panel-header nav-history-panel-header">
+          <h2 class="panel-title">历史净值变化 <span>{{ activeNavRangeLabel }}</span></h2>
+          <div class="nav-history-pager">
+            <button class="ghost-button table-button" :disabled="navHistoryPage <= 1" @click="previousNavHistoryPage">上一页</button>
+            <span>{{ navHistoryPageText() }}</span>
+            <button class="ghost-button table-button" :disabled="navHistoryPage >= navHistoryTotalPages" @click="nextNavHistoryPage">下一页</button>
           </div>
-          <EmptyState v-if="!themes.length" title="暂无关联板块" description="真实数据源暂未返回板块或持仓信息。" />
+        </div>
+        <div class="panel-body fund-insight-body">
+          <div class="nav-history-card">
+            <table v-if="navHistoryPageRows.length" class="terminal-table nav-history-table">
+              <thead>
+                <tr><th>日期</th><th>净值</th><th>日涨幅</th></tr>
+              </thead>
+              <tbody>
+                <tr v-for="point in navHistoryPageRows" :key="point.date">
+                  <td>{{ point.date }}</td>
+                  <td>{{ navText(point.nav) }}</td>
+                  <td :class="toneClass(point.dailyGrowthRate)">{{ nullablePercent(point.dailyGrowthRate, 2) }}</td>
+                </tr>
+              </tbody>
+            </table>
+            <EmptyState v-else title="暂无历史净值" description="真实数据源暂未返回历史净值明细。" />
+          </div>
         </div>
       </section>
 
       <section class="panel">
         <div class="panel-header"><h2 class="panel-title">上季度重仓</h2></div>
         <div class="panel-body">
-          <table class="terminal-table">
+          <table class="terminal-table heavy-stock-table">
             <thead><tr><th>代码</th><th>股票</th><th>行业/板块</th><th>涨跌幅</th><th>占净值</th><th>日期</th></tr></thead>
             <tbody>
-              <tr v-for="stock in heavyStocks" :key="`${stock.marketSecId || stock.stockCode}-${stock.stockName}`">
+              <tr v-for="stock in heavyStocks.slice(0, 10)" :key="`${stock.marketSecId || stock.stockCode}-${stock.stockName}`">
                 <td>{{ stock.stockCode }}</td>
                 <td>{{ stock.stockName }}</td>
                 <td>{{ stock.industry || '--' }}</td>

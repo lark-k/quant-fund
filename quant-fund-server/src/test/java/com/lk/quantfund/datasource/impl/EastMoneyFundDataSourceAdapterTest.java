@@ -7,6 +7,7 @@ import com.lk.quantfund.config.QuantFundProperties;
 import com.lk.quantfund.datasource.model.FundEstimateDTO;
 import com.lk.quantfund.datasource.model.FundNavPointDTO;
 import com.lk.quantfund.datasource.model.FundSearchResultDTO;
+import com.lk.quantfund.datasource.model.FundStockHoldingDTO;
 import com.lk.quantfund.datasource.model.FundThemeDTO;
 import com.lk.quantfund.service.ApiCallLogService;
 import java.time.LocalDate;
@@ -222,5 +223,81 @@ class EastMoneyFundDataSourceAdapterTest {
         assertThat(themes.getFirst().themeType()).isEqualTo("OVERSEAS_HEAVY_STOCK_WEIGHTED");
         assertThat(themes.getFirst().weight()).isEqualByComparingTo("100.0000");
         assertThat(themes.getFirst().estimatedRate()).isEqualByComparingTo("2.7700");
+    }
+
+    @Test
+    void shouldUseTargetEtfHoldingsWhenEtfFeederHasNoDirectStocks() {
+        String feederBody = "var apidata={ content:\"\",arryear:[],curyear:2026};";
+        String targetEtfBody = "var apidata={ content:\""
+                + "<div><label>截止至：<font class='px12'>2026-03-31</font></label><table><tbody>"
+                + "<tr><td>1</td><td><a href='//quote.eastmoney.com/unify/r/116.01211'>01211</a></td><td><a href='//quote.eastmoney.com/unify/r/116.01211'>BYD</a></td><td>--</td><td>--</td><td>info</td><td>9.43%</td></tr>"
+                + "</tbody></table></div>\",arryear:[2026],curyear:2026};";
+        String quotes = """
+                {"data":{"diff":[
+                {"f12":"01211","f14":"BYD Company","f2":110.00,"f3":-1.25}
+                ]}}
+                """;
+        ExchangeFunction exchangeFunction = request -> {
+            String url = request.url().toString();
+            if (url.contains("FundArchivesDatas") && url.contains("code=013403")) {
+                return Mono.just(ClientResponse.create(HttpStatus.OK).body(feederBody).build());
+            }
+            if (url.contains("FundArchivesDatas") && url.contains("code=513180")) {
+                return Mono.just(ClientResponse.create(HttpStatus.OK).body(targetEtfBody).build());
+            }
+            if (url.contains("ulist.np/get")) {
+                return Mono.just(ClientResponse.create(HttpStatus.OK).body(quotes).build());
+            }
+            return Mono.just(ClientResponse.create(HttpStatus.OK).body("{}").build());
+        };
+        WebClient webClient = WebClient.builder().exchangeFunction(exchangeFunction).build();
+        ApiCallLogService apiCallLogService = (provider, apiName, requestUrl, requestMethod, success, statusCode, errorMessage, costTimeMs, fallbackUsed) -> { };
+        EastMoneyFundDataSourceAdapter adapter = new EastMoneyFundDataSourceAdapter(
+                webClient,
+                new ObjectMapper(),
+                new QuantFundProperties(),
+                apiCallLogService
+        );
+
+        List<FundStockHoldingDTO> stocks = adapter.getHeavyStocks("013403");
+
+        assertThat(stocks).hasSize(1);
+        assertThat(stocks.getFirst().fundCode()).isEqualTo("013403");
+        assertThat(stocks.getFirst().stockCode()).isEqualTo("01211");
+        assertThat(stocks.getFirst().stockName()).isEqualTo("BYD Company");
+        assertThat(stocks.getFirst().positionRate()).isEqualByComparingTo("9.43");
+        assertThat(stocks.getFirst().marketSecId()).isEqualTo("116.01211");
+        assertThat(stocks.getFirst().reportDate()).isEqualTo(LocalDate.of(2026, 3, 31));
+    }
+
+    @Test
+    void shouldUseHangSengTechIndexThemeForHangSengTechEtfFeeder() {
+        String quotes = """
+                {"data":{"diff":[
+                {"f12":"HSTECH","f14":"恒生科技指数","f2":4255.59,"f3":-3.41}
+                ]}}
+                """;
+        ExchangeFunction exchangeFunction = request -> {
+            String url = request.url().toString();
+            if (url.contains("ulist.np/get")) {
+                return Mono.just(ClientResponse.create(HttpStatus.OK).body(quotes).build());
+            }
+            return Mono.just(ClientResponse.create(HttpStatus.OK).body("{}").build());
+        };
+        WebClient webClient = WebClient.builder().exchangeFunction(exchangeFunction).build();
+        ApiCallLogService apiCallLogService = (provider, apiName, requestUrl, requestMethod, success, statusCode, errorMessage, costTimeMs, fallbackUsed) -> { };
+        EastMoneyFundDataSourceAdapter adapter = new EastMoneyFundDataSourceAdapter(
+                webClient,
+                new ObjectMapper(),
+                new QuantFundProperties(),
+                apiCallLogService
+        );
+
+        List<FundThemeDTO> themes = adapter.getRelatedThemes("013403");
+
+        assertThat(themes).hasSize(1);
+        assertThat(themes.getFirst().themeName()).isEqualTo("恒生科技");
+        assertThat(themes.getFirst().themeType()).isEqualTo("TRACKING_INDEX");
+        assertThat(themes.getFirst().estimatedRate()).isEqualByComparingTo("-3.41");
     }
 }

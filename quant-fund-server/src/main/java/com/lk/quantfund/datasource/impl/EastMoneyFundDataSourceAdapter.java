@@ -221,7 +221,18 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter {
             String html = archiveContent(body);
             LocalDate reportDate = reportDate(html);
             List<StockRow> rows = parseStockRows(fundCode, html, reportDate);
-            Map<String, QuoteInfo> quotes = quotes(rows.stream().map(StockRow::marketSecId).filter(StringUtils::hasText).toList());
+            if (rows.isEmpty()) {
+                Optional<String> targetEtfCode = targetEtfFallbackCode(fundCode);
+                if (targetEtfCode.isPresent()) {
+                    String targetUrl = properties.getFundDataSource().getEastMoneyFundArchiveUrl()
+                            + "?type=jjcc&code=" + targetEtfCode.get() + "&topline=10&year=&month=&rt=" + System.currentTimeMillis();
+                    String targetHtml = archiveContent(get("heavy_stocks", targetUrl));
+                    reportDate = reportDate(targetHtml);
+                    rows = parseStockRows(fundCode, targetHtml, reportDate);
+                }
+            }
+            LocalDate effectiveReportDate = reportDate;
+            Map<String, QuoteInfo> quotes = quotes(rows.stream().map(StockRow::marketSecId).filter(StringUtils::hasText).distinct().toList());
             return rows.stream()
                     .map(row -> {
                         QuoteInfo quote = quotes.getOrDefault(row.stockCode(), QuoteInfo.empty());
@@ -235,7 +246,7 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter {
                                 quote.latestPrice(),
                                 quote.changeRate(),
                                 row.marketSecId(),
-                                reportDate,
+                                effectiveReportDate,
                                 SOURCE_NAME
                         );
                     })
@@ -330,6 +341,13 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter {
         return secid.startsWith("105.") || secid.startsWith("106.") || secid.startsWith("116.");
     }
 
+    private Optional<String> targetEtfFallbackCode(String fundCode) {
+        return switch (fundCode) {
+            case "013402", "013403", "023763" -> Optional.of("513180");
+            default -> Optional.empty();
+        };
+    }
+
     private Optional<BigDecimal> overseasFundRate() {
         BigDecimal nasdaqRate = latestDailyIndexRate("100.NDX");
         BigDecimal sp500Rate = latestDailyIndexRate("100.SPX");
@@ -403,6 +421,7 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter {
 
     private IndexThemeMapping indexThemeMapping(String fundCode) {
         return switch (fundCode) {
+            case "013402", "013403", "023763" -> new IndexThemeMapping("HSTECH", "124.HSTECH", "恒生科技");
             case "025833" -> new IndexThemeMapping("931994", "2.931994", "中证电网设备");
             case "161725" -> new IndexThemeMapping("399997", "0.399997", "中证白酒");
             default -> null;
