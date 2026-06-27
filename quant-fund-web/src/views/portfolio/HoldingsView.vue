@@ -312,7 +312,7 @@ function openEdit(item: FundHolding) {
           </article>
         </div>
         <EmptyState
-          v-else-if="!holdings.length"
+          v-else-if="!loading && !holdings.length"
           title="还没有持仓基金"
           description="先搜索基金名称或代码，把关注基金加入自选/持仓。"
         />
@@ -337,7 +337,24 @@ function openEdit(item: FundHolding) {
         </div>
       </div>
       <div class="panel-body">
-        <table v-if="!loading && filtered.length" class="terminal-table">
+        <div v-if="loading" class="holding-table-skeleton" aria-label="正在加载持仓列表">
+          <div class="skeleton-toolbar">
+            <span></span>
+            <span></span>
+          </div>
+          <div class="skeleton-table">
+            <div class="skeleton-row skeleton-head">
+              <i v-for="item in 8" :key="`head-${item}`"></i>
+            </div>
+            <div v-for="row in 5" :key="`row-${row}`" class="skeleton-row">
+              <i v-for="cell in 8" :key="`cell-${row}-${cell}`"></i>
+            </div>
+          </div>
+          <div class="skeleton-hint">
+            <strong>正在同步持仓、估值与净值</strong>
+          </div>
+        </div>
+        <table v-else-if="filtered.length" class="terminal-table">
           <thead>
             <tr>
               <th>代码</th>
@@ -392,7 +409,6 @@ function openEdit(item: FundHolding) {
             </tr>
           </tbody>
         </table>
-        <EmptyState v-else-if="loading" title="正在加载持仓" />
         <EmptyState v-else title="暂无匹配持仓" description="可以先在上方搜索基金并加入持仓。" />
       </div>
     </section>
