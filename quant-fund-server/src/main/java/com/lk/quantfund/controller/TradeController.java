@@ -18,6 +18,7 @@ import com.lk.quantfund.vo.trade.TradeRecordVO;
 import jakarta.validation.Valid;
 import java.util.List;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -122,5 +123,15 @@ public class TradeController {
     @RateLimit(key = "trade:detail", windowSeconds = 60, maxRequests = 120)
     public ApiResponse<TradeRecordVO> detail(@PathVariable Long id) {
         return ApiResponse.success(tradeRecordService.detail(id));
+    }
+
+    @DeleteMapping("/{id}")
+    @DataScope(resourceType = ResourceType.TRADE_RECORD, idParam = "id", operation = DataOperation.DELETE)
+    @RateLimit(key = "trade:delete", windowSeconds = 60, maxRequests = 30)
+    @RepeatSubmit(intervalSeconds = 3)
+    @OperationLog(module = "trade", action = "delete_processing_trade", bizType = "TRADE_RECORD")
+    public ApiResponse<Void> delete(@PathVariable Long id) {
+        tradeRecordService.deleteProcessing(id);
+        return ApiResponse.success();
     }
 }

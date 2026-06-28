@@ -282,6 +282,47 @@ class TradeRecordServiceImplTest {
     }
 
     @Test
+    void deleteProcessingTradeShouldRemovePendingRecordOnly() {
+        TradeRecordMapper tradeRecordMapper = mock(TradeRecordMapper.class);
+        TradeRecord record = processingBuyRecord();
+        when(tradeRecordMapper.selectOne(any())).thenReturn(record);
+        TradeRecordServiceImpl service = service(
+                tradeRecordMapper,
+                mock(FundHoldingMapper.class),
+                mock(PortfolioAccountMapper.class),
+                mock(PortfolioAccountService.class));
+
+        try (MockedStatic<UserContext> userContext = Mockito.mockStatic(UserContext.class)) {
+            userContext.when(UserContext::getUserId).thenReturn(1L);
+            service.deleteProcessing(300L);
+        }
+
+        verify(tradeRecordMapper).deleteById(300L);
+    }
+
+    @Test
+    void deleteProcessingTradeShouldRejectCompletedRecord() {
+        TradeRecordMapper tradeRecordMapper = mock(TradeRecordMapper.class);
+        TradeRecord record = processingBuyRecord();
+        record.setTradeStatus("COMPLETED");
+        when(tradeRecordMapper.selectOne(any())).thenReturn(record);
+        TradeRecordServiceImpl service = service(
+                tradeRecordMapper,
+                mock(FundHoldingMapper.class),
+                mock(PortfolioAccountMapper.class),
+                mock(PortfolioAccountService.class));
+
+        try (MockedStatic<UserContext> userContext = Mockito.mockStatic(UserContext.class)) {
+            userContext.when(UserContext::getUserId).thenReturn(1L);
+            assertThatThrownBy(() -> service.deleteProcessing(300L))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessage("only pending trade record can be deleted");
+        }
+
+        verify(tradeRecordMapper, never()).deleteById(Mockito.anyLong());
+    }
+
+    @Test
     void dueProcessingBuyShouldSettleWithOfficialNavBeforeIntradayEstimate() {
         TradeRecordMapper tradeRecordMapper = mock(TradeRecordMapper.class);
         FundHoldingMapper holdingMapper = mock(FundHoldingMapper.class);
@@ -330,6 +371,103 @@ class TradeRecordServiceImplTest {
         assertThat(saved.getHoldingProfit()).isEqualByComparingTo("343.1558");
         assertThat(saved.getHoldingProfitRate()).isEqualByComparingTo("31.1960");
         assertThat(saved.getDailyProfit()).isEqualByComparingTo("0.0000");
+        verify(accountService).recalculateOwnedAccount(1L, 10L);
+    }
+
+    @Test
+    void overseasProcessingBuyShouldUseApplicationDateNavAndDelaySettlement() {
+        TradeRecordMapper tradeRecordMapper = mock(TradeRecordMapper.class);
+        FundHoldingMapper holdingMapper = mock(FundHoldingMapper.class);
+        PortfolioAccountMapper accountMapper = mock(PortfolioAccountMapper.class);
+        PortfolioAccountService accountService = mock(PortfolioAccountService.class);
+        FundQueryService fundQueryService = mock(FundQueryService.class);
+        TradingCalendarService tradingCalendarService = mock(TradingCalendarService.class);
+        FundHolding holding = holding();
+        holding.setFundCode("012922");
+        holding.setFundName("易方达全球成长精选混合(QDII)人民币C");
+        TradeRecord record = processingBuyRecord();
+        record.setFundCode("012922");
+        record.setFundName("易方达全球成长精选混合(QDII)人民币C");
+        record.setTradeTime(LocalDateTime.of(2026, 6, 25, 14, 59));
+        LocalDate applicationDate = LocalDate.of(2026, 6, 25);
+        LocalDate firstNextTradingDay = LocalDate.of(2026, 6, 26);
+        LocalDate settleDate = LocalDate.of(2026, 6, 29);
+        when(tradeRecordMapper.selectList(any())).thenReturn(List.of(record));
+        when(holdingMapper.selectOne(any())).thenReturn(holding);
+        when(tradingCalendarService.isTradingDay(applicationDate)).thenReturn(true);
+        when(tradingCalendarService.nextTradingDay(applicationDate)).thenReturn(firstNextTradingDay);
+        when(tradingCalendarService.nextTradingDay(firstNextTradingDay)).thenReturn(settleDate);
+        when(fundQueryService.getHistoricalNav(any(), any(), any())).thenReturn(List.of(
+                new FundNavPointDTO("012922", applicationDate, new BigDecimal("5.1000"), null, null, "TEST"),
+                new FundNavPointDTO("012922", firstNextTradingDay, new BigDecimal("5.2000"), null, null, "TEST")
+        ));
+        TradeRecordServiceImpl service = new TradeRecordServiceImpl(
+                tradeRecordMapper,
+                holdingMapper,
+                accountMapper,
+                accountService,
+                mock(InvestmentPlanMapper.class),
+                fundQueryService,
+                tradingCalendarService);
+
+        service.settleDueProcessingTrades(settleDate);
+
+        assertThat(record.getTradeStatus()).isEqualTo("COMPLETED");
+        assertThat(record.getTradeNav()).isEqualByComparingTo("5.1000");
+        assertThat(record.getTradeShare()).isEqualByComparingTo("19.6078");
+        verify(accountService).recalculateOwnedAccount(1L, 10L);
+    }
+
+    @Test
+    void dueProcessingSellShouldRecalculateAmountWithOfficialNav() {
+        TradeRecordMapper tradeRecordMapper = mock(TradeRecordMapper.class);
+        FundHoldingMapper holdingMapper = mock(FundHoldingMapper.class);
+        PortfolioAccountMapper accountMapper = mock(PortfolioAccountMapper.class);
+        PortfolioAccountService accountService = mock(PortfolioAccountService.class);
+        FundQueryService fundQueryService = mock(FundQueryService.class);
+        TradingCalendarService tradingCalendarService = mock(TradingCalendarService.class);
+        FundHolding holding = holding();
+        holding.setHoldingAmount(new BigDecimal("1200.0000"));
+        holding.setHoldingShare(new BigDecimal("1000.0000"));
+        holding.setHoldingCost(new BigDecimal("1000.0000"));
+        holding.setLatestOfficialNav(new BigDecimal("1.2000"));
+        holding.setCurrentEstimateNav(new BigDecimal("1.2000"));
+        TradeRecord record = processingBuyRecord();
+        record.setTradeType("SELL");
+        record.setTradeAmount(new BigDecimal("220.0000"));
+        record.setTradeShare(new BigDecimal("200.0000"));
+        record.setTradeNav(null);
+        LocalDate tradeDate = LocalDate.of(2026, 6, 26);
+        LocalDate settleDate = LocalDate.of(2026, 6, 29);
+        when(tradeRecordMapper.selectList(any())).thenReturn(List.of(record));
+        when(holdingMapper.selectOne(any())).thenReturn(holding);
+        when(tradingCalendarService.isTradingDay(tradeDate)).thenReturn(true);
+        when(tradingCalendarService.nextTradingDay(tradeDate)).thenReturn(settleDate);
+        when(fundQueryService.getHistoricalNav(any(), any(), any())).thenReturn(List.of(
+                new FundNavPointDTO("016874", tradeDate, new BigDecimal("1.2500"), null, null, "TEST")
+        ));
+        TradeRecordServiceImpl service = new TradeRecordServiceImpl(
+                tradeRecordMapper,
+                holdingMapper,
+                accountMapper,
+                accountService,
+                mock(InvestmentPlanMapper.class),
+                fundQueryService,
+                tradingCalendarService);
+        ArgumentCaptor<FundHolding> holdingCaptor = ArgumentCaptor.forClass(FundHolding.class);
+
+        service.settleDueProcessingTrades(settleDate);
+
+        verify(holdingMapper).updateById(holdingCaptor.capture());
+        FundHolding saved = holdingCaptor.getValue();
+        assertThat(record.getTradeStatus()).isEqualTo("COMPLETED");
+        assertThat(record.getTradeNav()).isEqualByComparingTo("1.2500");
+        assertThat(record.getTradeShare()).isEqualByComparingTo("200.0000");
+        assertThat(record.getTradeAmount()).isEqualByComparingTo("250.0000");
+        assertThat(saved.getHoldingShare()).isEqualByComparingTo("800.0000");
+        assertThat(saved.getHoldingCost()).isEqualByComparingTo("800.0000");
+        assertThat(saved.getHoldingAmount()).isEqualByComparingTo("1000.0000");
+        assertThat(saved.getHoldingProfit()).isEqualByComparingTo("200.0000");
         verify(accountService).recalculateOwnedAccount(1L, 10L);
     }
 

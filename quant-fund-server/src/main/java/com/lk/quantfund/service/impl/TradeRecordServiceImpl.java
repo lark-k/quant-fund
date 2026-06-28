@@ -132,6 +132,16 @@ public class TradeRecordServiceImpl implements TradeRecordService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void deleteProcessing(Long tradeId) {
+        TradeRecord record = loadOwnedTrade(UserContext.getUserId(), tradeId);
+        if (!TradeStatus.PROCESSING.name().equals(record.getTradeStatus())) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "only pending trade record can be deleted");
+        }
+        tradeRecordMapper.deleteById(record.getId());
+    }
+
+    @Override
     public List<TradeRecordVO> list(Long accountId, Long holdingId, TradeType tradeType, TradeStatus tradeStatus) {
         Long userId = UserContext.getUserId();
         LambdaQueryWrapper<TradeRecord> wrapper = new LambdaQueryWrapper<TradeRecord>()
@@ -231,6 +241,9 @@ public class TradeRecordServiceImpl implements TradeRecordService {
         }
         record.setTradeNav(officialNav.get());
         record.setTradeShare(resolveConfirmedShare(record, holding, officialNav.get()));
+        if (isDecreaseTrade(TradeType.valueOf(record.getTradeType()))) {
+            record.setTradeAmount(scale(valueOrZero(record.getTradeShare()).multiply(officialNav.get())));
+        }
         record.setTradeStatus(TradeStatus.COMPLETED.name());
         record.setUpdateTime(LocalDateTime.now());
         tradeRecordMapper.updateById(record);
@@ -317,10 +330,10 @@ public class TradeRecordServiceImpl implements TradeRecordService {
         LocalDate applicationDate = applicationDate(record.getTradeTime());
         int delayDays = settlementDelayTradingDays(record);
         LocalDate navDate = applicationDate;
-        for (int index = 1; index < delayDays; index++) {
-            navDate = tradingCalendarService.nextTradingDay(navDate);
+        LocalDate settleDate = applicationDate;
+        for (int index = 0; index < delayDays; index++) {
+            settleDate = tradingCalendarService.nextTradingDay(settleDate);
         }
-        LocalDate settleDate = tradingCalendarService.nextTradingDay(navDate);
         return new TradeSettlement(applicationDate, navDate, settleDate);
     }
 
@@ -577,6 +590,10 @@ public class TradeRecordServiceImpl implements TradeRecordService {
 
     private boolean isIncreaseTrade(TradeType tradeType) {
         return tradeType == TradeType.BUY || tradeType == TradeType.REGULAR_INVEST || tradeType == TradeType.CONVERT_IN;
+    }
+
+    private boolean isDecreaseTrade(TradeType tradeType) {
+        return tradeType == TradeType.SELL || tradeType == TradeType.CONVERT_OUT;
     }
 
     private TradeRecord loadOwnedTrade(Long userId, Long tradeId) {

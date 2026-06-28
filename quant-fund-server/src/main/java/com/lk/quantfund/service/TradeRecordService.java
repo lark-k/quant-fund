@@ -19,6 +19,8 @@ public interface TradeRecordService {
 
     TradeRecordVO detail(Long tradeId);
 
+    void deleteProcessing(Long tradeId);
+
     List<TradeRecordVO> list(Long accountId, Long holdingId, TradeType tradeType, TradeStatus tradeStatus);
 
     List<TradeRecordVO> processing();

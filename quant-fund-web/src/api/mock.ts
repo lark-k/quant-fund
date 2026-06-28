@@ -1318,6 +1318,12 @@ export const mockApi = {
     trades.unshift(trade)
     return trade
   },
+  async deleteTrade(id: number) {
+    const index = trades.findIndex((item) => item.id === id)
+    if (index === -1) throw new Error('未找到交易记录')
+    if (trades[index].tradeStatus !== 'PROCESSING') throw new Error('已正式执行的交易不能删除')
+    trades.splice(index, 1)
+  },
   async createConvertPair(request: ConvertPairTradeRequest) {
     const outHolding = holdings.find((item) => item.id === request.outHoldingId)
     const timestamp = Date.now()

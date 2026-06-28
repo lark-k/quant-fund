@@ -36,3 +36,7 @@ export function mergeRecentTrades(records: TradeRecord[]) {
     return true
   }).sort((left, right) => String(right.tradeTime || '').localeCompare(String(left.tradeTime || '')))
 }
+
+export function forgetRecentTrade(id: number) {
+  saveRecentTrades(parseRecentTrades().filter((record) => record.id !== id))
+}

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { quantApi } from '@/api/quant'
 import type { FundHolding, FundSearchResult, TradeRecord } from '@/types/domain'
 import { SIMULATED_TRADE_NOTICE } from '@/types/domain'
@@ -10,7 +10,7 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import MetricTile from '@/components/common/MetricTile.vue'
 import { money } from '@/utils/format'
-import { mergeRecentTrades, rememberRecentTrades } from '@/utils/recentTrades'
+import { forgetRecentTrade, mergeRecentTrades, rememberRecentTrades } from '@/utils/recentTrades'
 
 type TradeFilter = {
   key: string
@@ -36,6 +36,7 @@ const filter = ref('ALL')
 const dialogOpen = ref(false)
 const saving = ref(false)
 const settling = ref(false)
+const deletingTradeId = ref<number | null>(null)
 const convertDialogOpen = ref(false)
 const convertSaving = ref(false)
 const convertInAmountTouched = ref(false)
@@ -141,6 +142,39 @@ function statusLabel(status: TradeRecord['tradeStatus']) {
     CANCELLED: '已取消',
     FAILED: '失败'
   }[status]
+}
+
+function canDeleteTrade(item: TradeRecord) {
+  return item.tradeStatus === 'PROCESSING'
+}
+
+async function deleteTrade(item: TradeRecord) {
+  if (!canDeleteTrade(item)) {
+    ElMessage.warning('已正式执行的交易不能删除')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确认删除 ${item.fundName} 的待执行交易记录吗？删除后不会影响当前持仓。`,
+      '删除待执行交易',
+      {
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+  } catch {
+    return
+  }
+  deletingTradeId.value = item.id
+  try {
+    await quantApi.deleteTrade(item.id)
+    forgetRecentTrade(item.id)
+    trades.value = trades.value.filter((record) => record.id !== item.id)
+    ElMessage.success('待执行交易已删除')
+  } finally {
+    deletingTradeId.value = null
+  }
 }
 
 function nullableMoney(value: number | null | undefined, digits = 2) {
@@ -400,7 +434,7 @@ async function settleDueTrades() {
 
           <table v-if="filtered.length" class="terminal-table">
             <thead>
-              <tr><th>时间</th><th>基金</th><th>类型</th><th>状态</th><th>金额</th><th>份额</th><th>净值</th><th>手续费</th><th>备注</th></tr>
+              <tr><th>时间</th><th>基金</th><th>类型</th><th>状态</th><th>金额</th><th>份额</th><th>净值</th><th>手续费</th><th>备注</th><th>操作</th></tr>
             </thead>
             <tbody>
               <tr v-for="item in filtered" :key="item.id">
@@ -413,6 +447,17 @@ async function settleDueTrades() {
                 <td>{{ nullableNav(item.tradeNav) }}</td>
                 <td>{{ money(item.tradeFee) }}</td>
                 <td>{{ item.remark }}</td>
+                <td>
+                  <button
+                    v-if="canDeleteTrade(item)"
+                    class="ghost-button table-button danger-button"
+                    :disabled="deletingTradeId === item.id"
+                    @click="deleteTrade(item)"
+                  >
+                    {{ deletingTradeId === item.id ? '删除中' : '删除' }}
+                  </button>
+                  <span v-else class="muted-text">--</span>
+                </td>
               </tr>
             </tbody>
           </table>

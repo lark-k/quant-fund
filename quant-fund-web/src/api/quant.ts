@@ -178,6 +178,9 @@ export const quantApi = {
   createTrade(request: TradeRecordRequest): Promise<TradeRecord> {
     return USE_MOCK ? mockApi.createTrade(request) : http.post('/trades', request)
   },
+  deleteTrade(id: number): Promise<void> {
+    return USE_MOCK ? mockApi.deleteTrade(id) : http.delete(`/trades/${id}`)
+  },
   createConvertPair(request: ConvertPairTradeRequest): Promise<TradeRecord[]> {
     return USE_MOCK ? mockApi.createConvertPair(request) : http.post('/trades/convert-pair', request)
   },
