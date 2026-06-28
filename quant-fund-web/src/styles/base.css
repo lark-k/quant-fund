@@ -1907,6 +1907,587 @@ a {
   resize: vertical;
 }
 
+.sync-buy-form {
+  display: grid;
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid rgba(120, 154, 180, 0.18);
+  border-radius: 8px;
+  background: #0d1a21;
+}
+
+.sync-sell-form {
+  display: grid;
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid rgba(120, 154, 180, 0.18);
+  border-radius: 8px;
+  background: #0d1a21;
+}
+
+.sync-plan-form {
+  display: grid;
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid rgba(120, 154, 180, 0.18);
+  border-radius: 8px;
+  background: #0d1a21;
+}
+
+.sync-buy-fund,
+.sync-buy-amount,
+.sync-buy-time,
+.sync-sell-share {
+  padding: 22px 24px;
+}
+
+.sync-plan-list {
+  display: grid;
+  gap: 16px;
+  padding: 22px 24px;
+}
+
+.sync-plan-section-title {
+  color: #e8f5fb;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.sync-plan-items {
+  display: grid;
+  gap: 12px;
+}
+
+.sync-plan-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  min-height: 78px;
+  padding: 14px 16px;
+  border: 1px solid rgba(120, 154, 180, 0.18);
+  border-radius: 8px;
+  background: rgba(9, 18, 24, 0.72);
+  color: #aab8c1;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sync-plan-card:hover {
+  border-color: rgba(126, 167, 255, 0.75);
+  background: rgba(15, 30, 40, 0.9);
+}
+
+.sync-plan-card > div {
+  display: grid;
+  gap: 7px;
+}
+
+.sync-plan-card > div:last-child {
+  justify-items: end;
+  text-align: right;
+}
+
+.sync-plan-card strong {
+  color: #e8f5fb;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.sync-plan-card span,
+.sync-plan-card small {
+  color: #8fa2ad;
+  font-size: 13px;
+}
+
+.sync-plan-card em {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 10px;
+  border: 1px solid rgba(67, 208, 134, 0.35);
+  border-radius: 999px;
+  background: rgba(67, 208, 134, 0.12);
+  color: #7ee2a8;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.sync-plan-card em.paused {
+  border-color: rgba(255, 184, 92, 0.35);
+  background: rgba(255, 184, 92, 0.12);
+  color: #ffc46f;
+}
+
+.sync-plan-add {
+  min-height: 44px;
+  border: 1px dashed rgba(126, 167, 255, 0.62);
+  border-radius: 8px;
+  background: rgba(126, 167, 255, 0.08);
+  color: #dcecff;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.sync-plan-add:hover {
+  border-color: rgba(126, 167, 255, 0.95);
+  background: rgba(126, 167, 255, 0.14);
+}
+
+.sync-plan-edit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  padding: 22px 24px;
+  border-bottom: 8px solid rgba(120, 154, 180, 0.08);
+}
+
+.sync-plan-edit-grid label {
+  display: grid;
+  gap: 8px;
+  color: #aab8c1;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.sync-plan-edit-grid label:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
+.sync-plan-picker-card {
+  display: grid;
+  gap: 8px;
+  min-height: 76px;
+  padding: 14px 16px;
+  border: 1px solid rgba(120, 154, 180, 0.22);
+  border-radius: 8px;
+  background: rgba(9, 18, 24, 0.72);
+  color: #aab8c1;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sync-plan-picker-card:hover {
+  border-color: rgba(126, 167, 255, 0.75);
+  background: rgba(15, 30, 40, 0.9);
+}
+
+.sync-plan-picker-card span {
+  color: #8fa2ad;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.sync-plan-picker-card strong {
+  color: #e8f5fb;
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.sync-plan-picker-card small {
+  color: #7ea7ff;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.sync-plan-form > .form-hint {
+  margin: 0;
+  padding: 0 24px 18px;
+}
+
+.sync-plan-form .disclaimer-bar {
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
+  border-radius: 0;
+}
+
+.plan-action-sheet {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+}
+
+.plan-action-dialog .el-dialog__body {
+  display: flex;
+  align-items: center;
+  min-height: 228px;
+  padding: 28px 24px;
+}
+
+.plan-action-sheet button {
+  min-height: 42px;
+  border: 1px solid rgba(120, 154, 180, 0.18);
+  border-radius: 8px;
+  background: rgba(13, 26, 33, 0.95);
+  color: #e8f5fb;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.plan-action-sheet button:hover {
+  border-color: rgba(126, 167, 255, 0.75);
+  background: rgba(15, 30, 40, 0.95);
+}
+
+.plan-action-sheet button.danger {
+  border-color: rgba(255, 101, 101, 0.35);
+  color: #ff8585;
+}
+
+.plan-action-sheet button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.plan-schedule-dialog .el-dialog {
+  overflow: hidden;
+  border: 1px solid rgba(120, 154, 180, 0.24);
+  border-radius: 10px;
+  background: #0d1a21;
+}
+
+.plan-schedule-dialog .el-dialog__header,
+.plan-schedule-dialog .el-dialog__footer {
+  display: none;
+}
+
+.plan-schedule-dialog .el-dialog__body {
+  padding: 0;
+}
+
+.plan-schedule-picker {
+  display: grid;
+  background: #0d1a21;
+}
+
+.plan-schedule-header {
+  display: grid;
+  grid-template-columns: 80px 1fr 80px;
+  align-items: center;
+  min-height: 54px;
+  padding: 0 18px;
+  border-bottom: 1px solid rgba(120, 154, 180, 0.16);
+}
+
+.plan-schedule-header strong {
+  color: #e8f5fb;
+  font-size: 18px;
+  text-align: center;
+}
+
+.plan-schedule-header button {
+  border: 0;
+  background: transparent;
+  color: #8fa2ad;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.plan-schedule-header button:last-child {
+  color: #7ea7ff;
+  font-weight: 800;
+  text-align: right;
+}
+
+.plan-schedule-header button:first-child {
+  text-align: left;
+}
+
+.plan-schedule-body {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  min-height: 260px;
+  padding: 26px 28px 20px;
+}
+
+.plan-schedule-body::before,
+.plan-schedule-body::after {
+  position: absolute;
+  right: 42px;
+  left: 42px;
+  z-index: 1;
+  height: 1px;
+  background: rgba(120, 154, 180, 0.34);
+  content: "";
+  pointer-events: none;
+}
+
+.plan-schedule-body::before {
+  top: calc(50% - 26px);
+}
+
+.plan-schedule-body::after {
+  top: calc(50% + 26px);
+}
+
+.plan-schedule-column {
+  position: relative;
+  display: grid;
+  align-content: center;
+  gap: 0;
+  max-height: 260px;
+  overflow: hidden;
+}
+
+.plan-schedule-column.scrollable {
+  align-content: center;
+  overflow: hidden;
+  padding-right: 6px;
+}
+
+.plan-schedule-column.single {
+  align-content: center;
+}
+
+.plan-schedule-column button {
+  position: relative;
+  z-index: 2;
+  min-height: 52px;
+  border: 0;
+  background: transparent;
+  color: #7f8f98;
+  font-size: 18px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.plan-schedule-column button.active {
+  color: #e8f5fb;
+  font-size: 22px;
+  font-weight: 900;
+}
+
+.plan-schedule-column button.placeholder {
+  visibility: hidden;
+  cursor: default;
+}
+
+.plan-schedule-column button:hover {
+  color: #dcecff;
+}
+
+.plan-schedule-picker p {
+  margin: 0;
+  padding: 0 28px 22px;
+  color: #7ea7ff;
+  font-size: 14px;
+  font-weight: 800;
+  text-align: center;
+}
+
+
+.sync-buy-fund {
+  border-bottom: 8px solid rgba(120, 154, 180, 0.08);
+}
+
+.sync-buy-fund strong {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  color: #e8f5fb;
+  font-size: 20px;
+  line-height: 1.25;
+}
+
+.sync-buy-fund strong span {
+  color: #aab8c1;
+  font-size: 16px;
+}
+
+.sync-buy-fund p {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0 0;
+  color: #aab8c1;
+  font-size: 15px;
+}
+
+.sync-buy-fund b {
+  font-size: 18px;
+}
+
+.sync-buy-amount {
+  display: grid;
+  gap: 14px;
+  border-bottom: 8px solid rgba(120, 154, 180, 0.08);
+}
+
+.sync-sell-share {
+  display: grid;
+  gap: 14px;
+  border-bottom: 8px solid rgba(120, 154, 180, 0.08);
+}
+
+.sync-buy-amount label,
+.sync-sell-share label {
+  color: #e8f5fb;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.sync-money-input {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 18px;
+  min-height: 76px;
+  border-top: 1px solid rgba(120, 154, 180, 0.14);
+  border-bottom: 1px solid rgba(120, 154, 180, 0.14);
+}
+
+.sync-money-input span {
+  color: #e8f5fb;
+  font-size: 38px;
+  font-weight: 900;
+}
+
+.sync-money-input input {
+  width: 100%;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #e8f5fb;
+  font-size: 34px;
+  font-weight: 800;
+}
+
+.sync-money-input input::placeholder {
+  color: rgba(170, 184, 193, 0.35);
+}
+
+.sync-share-input {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 76px;
+  border-top: 1px solid rgba(120, 154, 180, 0.14);
+  border-bottom: 1px solid rgba(120, 154, 180, 0.14);
+}
+
+.sync-share-input input {
+  width: 100%;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #e8f5fb;
+  font-size: 34px;
+  font-weight: 800;
+}
+
+.sync-share-input input::placeholder {
+  color: rgba(170, 184, 193, 0.35);
+}
+
+.sync-share-input span {
+  color: #aab8c1;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.sync-ratio-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.sync-ratio-row button {
+  min-height: 34px;
+  border: 1px solid rgba(170, 184, 193, 0.55);
+  border-radius: 999px;
+  background: rgba(9, 18, 24, 0.72);
+  color: #aab8c1;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.sync-ratio-row button:hover {
+  border-color: rgba(126, 167, 255, 0.85);
+  color: #dcecff;
+}
+
+.sync-fee-row,
+.sync-buy-time {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  color: #aab8c1;
+  font-size: 14px;
+}
+
+.sync-fee-row {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.sync-fee-row strong {
+  margin-left: 3px;
+  color: #7ea7ff;
+  font-weight: 800;
+}
+
+.sync-fee-row input {
+  width: 86px;
+  margin: 0 5px;
+  border: 0;
+  border-bottom: 1px solid rgba(126, 167, 255, 0.65);
+  outline: none;
+  background: transparent;
+  color: #dcecff;
+  text-align: right;
+  font-weight: 700;
+}
+
+.sync-buy-time > span {
+  color: #e8f5fb;
+  font-size: 17px;
+  font-weight: 800;
+}
+
+.sync-buy-time > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sync-buy-time .form-control {
+  width: 150px;
+}
+
+.sync-buy-form .form-hint {
+  margin: 0;
+  padding: 0 24px 18px;
+}
+
+.sync-sell-form .form-hint {
+  margin: 0;
+  padding: 0 24px 12px;
+}
+
+.sync-remark-field {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0 24px 18px;
+  color: #aab8c1;
+  font-size: 14px;
+}
+
+.sync-buy-form .disclaimer-bar,
+.sync-sell-form .disclaimer-bar {
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
+  border-radius: 0;
+}
+
 .auth-form .primary-button {
   margin-top: 6px;
   height: 38px;

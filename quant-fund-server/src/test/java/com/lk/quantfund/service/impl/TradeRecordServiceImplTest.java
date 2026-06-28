@@ -13,15 +13,21 @@ import com.lk.quantfund.auth.UserContext;
 import com.lk.quantfund.constants.SystemConstants;
 import com.lk.quantfund.dto.trade.ConvertPairTradeRequest;
 import com.lk.quantfund.dto.trade.TradeRecordRequest;
+import com.lk.quantfund.datasource.model.FundNavPointDTO;
 import com.lk.quantfund.entity.FundHolding;
 import com.lk.quantfund.entity.PortfolioAccount;
 import com.lk.quantfund.entity.TradeRecord;
 import com.lk.quantfund.exception.BusinessException;
 import com.lk.quantfund.mapper.FundHoldingMapper;
+import com.lk.quantfund.mapper.InvestmentPlanMapper;
 import com.lk.quantfund.mapper.PortfolioAccountMapper;
 import com.lk.quantfund.mapper.TradeRecordMapper;
+import com.lk.quantfund.scheduler.TradingCalendarService;
+import com.lk.quantfund.service.FundQueryService;
 import com.lk.quantfund.service.PortfolioAccountService;
 import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -36,7 +42,10 @@ class TradeRecordServiceImplTest {
                 mock(TradeRecordMapper.class),
                 mock(FundHoldingMapper.class),
                 mock(PortfolioAccountMapper.class),
-                mock(PortfolioAccountService.class)
+                mock(PortfolioAccountService.class),
+                mock(InvestmentPlanMapper.class),
+                mock(FundQueryService.class),
+                mock(TradingCalendarService.class)
         );
         TradeRecordRequest request = new TradeRecordRequest(
                 1L,
@@ -273,6 +282,58 @@ class TradeRecordServiceImplTest {
     }
 
     @Test
+    void dueProcessingBuyShouldSettleWithOfficialNavBeforeIntradayEstimate() {
+        TradeRecordMapper tradeRecordMapper = mock(TradeRecordMapper.class);
+        FundHoldingMapper holdingMapper = mock(FundHoldingMapper.class);
+        PortfolioAccountMapper accountMapper = mock(PortfolioAccountMapper.class);
+        PortfolioAccountService accountService = mock(PortfolioAccountService.class);
+        FundQueryService fundQueryService = mock(FundQueryService.class);
+        TradingCalendarService tradingCalendarService = mock(TradingCalendarService.class);
+        FundHolding holding = holding();
+        holding.setHoldingAmount(new BigDecimal("1343.1600"));
+        holding.setHoldingShare(new BigDecimal("543.1500"));
+        holding.setHoldingCost(new BigDecimal("1000.0000"));
+        holding.setHoldingProfit(new BigDecimal("343.1600"));
+        holding.setHoldingProfitRate(new BigDecimal("34.3200"));
+        holding.setLatestOfficialNav(new BigDecimal("2.4729"));
+        holding.setCurrentEstimateNav(new BigDecimal("2.4729"));
+        TradeRecord record = processingBuyRecord();
+        LocalDate tradeDate = LocalDate.of(2026, 6, 26);
+        LocalDate settleDate = LocalDate.of(2026, 6, 29);
+        when(tradeRecordMapper.selectList(any())).thenReturn(List.of(record));
+        when(holdingMapper.selectOne(any())).thenReturn(holding);
+        when(tradingCalendarService.isTradingDay(tradeDate)).thenReturn(true);
+        when(tradingCalendarService.nextTradingDay(tradeDate)).thenReturn(settleDate);
+        when(fundQueryService.getHistoricalNav(any(), any(), any())).thenReturn(List.of(
+                new FundNavPointDTO("016874", tradeDate, new BigDecimal("2.4729"), null, null, "TEST")
+        ));
+        TradeRecordServiceImpl service = new TradeRecordServiceImpl(
+                tradeRecordMapper,
+                holdingMapper,
+                accountMapper,
+                accountService,
+                mock(InvestmentPlanMapper.class),
+                fundQueryService,
+                tradingCalendarService);
+        ArgumentCaptor<FundHolding> holdingCaptor = ArgumentCaptor.forClass(FundHolding.class);
+
+        service.settleDueProcessingTrades(settleDate);
+
+        verify(holdingMapper).updateById(holdingCaptor.capture());
+        FundHolding saved = holdingCaptor.getValue();
+        assertThat(record.getTradeStatus()).isEqualTo("COMPLETED");
+        assertThat(record.getTradeShare()).isEqualByComparingTo("40.4384");
+        assertThat(record.getTradeNav()).isEqualByComparingTo("2.4729");
+        assertThat(saved.getHoldingShare()).isEqualByComparingTo("583.5884");
+        assertThat(saved.getHoldingCost()).isEqualByComparingTo("1100.0000");
+        assertThat(saved.getHoldingAmount()).isEqualByComparingTo("1443.1558");
+        assertThat(saved.getHoldingProfit()).isEqualByComparingTo("343.1558");
+        assertThat(saved.getHoldingProfitRate()).isEqualByComparingTo("31.1960");
+        assertThat(saved.getDailyProfit()).isEqualByComparingTo("0.0000");
+        verify(accountService).recalculateOwnedAccount(1L, 10L);
+    }
+
+    @Test
     void completedConvertInCanReferenceOwnedConvertOutTrade() {
         TradeRecordMapper tradeRecordMapper = mock(TradeRecordMapper.class);
         FundHoldingMapper holdingMapper = mock(FundHoldingMapper.class);
@@ -369,7 +430,18 @@ class TradeRecordServiceImplTest {
                                            FundHoldingMapper holdingMapper,
                                            PortfolioAccountMapper accountMapper,
                                            PortfolioAccountService accountService) {
-        return new TradeRecordServiceImpl(tradeRecordMapper, holdingMapper, accountMapper, accountService);
+        TradingCalendarService tradingCalendarService = mock(TradingCalendarService.class);
+        when(tradingCalendarService.isTradingDay(any())).thenReturn(true);
+        when(tradingCalendarService.nextTradingDay(any())).thenAnswer(invocation ->
+                ((java.time.LocalDate) invocation.getArgument(0)).plusDays(1));
+        return new TradeRecordServiceImpl(
+                tradeRecordMapper,
+                holdingMapper,
+                accountMapper,
+                accountService,
+                mock(InvestmentPlanMapper.class),
+                mock(FundQueryService.class),
+                tradingCalendarService);
     }
 
     private TradeRecordRequest completedRequest(String tradeType,
@@ -476,4 +548,22 @@ class TradeRecordServiceImplTest {
         record.setTradeStatus("COMPLETED");
         return record;
     }
+
+    private TradeRecord processingBuyRecord() {
+        TradeRecord record = new TradeRecord();
+        record.setId(300L);
+        record.setUserId(1L);
+        record.setAccountId(10L);
+        record.setHoldingId(100L);
+        record.setFundCode("016874");
+        record.setFundName("广发远见智选混合C");
+        record.setTradeType("BUY");
+        record.setTradeStatus("PROCESSING");
+        record.setTradeAmount(new BigDecimal("100.0000"));
+        record.setTradeFee(BigDecimal.ZERO);
+        record.setTradeTime(LocalDateTime.of(2026, 6, 26, 14, 59));
+        record.setRemark(SystemConstants.SIMULATED_TRADE_NOTICE);
+        return record;
+    }
+
 }

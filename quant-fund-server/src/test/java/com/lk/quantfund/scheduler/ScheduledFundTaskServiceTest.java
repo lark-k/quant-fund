@@ -68,8 +68,10 @@ class ScheduledFundTaskServiceTest {
         PortfolioAccountMapper accountMapper = mock(PortfolioAccountMapper.class);
         HoldingSnapshotMapper snapshotMapper = mock(HoldingSnapshotMapper.class);
         PortfolioAccountService portfolioAccountService = mock(PortfolioAccountService.class);
+        TradingCalendarService tradingCalendarService = mock(TradingCalendarService.class);
         FundHolding holding = holding("QDII", "Global Growth QDII");
         LocalDate navDate = LocalDate.now().minusDays(1);
+        when(tradingCalendarService.nextTradingDay(navDate)).thenReturn(LocalDate.now());
         when(fundHoldingMapper.selectList(any())).thenReturn(List.of(holding));
         when(fundQueryService.getHistoricalNav(any(), any(), any())).thenReturn(List.of(
                 navPoint(navDate.minusDays(1), "1.0000", null),
@@ -87,7 +89,7 @@ class ScheduledFundTaskServiceTest {
                 accountMapper,
                 snapshotMapper,
                 mock(FundValuationService.class),
-                new TradingCalendarService(properties)
+                tradingCalendarService
         );
         ArgumentCaptor<HoldingSnapshot> snapshotCaptor = ArgumentCaptor.forClass(HoldingSnapshot.class);
 
@@ -97,7 +99,7 @@ class ScheduledFundTaskServiceTest {
         verify(fundHoldingMapper).updateById(any(FundHolding.class));
         verify(snapshotMapper).insert(snapshotCaptor.capture());
         HoldingSnapshot snapshot = snapshotCaptor.getValue();
-        assertThat(snapshot.getSnapshotDate()).isEqualTo(new TradingCalendarService(properties).nextTradingDay(navDate));
+        assertThat(snapshot.getSnapshotDate()).isEqualTo(LocalDate.now());
         assertThat(snapshot.getHoldingAmount()).isEqualByComparingTo("1050.0000");
         assertThat(snapshot.getDailyProfit()).isEqualByComparingTo("50.0000");
         assertThat(snapshot.getPositionRate()).isEqualByComparingTo("10.5000");

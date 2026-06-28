@@ -8,11 +8,16 @@ import DisclaimerBar from '@/components/common/DisclaimerBar.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import MetricTile from '@/components/common/MetricTile.vue'
-import { SIMULATED_TRADE_NOTICE, type ClearHoldingRequest, type FundHolding, type HoldingUpdateRequest, type TradeRecord } from '@/types/domain'
+import { SIMULATED_TRADE_NOTICE, type ClearHoldingRequest, type FundHolding, type FundNavPoint, type HoldingUpdateRequest, type InvestmentPlan, type InvestmentPlanRequest, type TradeRecord } from '@/types/domain'
 import { metricTone, money, percent, signed, toneClass } from '@/utils/format'
+import { rememberRecentTrades } from '@/utils/recentTrades'
 
 type SyncAction = 'BUY' | 'SELL' | 'REGULAR_INVEST' | 'CONVERT_OUT'
 type EditMode = 'AMOUNT_PROFIT' | 'SHARE_COST'
+type TradeCutoff = 'BEFORE_15' | 'AFTER_15'
+type PlanFrequency = 'DAILY' | 'WEEKLY' | 'BIWEEKLY' | 'MONTHLY'
+type WheelOption<T> = { label: string, value: T }
+type WheelItem<T> = WheelOption<T> & { active: boolean, disabled: boolean }
 
 const route = useRoute()
 const router = useRouter()
@@ -22,12 +27,26 @@ const deleting = ref(false)
 const clearing = ref(false)
 const recalculating = ref(false)
 const tradeSaving = ref(false)
+const settlingTrades = ref(false)
+const syncBuyNavLoading = ref(false)
 const dialogOpen = ref(false)
+const planDialogOpen = ref(false)
+const planSaving = ref(false)
+const planLoading = ref(false)
+const planEditMode = ref(false)
+const planActionOpen = ref(false)
+const planScheduleOpen = ref(false)
+const planScheduleDraftFrequency = ref<PlanFrequency>('WEEKLY')
+const planScheduleDraftWeekday = ref(1)
+const planScheduleDraftMonthDay = ref(1)
+const selectedPlan = ref<InvestmentPlan | null>(null)
 const clearDialogOpen = ref(false)
 const holdings = ref<FundHolding[]>([])
+const investmentPlans = ref<InvestmentPlan[]>([])
 const selectedHoldingId = ref<number>()
 const editMode = ref<EditMode>('AMOUNT_PROFIT')
 const activeHolding = computed(() => holdings.value.find((item) => item.id === selectedHoldingId.value))
+const syncBuyLatestNav = ref<FundNavPoint | null>(null)
 
 const form = ref<HoldingUpdateRequest>({
   accountId: 1,
@@ -49,9 +68,20 @@ const tradeForm = ref({
   tradeType: 'BUY' as TradeRecord['tradeType'],
   tradeStatus: 'PROCESSING' as TradeRecord['tradeStatus'],
   tradeAmount: 0,
+  tradeShare: undefined as number | undefined,
   tradeNav: 1,
   tradeFee: 0,
+  tradeFeeRate: 0,
+  tradeDate: todayDate(),
+  tradeCutoff: 'BEFORE_15' as TradeCutoff,
   remark: SIMULATED_TRADE_NOTICE
+})
+const planForm = ref({
+  id: undefined as number | undefined,
+  amount: 0,
+  frequency: 'WEEKLY' as 'DAILY' | 'WEEKLY' | 'BIWEEKLY' | 'MONTHLY',
+  nextExecuteDate: new Date().toISOString().slice(0, 10),
+  status: 'ENABLED' as InvestmentPlan['status']
 })
 const clearForm = ref<ClearHoldingRequest>({
   tradeAmount: 0,
@@ -62,9 +92,23 @@ const clearForm = ref<ClearHoldingRequest>({
 const operationCards = [
   { action: 'BUY', title: '同步加仓', description: '记录你在原平台完成的追加买入' },
   { action: 'SELL', title: '同步减仓', description: '记录你在原平台完成的赎回或卖出' },
-  { action: 'REGULAR_INVEST', title: '同步定投', description: '记录定投扣款后的持仓变化' },
+  { action: 'REGULAR_INVEST', title: '同步定投', description: '设置原平台定投规则，到期后自动生成待确认加仓' },
   { action: 'CONVERT_OUT', title: '同步转换', description: '记录基金转换转出，转入可在交易页补记' }
 ] satisfies Array<{ action: SyncAction, title: string, description: string }>
+const planFrequencyOptions: Array<WheelOption<PlanFrequency>> = [
+  { label: '每周', value: 'WEEKLY' },
+  { label: '每两周', value: 'BIWEEKLY' },
+  { label: '每月', value: 'MONTHLY' },
+  { label: '每日交易日', value: 'DAILY' }
+]
+const planWeekdayOptions = [
+  { label: '周一', value: 1 },
+  { label: '周二', value: 2 },
+  { label: '周三', value: 3 },
+  { label: '周四', value: 4 },
+  { label: '周五', value: 5 }
+]
+const planMonthDayOptions = Array.from({ length: 28 }, (_, index) => index + 1)
 
 onMounted(loadHoldings)
 
@@ -104,12 +148,68 @@ const isNewHoldingDraft = computed(() => {
 })
 const shareModeMissingNav = computed(() => editMode.value === 'SHARE_COST' && referenceNav.value <= 0)
 const isDecreaseTrade = computed(() => ['SELL', 'CONVERT_OUT'].includes(tradeForm.value.tradeType))
-const estimatedTradeShare = computed(() => Number(tradeForm.value.tradeAmount || 0) / Math.max(Number(tradeForm.value.tradeNav || 0), 0.0001))
+const isBuyTrade = computed(() => tradeForm.value.tradeType === 'BUY')
+const isSellTrade = computed(() => tradeForm.value.tradeType === 'SELL')
+const estimatedTradeShare = computed(() => {
+  const explicitShare = Number(tradeForm.value.tradeShare || 0)
+  if (explicitShare > 0) return explicitShare
+  return Number(tradeForm.value.tradeAmount || 0) / Math.max(Number(tradeForm.value.tradeNav || 0), 0.0001)
+})
+const estimatedSellAmount = computed(() => Math.max(Number(tradeForm.value.tradeShare || 0), 0) * Math.max(Number(tradeForm.value.tradeNav || 0), 0))
+const estimatedBuyFee = computed(() => {
+  const amount = Number(tradeForm.value.tradeAmount || 0)
+  const feeRate = Number(tradeForm.value.tradeFeeRate || 0)
+  if (!Number.isFinite(amount) || !Number.isFinite(feeRate)) return 0
+  return Math.max(Math.round(amount * feeRate) / 100, 0)
+})
 const tradeOverLimit = computed(() => {
   const holding = activeHolding.value
   if (!holding || !isDecreaseTrade.value) return false
   return Number(tradeForm.value.tradeAmount) > holding.holdingAmount || estimatedTradeShare.value > holding.holdingShare
 })
+const syncBuyNavValue = computed(() => syncBuyLatestNav.value?.nav ?? activeHolding.value?.latestOfficialNav ?? null)
+const syncBuyNavDateText = computed(() => shortDate(syncBuyLatestNav.value?.date || activeHolding.value?.officialNavDate))
+const syncBuyGrowthRate = computed(() => syncBuyLatestNav.value?.dailyGrowthRate ?? null)
+const tradeCutoffText = computed(() => tradeForm.value.tradeCutoff === 'BEFORE_15' ? '下午3点前' : '下午3点后')
+const maxSellShareText = computed(() => (activeHolding.value?.holdingShare || 0).toLocaleString('zh-CN', {
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 2
+}))
+const syncDialogTitle = computed(() => {
+  if (isBuyTrade.value) return '同步加仓'
+  if (isSellTrade.value) return '同步减仓'
+  return '同步模拟交易记录'
+})
+const syncDialogWidth = computed(() => isBuyTrade.value || isSellTrade.value ? '720px' : '560px')
+const activeInvestmentPlans = computed(() => {
+  const holding = activeHolding.value
+  if (!holding) return []
+  return investmentPlans.value.filter((plan) => plan.accountId === holding.accountId && plan.fundCode === holding.fundCode)
+})
+const investmentPlanSummary = computed(() => {
+  const plans = activeInvestmentPlans.value
+  const totalAmount = plans.reduce((sum, plan) => sum + Number(plan.amount || 0), 0)
+  return {
+    totalAmount,
+    planCount: plans.length
+  }
+})
+const planScheduleText = computed(() => {
+  if (planForm.value.frequency === 'DAILY') return '每日交易日'
+  if (planForm.value.frequency === 'MONTHLY') return `每月 ${dayOfMonthFromDate(planForm.value.nextExecuteDate)}日`
+  return `${frequencyLabel(planForm.value.frequency)} ${weekdayLabel(weekdayFromDate(planForm.value.nextExecuteDate))}`
+})
+const planScheduleDraftText = computed(() => {
+  if (planScheduleDraftFrequency.value === 'DAILY') return '每日交易日'
+  if (planScheduleDraftFrequency.value === 'MONTHLY') return `每月 ${planScheduleDraftMonthDay.value}日`
+  return `${frequencyLabel(planScheduleDraftFrequency.value)} ${weekdayLabel(planScheduleDraftWeekday.value)}`
+})
+const planFrequencyWheelItems = computed(() => wheelItems(planFrequencyOptions, planScheduleDraftFrequency.value))
+const planWeekdayWheelItems = computed(() => wheelItems(planWeekdayOptions, planScheduleDraftWeekday.value))
+const planMonthDayWheelItems = computed(() => wheelItems(
+  planMonthDayOptions.map((day) => ({ label: `${day}日`, value: day })),
+  planScheduleDraftMonthDay.value
+))
 
 async function loadHoldings() {
   loading.value = true
@@ -147,7 +247,13 @@ function selectHolding(id: number) {
   }
   tradeForm.value.tradeNav = holding.currentEstimateNav || holding.latestOfficialNav || 1
   tradeForm.value.tradeAmount = 0
+  tradeForm.value.tradeShare = undefined
+  tradeForm.value.tradeFee = 0
+  tradeForm.value.tradeFeeRate = 0
+  tradeForm.value.tradeDate = todayDate()
+  tradeForm.value.tradeCutoff = 'BEFORE_15'
   tradeForm.value.remark = SIMULATED_TRADE_NOTICE
+  syncBuyLatestNav.value = null
 }
 
 async function saveHolding() {
@@ -265,21 +371,318 @@ async function recalculateHolding() {
 
 function openSyncDialog(action: SyncAction) {
   if (!activeHolding.value) return
+  if (action === 'REGULAR_INVEST') {
+    planEditMode.value = false
+    selectedPlan.value = null
+    resetPlanForm()
+    planDialogOpen.value = true
+    void loadSyncBuyLatestNav(activeHolding.value)
+    void loadInvestmentPlans()
+    return
+  }
   tradeForm.value = {
     tradeType: action,
     tradeStatus: 'PROCESSING',
     tradeAmount: 0,
-    tradeNav: activeHolding.value.currentEstimateNav || activeHolding.value.latestOfficialNav || 1,
+    tradeShare: undefined,
+    tradeNav: activeHolding.value.latestOfficialNav || 1,
     tradeFee: 0,
+    tradeFeeRate: 0,
+    tradeDate: todayDate(),
+    tradeCutoff: 'BEFORE_15',
     remark: SIMULATED_TRADE_NOTICE
   }
   dialogOpen.value = true
+  if (action === 'BUY' || action === 'SELL') void loadSyncBuyLatestNav(activeHolding.value)
+}
+
+async function loadInvestmentPlans() {
+  const holding = activeHolding.value
+  if (!holding) return
+  planLoading.value = true
+  try {
+    investmentPlans.value = await quantApi.investmentPlans(holding.accountId)
+  } finally {
+    planLoading.value = false
+  }
+}
+
+function resetPlanForm() {
+  planForm.value = {
+    id: undefined,
+    amount: 0,
+    frequency: 'BIWEEKLY',
+    nextExecuteDate: nextDefaultPlanDate(),
+    status: 'ENABLED'
+  }
+  syncPlanScheduleDraft()
+}
+
+function nextDefaultPlanDate() {
+  return nextTradingDateOnOrAfter(todayDate())
+}
+
+function frequencyLabel(frequency: InvestmentPlan['frequency']) {
+  return {
+    DAILY: '每日',
+    WEEKLY: '每周',
+    BIWEEKLY: '每两周',
+    EVERY_TWO_WEEKS: '每两周',
+    MONTHLY: '每月'
+  }[frequency] || '每周'
+}
+
+function wheelItems<T>(options: Array<WheelOption<T>>, activeValue: T): Array<WheelItem<T>> {
+  const activeIndex = Math.max(options.findIndex((option) => option.value === activeValue), 0)
+  return [-2, -1, 0, 1, 2].map((offset) => {
+    const option = options[activeIndex + offset]
+    return option
+      ? { ...option, active: offset === 0, disabled: false }
+      : { label: '', value: activeValue, active: false, disabled: true }
+  })
+}
+
+function weekdayLabel(weekday: number) {
+  return planWeekdayOptions.find((item) => item.value === weekday)?.label || '周一'
+}
+
+function parseLocalDate(value?: string | null) {
+  const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (!match) return new Date()
+  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+}
+
+function formatLocalDate(date: Date) {
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
+function weekdayFromDate(value?: string | null) {
+  const weekday = parseLocalDate(value).getDay()
+  return weekday === 0 ? 7 : weekday
+}
+
+function dayOfMonthFromDate(value?: string | null) {
+  return parseLocalDate(value).getDate()
+}
+
+function isWeekendDate(date: Date) {
+  const weekday = date.getDay()
+  return weekday === 0 || weekday === 6
+}
+
+function nextTradingDateOnOrAfter(value: string) {
+  const date = parseLocalDate(value)
+  while (isWeekendDate(date)) {
+    date.setDate(date.getDate() + 1)
+  }
+  return formatLocalDate(date)
+}
+
+function nextWeekdayDate(weekday: number) {
+  const date = parseLocalDate(todayDate())
+  const current = weekdayFromDate(todayDate())
+  const diff = (weekday - current + 7) % 7
+  date.setDate(date.getDate() + diff)
+  return nextTradingDateOnOrAfter(formatLocalDate(date))
+}
+
+function nextMonthDayDate(day: number) {
+  const today = parseLocalDate(todayDate())
+  const safeDay = Math.min(Math.max(Math.round(day), 1), 28)
+  const target = new Date(today.getFullYear(), today.getMonth(), safeDay)
+  if (target < today) {
+    target.setMonth(target.getMonth() + 1)
+  }
+  return nextTradingDateOnOrAfter(formatLocalDate(target))
+}
+
+function syncPlanScheduleDraft() {
+  planScheduleDraftFrequency.value = planForm.value.frequency
+  planScheduleDraftWeekday.value = Math.min(weekdayFromDate(planForm.value.nextExecuteDate), 5)
+  planScheduleDraftMonthDay.value = Math.min(Math.max(dayOfMonthFromDate(planForm.value.nextExecuteDate), 1), 28)
+}
+
+function openPlanSchedulePicker() {
+  syncPlanScheduleDraft()
+  planScheduleDraftFrequency.value = 'BIWEEKLY'
+  planScheduleOpen.value = true
+}
+
+function selectPlanDraftFrequency(frequency: PlanFrequency) {
+  planScheduleDraftFrequency.value = frequency
+}
+
+function wheelDirection(event: WheelEvent) {
+  return event.deltaY > 0 || event.deltaX > 0 ? 1 : -1
+}
+
+function shiftWheelValue<T>(options: Array<WheelOption<T>>, activeValue: T, direction: number) {
+  const activeIndex = Math.max(options.findIndex((option) => option.value === activeValue), 0)
+  const nextIndex = Math.min(Math.max(activeIndex + direction, 0), options.length - 1)
+  return options[nextIndex].value
+}
+
+function onPlanFrequencyWheel(event: WheelEvent) {
+  planScheduleDraftFrequency.value = shiftWheelValue(
+    planFrequencyOptions,
+    planScheduleDraftFrequency.value,
+    wheelDirection(event)
+  )
+}
+
+function onPlanWeekdayWheel(event: WheelEvent) {
+  planScheduleDraftWeekday.value = shiftWheelValue(
+    planWeekdayOptions,
+    planScheduleDraftWeekday.value,
+    wheelDirection(event)
+  )
+}
+
+function onPlanMonthDayWheel(event: WheelEvent) {
+  planScheduleDraftMonthDay.value = shiftWheelValue(
+    planMonthDayOptions.map((day) => ({ label: `${day}日`, value: day })),
+    planScheduleDraftMonthDay.value,
+    wheelDirection(event)
+  )
+}
+
+function confirmPlanSchedule() {
+  planForm.value.frequency = planScheduleDraftFrequency.value
+  if (planScheduleDraftFrequency.value === 'DAILY') {
+    planForm.value.nextExecuteDate = nextTradingDateOnOrAfter(todayDate())
+  } else if (planScheduleDraftFrequency.value === 'MONTHLY') {
+    planForm.value.nextExecuteDate = nextMonthDayDate(planScheduleDraftMonthDay.value)
+  } else {
+    planForm.value.nextExecuteDate = nextWeekdayDate(planScheduleDraftWeekday.value)
+  }
+  planScheduleOpen.value = false
+}
+
+function planStatusLabel(status: InvestmentPlan['status']) {
+  return status === 'PAUSED' ? '暂停' : '执行中'
+}
+
+function openPlanAction(plan: InvestmentPlan) {
+  selectedPlan.value = plan
+  planActionOpen.value = true
+}
+
+function openCreatePlanForm() {
+  selectedPlan.value = null
+  resetPlanForm()
+  planEditMode.value = true
+}
+
+function openEditPlanForm(plan: InvestmentPlan) {
+  selectedPlan.value = plan
+  planForm.value = {
+    id: plan.id,
+    amount: plan.amount,
+    frequency: plan.frequency === 'EVERY_TWO_WEEKS' ? 'BIWEEKLY' : plan.frequency,
+    nextExecuteDate: plan.nextExecuteDate,
+    status: plan.status
+  }
+  syncPlanScheduleDraft()
+  planActionOpen.value = false
+  planEditMode.value = true
+}
+
+async function toggleSelectedPlanStatus() {
+  const plan = selectedPlan.value
+  if (!plan) return
+  planSaving.value = true
+  try {
+    const nextStatus = plan.status === 'PAUSED' ? 'ENABLED' : 'PAUSED'
+    const saved = await quantApi.updateInvestmentPlanStatus(plan.id, nextStatus)
+    investmentPlans.value = investmentPlans.value.map((item) => item.id === saved.id ? saved : item)
+    selectedPlan.value = saved
+    planActionOpen.value = false
+    ElMessage.success(nextStatus === 'ENABLED' ? '定投计划已恢复' : '定投计划已暂停')
+  } finally {
+    planSaving.value = false
+  }
+}
+
+async function deleteSelectedPlan() {
+  const plan = selectedPlan.value
+  if (!plan) return
+  await ElMessageBox.confirm(`确认删除 ${plan.planName}？删除后不会再自动生成定投加仓。`, '删除定投计划', {
+    type: 'warning',
+    confirmButtonText: '删除',
+    cancelButtonText: '取消'
+  })
+  planSaving.value = true
+  try {
+    await quantApi.deleteInvestmentPlan(plan.id)
+    investmentPlans.value = investmentPlans.value.filter((item) => item.id !== plan.id)
+    selectedPlan.value = null
+    planActionOpen.value = false
+    ElMessage.success('定投计划已删除')
+  } finally {
+    planSaving.value = false
+  }
+}
+
+function applySellShareRatio(ratio: number) {
+  const holding = activeHolding.value
+  if (!holding) return
+  tradeForm.value.tradeShare = Number((holding.holdingShare * ratio).toFixed(2))
+}
+
+function syncSellAmountFromShare() {
+  tradeForm.value.tradeAmount = Number(estimatedSellAmount.value.toFixed(2))
+}
+
+function todayDate() {
+  const date = new Date()
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
 }
 
 function localDateTime() {
   const date = new Date()
   const pad = (value: number) => String(value).padStart(2, '0')
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
+function dateDaysAgo(days: number) {
+  const date = new Date()
+  date.setDate(date.getDate() - days)
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
+async function loadSyncBuyLatestNav(holding: FundHolding) {
+  syncBuyLatestNav.value = null
+  syncBuyNavLoading.value = true
+  try {
+    const points = await quantApi.fundNav(holding.fundCode, {
+      startDate: dateDaysAgo(30),
+      endDate: todayDate()
+    })
+    const sorted = points
+      .slice()
+      .sort((left, right) => left.date.localeCompare(right.date))
+    syncBuyLatestNav.value = sorted.length ? sorted[sorted.length - 1] : null
+  } catch {
+    syncBuyLatestNav.value = null
+  } finally {
+    syncBuyNavLoading.value = false
+  }
+}
+
+function selectedTradeDateTime() {
+  if (!tradeForm.value.tradeDate) return localDateTime()
+  const time = tradeForm.value.tradeCutoff === 'BEFORE_15' ? '14:59:00' : '15:01:00'
+  return `${tradeForm.value.tradeDate}T${time}`
+}
+
+function shortDate(value?: string | null) {
+  if (!value) return '--'
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (!match) return value
+  return `${match[2]}-${match[3]}`
 }
 
 function relatedThemeText(theme?: string | null) {
@@ -301,7 +704,13 @@ function normalizeFundType(rawType: string) {
 
 async function saveTrade() {
   const holding = activeHolding.value
-  if (!holding || tradeForm.value.tradeAmount <= 0) {
+  if (!holding) return
+  if (isSellTrade.value && Number(tradeForm.value.tradeShare || 0) <= 0) {
+    ElMessage.warning('请填写有效的卖出份额')
+    return
+  }
+  const effectiveTradeAmount = isSellTrade.value ? Number(estimatedSellAmount.value.toFixed(2)) : Number(tradeForm.value.tradeAmount)
+  if (effectiveTradeAmount <= 0) {
     ElMessage.warning('请填写有效的模拟交易金额')
     return
   }
@@ -309,26 +718,80 @@ async function saveTrade() {
     ElMessage.warning('卖出或转出金额不能超过当前持仓')
     return
   }
+  if ((isBuyTrade.value || isSellTrade.value) && !tradeForm.value.tradeDate) {
+    ElMessage.warning(isSellTrade.value ? '请选择原平台卖出日期' : '请选择原平台买入日期')
+    return
+  }
   tradeSaving.value = true
   try {
-    await quantApi.createTrade({
+    const isProcessing = tradeForm.value.tradeStatus === 'PROCESSING'
+    const referenceTradeNav = Number(tradeForm.value.tradeNav) || Number(holding.latestOfficialNav) || 1
+    const effectiveTradeFee = isBuyTrade.value ? estimatedBuyFee.value : Number(tradeForm.value.tradeFee || 0)
+    const trade = await quantApi.createTrade({
       accountId: holding.accountId,
       holdingId: holding.id,
       fundCode: holding.fundCode,
       fundName: holding.fundName,
       tradeType: tradeForm.value.tradeType,
       tradeStatus: tradeForm.value.tradeStatus,
-      tradeAmount: Number(tradeForm.value.tradeAmount),
-      tradeShare: Math.round(Number(tradeForm.value.tradeAmount) / Math.max(Number(tradeForm.value.tradeNav), 0.0001)),
-      tradeNav: Number(tradeForm.value.tradeNav),
-      tradeFee: Number(tradeForm.value.tradeFee),
-      tradeTime: localDateTime(),
+      tradeAmount: effectiveTradeAmount,
+      tradeShare: isSellTrade.value
+        ? Number(tradeForm.value.tradeShare)
+        : (isProcessing ? undefined : Math.round(Number(tradeForm.value.tradeAmount) / Math.max(referenceTradeNav, 0.0001))),
+      tradeNav: isProcessing ? undefined : referenceTradeNav,
+      tradeFee: effectiveTradeFee,
+      tradeTime: (isBuyTrade.value || isSellTrade.value) ? selectedTradeDateTime() : localDateTime(),
       remark: tradeForm.value.remark || SIMULATED_TRADE_NOTICE
     })
+    rememberRecentTrades(trade)
     dialogOpen.value = false
-    ElMessage.success('模拟同步记录已保存')
+    ElMessage.success('同步记录已保存，待确认净值后自动入账')
   } finally {
     tradeSaving.value = false
+  }
+}
+
+async function saveInvestmentPlan() {
+  const holding = activeHolding.value
+  if (!holding || Number(planForm.value.amount) <= 0) {
+    ElMessage.warning('请填写有效的定投金额')
+    return
+  }
+  planSaving.value = true
+  try {
+    const payload: InvestmentPlanRequest = {
+      accountId: holding.accountId,
+      fundCode: holding.fundCode,
+      fundName: holding.fundName,
+      planName: `${holding.fundName}定投`,
+      amount: Number(planForm.value.amount),
+      frequency: planForm.value.frequency,
+      nextExecuteDate: planForm.value.nextExecuteDate,
+      status: 'ENABLED'
+    }
+    const saved = planForm.value.id
+      ? await quantApi.updateInvestmentPlan(planForm.value.id, { ...payload, status: planForm.value.status })
+      : await quantApi.createInvestmentPlan(payload)
+    investmentPlans.value = investmentPlans.value.some((item) => item.id === saved.id)
+      ? investmentPlans.value.map((item) => item.id === saved.id ? saved : item)
+      : [...investmentPlans.value, saved]
+    planEditMode.value = false
+    selectedPlan.value = null
+    ElMessage.success('定投计划已保存，到期后会自动生成待确认加仓记录')
+  } finally {
+    planSaving.value = false
+  }
+}
+
+async function settleDueTrades() {
+  settlingTrades.value = true
+  try {
+    await quantApi.settleDueTrades()
+    holdings.value = await quantApi.holdings()
+    if (selectedHoldingId.value) selectHolding(selectedHoldingId.value)
+    ElMessage.success('已尝试结算到期交易，未到确认日或缺少正式净值的交易会继续等待')
+  } finally {
+    settlingTrades.value = false
   }
 }
 </script>
@@ -347,6 +810,7 @@ async function saveTrade() {
             <option v-for="item in holdings" :key="item.id" :value="item.id">{{ item.fundCode }} · {{ item.fundName }}</option>
           </select>
           <button class="ghost-button" :disabled="recalculating" @click="recalculateHolding">{{ recalculating ? '重算中' : '刷新净值并重算' }}</button>
+          <button class="ghost-button" :disabled="settlingTrades" @click="settleDueTrades">{{ settlingTrades ? '结算中' : '结算到期交易' }}</button>
           <button class="ghost-button" :disabled="clearing" @click="openClearDialog">{{ clearing ? '清仓中' : '清仓持仓' }}</button>
           <button class="ghost-button danger-button" :disabled="deleting" @click="deleteCurrentHolding">{{ deleting ? '删除中' : '删除持仓' }}</button>
           <button class="primary-button" :disabled="saving" @click="saveHolding">{{ saving ? '保存中' : '保存持仓' }}</button>
@@ -458,9 +922,88 @@ async function saveTrade() {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="dialogOpen" title="同步模拟交易记录" width="560px">
-      <DisclaimerBar simulated />
-      <div class="modal-grid compact-form">
+    <el-dialog v-model="dialogOpen" :title="syncDialogTitle" :width="syncDialogWidth">
+      <div v-if="isBuyTrade" class="sync-buy-form">
+        <div class="sync-buy-fund">
+          <strong>{{ activeHolding.fundName }} <span>{{ activeHolding.fundCode }}</span></strong>
+          <p v-if="syncBuyNavLoading">
+            最新净值同步中...
+          </p>
+          <p v-else>
+            最新净值（{{ syncBuyNavDateText }}）：{{ syncBuyNavValue ? syncBuyNavValue.toFixed(4) : '--' }}
+            <b v-if="syncBuyGrowthRate !== null" :class="toneClass(syncBuyGrowthRate)">{{ percent(syncBuyGrowthRate) }}</b>
+            <b v-else class="text-muted">--</b>
+          </p>
+        </div>
+        <div class="sync-buy-amount">
+          <label>同步加仓金额</label>
+          <div class="sync-money-input">
+            <span>￥</span>
+            <input v-model.number="tradeForm.tradeAmount" type="number" min="0" placeholder="已买入金额" />
+          </div>
+          <div class="sync-fee-row">
+            <span>估算手续费<strong>{{ money(estimatedBuyFee) }}元</strong></span>
+            <span>买入费率<input v-model.number="tradeForm.tradeFeeRate" type="number" min="0" step="0.001" />%</span>
+          </div>
+        </div>
+        <div class="sync-buy-time">
+          <span>原平台买入时间</span>
+          <div>
+            <input v-model="tradeForm.tradeDate" class="form-control" type="date" />
+            <select v-model="tradeForm.tradeCutoff" class="form-control">
+              <option value="BEFORE_15">下午3点前</option>
+              <option value="AFTER_15">下午3点后</option>
+            </select>
+          </div>
+        </div>
+        <p class="form-hint full-span">将按 {{ tradeForm.tradeDate || '--' }} {{ tradeCutoffText }} 作为原平台购买时间入账；系统会根据 T+1/T+2 规则在确认日使用真实正式净值回填份额。</p>
+        <DisclaimerBar simulated />
+      </div>
+      <div v-else-if="isSellTrade" class="sync-sell-form">
+        <div class="sync-buy-fund">
+          <strong>{{ activeHolding.fundName }} <span>{{ activeHolding.fundCode }}</span></strong>
+          <p v-if="syncBuyNavLoading">
+            最新净值同步中...
+          </p>
+          <p v-else>
+            最新净值（{{ syncBuyNavDateText }}）：{{ syncBuyNavValue ? syncBuyNavValue.toFixed(4) : '--' }}
+            <b v-if="syncBuyGrowthRate !== null" :class="toneClass(syncBuyGrowthRate)">{{ percent(syncBuyGrowthRate) }}</b>
+            <b v-else class="text-muted">--</b>
+          </p>
+        </div>
+        <div class="sync-sell-share">
+          <label>同步卖出份额</label>
+          <div class="sync-share-input">
+            <input v-model.number="tradeForm.tradeShare" type="number" min="0" :placeholder="`最多可选${maxSellShareText}份`" @input="syncSellAmountFromShare" />
+            <span>份</span>
+          </div>
+          <div class="sync-ratio-row">
+            <button type="button" @click="applySellShareRatio(0.25)">1/4</button>
+            <button type="button" @click="applySellShareRatio(1 / 3)">1/3</button>
+            <button type="button" @click="applySellShareRatio(0.5)">1/2</button>
+            <button type="button" @click="applySellShareRatio(1)">全部</button>
+          </div>
+          <div class="sync-fee-row">
+            <span>估算卖出金额<strong>{{ money(estimatedSellAmount) }}</strong></span>
+            <span>手续费<input v-model.number="tradeForm.tradeFee" type="number" min="0" step="0.01" />元</span>
+          </div>
+        </div>
+        <div class="sync-buy-time">
+          <span>原平台卖出时间</span>
+          <div>
+            <input v-model="tradeForm.tradeDate" class="form-control" type="date" />
+            <select v-model="tradeForm.tradeCutoff" class="form-control">
+              <option value="BEFORE_15">下午3点前</option>
+              <option value="AFTER_15">下午3点后</option>
+            </select>
+          </div>
+        </div>
+        <p class="form-hint full-span">将按 {{ tradeForm.tradeDate || '--' }} {{ tradeCutoffText }} 作为原平台卖出时间入账；进行中交易不会立刻改变持仓，系统会在入账日使用真实正式净值结算。</p>
+        <p class="form-hint full-span">当前可卖出：{{ money(activeHolding.holdingAmount) }} / {{ money(activeHolding.holdingShare, 2) }} 份</p>
+        <p v-if="tradeOverLimit" class="form-warning full-span">卖出份额不能超过当前持仓。</p>
+        <DisclaimerBar simulated />
+      </div>
+      <div v-else class="modal-grid compact-form">
         <label>交易类型
           <select v-model="tradeForm.tradeType" class="form-control">
             <option value="BUY">加仓</option>
@@ -479,15 +1022,145 @@ async function saveTrade() {
           </select>
         </label>
         <label>交易金额<input v-model.number="tradeForm.tradeAmount" class="form-control" type="number" min="0" /></label>
-        <label>成交/参考净值<input v-model.number="tradeForm.tradeNav" class="form-control" type="number" min="0" step="0.0001" /></label>
+        <label>参考净值<input v-model.number="tradeForm.tradeNav" class="form-control" type="number" min="0" step="0.0001" /></label>
         <label>手续费<input v-model.number="tradeForm.tradeFee" class="form-control" type="number" min="0" /></label>
+        <p class="form-hint full-span">进行中交易不会立刻改变持仓；系统会在入账日使用真实正式净值回填份额和净值。</p>
         <p v-if="isDecreaseTrade" class="form-hint full-span">当前可卖出/转出：{{ money(activeHolding.holdingAmount) }} / {{ money(activeHolding.holdingShare, 0) }} 份</p>
         <p v-if="tradeOverLimit" class="form-warning full-span">卖出或转出金额不能超过当前持仓。</p>
         <label>备注<textarea v-model="tradeForm.remark" class="form-control text-area" /></label>
       </div>
       <template #footer>
-        <button class="primary-button" :disabled="tradeSaving" @click="saveTrade">{{ tradeSaving ? '保存中' : '保存模拟记录' }}</button>
+        <button class="primary-button" :disabled="tradeSaving" @click="saveTrade">{{ tradeSaving ? '保存中' : (isBuyTrade ? '确认同步加仓' : (isSellTrade ? '保存减仓记录' : '保存模拟记录')) }}</button>
       </template>
+    </el-dialog>
+
+    <el-dialog v-model="planDialogOpen" title="同步定投" width="720px">
+      <div class="sync-plan-form">
+        <DisclaimerBar simulated />
+        <div class="sync-buy-fund">
+          <strong>{{ activeHolding.fundName }} <span>{{ activeHolding.fundCode }}</span></strong>
+          <p v-if="syncBuyNavLoading">
+            最新净值同步中...
+          </p>
+          <p v-else>
+            最新净值（{{ syncBuyNavDateText }}）：{{ syncBuyNavValue ? syncBuyNavValue.toFixed(4) : '--' }}
+            <b v-if="syncBuyGrowthRate !== null" :class="toneClass(syncBuyGrowthRate)">{{ percent(syncBuyGrowthRate) }}</b>
+            <b v-else class="text-muted">--</b>
+          </p>
+        </div>
+
+        <template v-if="!planEditMode">
+          <div class="sync-plan-list">
+            <div class="sync-plan-section-title">定投计划</div>
+            <LoadingState v-if="planLoading" text="正在加载定投计划" />
+            <div v-else-if="activeInvestmentPlans.length" class="sync-plan-items">
+              <button v-for="plan in activeInvestmentPlans" :key="plan.id" class="sync-plan-card" type="button" @click="openPlanAction(plan)">
+                <div>
+                  <strong>{{ plan.planName }}</strong>
+                  <span>{{ frequencyLabel(plan.frequency) }}定投{{ money(plan.amount) }}元</span>
+                </div>
+                <div>
+                  <em :class="{ paused: plan.status === 'PAUSED' }">{{ planStatusLabel(plan.status) }}</em>
+                  <small>下次 {{ plan.nextExecuteDate }}</small>
+                </div>
+              </button>
+            </div>
+            <EmptyState v-else title="暂无定投计划" description="添加计划后，系统会按设定周期自动生成待确认加仓。" />
+            <button class="sync-plan-add" type="button" @click="openCreatePlanForm">+ 添加定投计划</button>
+          </div>
+        </template>
+
+        <template v-else>
+          <div class="sync-buy-amount">
+            <label>同步定投金额</label>
+            <div class="sync-money-input">
+              <span>￥</span>
+              <input v-model.number="planForm.amount" type="number" min="0" placeholder="输入已定投金额" />
+            </div>
+            <div class="sync-fee-row">
+              <span>定投会按 15:00 前操作生成，入账逻辑与同步加仓一致</span>
+            </div>
+          </div>
+          <div class="sync-plan-edit-grid">
+            <button class="sync-plan-picker-card" type="button" @click="openPlanSchedulePicker">
+              <span>原平台定投周期</span>
+              <strong>{{ planScheduleText }}</strong>
+              <small>下次定投 {{ planForm.nextExecuteDate }}</small>
+            </button>
+            <label v-if="planForm.id">计划状态
+              <select v-model="planForm.status" class="form-control">
+                <option value="ENABLED">执行中</option>
+                <option value="PAUSED">暂停</option>
+              </select>
+            </label>
+          </div>
+          <p class="form-hint full-span">计划到期后，系统会在 09:05 自动生成一笔 15:00 前的待确认加仓交易；后续按 T+1/T+2 正式净值入账。</p>
+        </template>
+      </div>
+      <template #footer>
+        <button v-if="planEditMode" class="ghost-button" @click="planEditMode = false">返回列表</button>
+        <button v-if="planEditMode" class="primary-button" :disabled="planSaving" @click="saveInvestmentPlan">{{ planSaving ? '保存中' : '保存定投计划' }}</button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="planActionOpen" width="420px" title="" class="plan-action-dialog">
+      <div class="plan-action-sheet">
+        <button type="button" :disabled="planSaving" @click="toggleSelectedPlanStatus">{{ selectedPlan?.status === 'PAUSED' ? '恢复' : '暂停' }}</button>
+        <button type="button" @click="selectedPlan && openEditPlanForm(selectedPlan)">修改</button>
+        <button type="button" class="danger" :disabled="planSaving" @click="deleteSelectedPlan">删除</button>
+      </div>
+    </el-dialog>
+
+    <el-dialog v-model="planScheduleOpen" width="640px" title="" append-to-body class="plan-schedule-dialog">
+      <div class="plan-schedule-picker">
+        <div class="plan-schedule-header">
+          <button type="button" @click="planScheduleOpen = false">取消</button>
+          <strong>定投周期</strong>
+          <button type="button" @click="confirmPlanSchedule">确认</button>
+        </div>
+        <div class="plan-schedule-body">
+          <div class="plan-schedule-column" @wheel.prevent="onPlanFrequencyWheel">
+            <button
+              v-for="(option, index) in planFrequencyWheelItems"
+              :key="`${option.value}-${index}`"
+              type="button"
+              :class="{ active: option.active, placeholder: option.disabled }"
+              :disabled="option.disabled"
+              @click="selectPlanDraftFrequency(option.value)"
+            >
+              {{ option.label }}
+            </button>
+          </div>
+          <div v-if="planScheduleDraftFrequency === 'WEEKLY' || planScheduleDraftFrequency === 'BIWEEKLY'" class="plan-schedule-column" @wheel.prevent="onPlanWeekdayWheel">
+            <button
+              v-for="(option, index) in planWeekdayWheelItems"
+              :key="`${option.value}-${index}`"
+              type="button"
+              :class="{ active: option.active, placeholder: option.disabled }"
+              :disabled="option.disabled"
+              @click="planScheduleDraftWeekday = option.value"
+            >
+              {{ option.label }}
+            </button>
+          </div>
+          <div v-else-if="planScheduleDraftFrequency === 'MONTHLY'" class="plan-schedule-column scrollable" @wheel.prevent="onPlanMonthDayWheel">
+            <button
+              v-for="(day, index) in planMonthDayWheelItems"
+              :key="`${day.value}-${index}`"
+              type="button"
+              :class="{ active: day.active, placeholder: day.disabled }"
+              :disabled="day.disabled"
+              @click="planScheduleDraftMonthDay = day.value"
+            >
+              {{ day.label }}
+            </button>
+          </div>
+          <div v-else class="plan-schedule-column single">
+            <button type="button" class="active">每日交易日</button>
+          </div>
+        </div>
+        <p>{{ planScheduleDraftText }}</p>
+      </div>
     </el-dialog>
   </div>
 </template>

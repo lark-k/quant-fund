@@ -342,12 +342,26 @@ export interface TradeRecord {
   tradeType: 'BUY' | 'SELL' | 'REGULAR_INVEST' | 'CONVERT_IN' | 'CONVERT_OUT'
   tradeStatus: 'PROCESSING' | 'COMPLETED' | 'CANCELLED' | 'FAILED'
   tradeAmount: number
-  tradeShare: number
-  tradeNav: number
+  tradeShare: number | null
+  tradeNav: number | null
   tradeFee: number
   tradeTime: string
   remark?: string
   simulatedTradeNotice: string
+}
+
+export interface InvestmentPlan {
+  id: number
+  accountId: number
+  fundCode: string
+  fundName: string
+  planName: string
+  planType: string
+  amount: number
+  frequency: 'DAILY' | 'WEEKLY' | 'BIWEEKLY' | 'EVERY_TWO_WEEKS' | 'MONTHLY'
+  nextExecuteDate: string
+  status: 'ENABLED' | 'PAUSED'
+  updateTime: string
 }
 
 export type TradeRecordRequest = {
@@ -364,6 +378,17 @@ export type TradeRecordRequest = {
   tradeTime?: string
   relatedTradeId?: number
   remark?: string
+}
+
+export type InvestmentPlanRequest = {
+  accountId: number
+  fundCode: string
+  fundName: string
+  planName?: string
+  amount: number
+  frequency: InvestmentPlan['frequency']
+  nextExecuteDate: string
+  status?: InvestmentPlan['status']
 }
 
 export type ConvertPairTradeRequest = {

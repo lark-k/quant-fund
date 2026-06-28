@@ -1,6 +1,7 @@
 package com.lk.quantfund.scheduler;
 
 import com.lk.quantfund.config.QuantFundProperties;
+import com.lk.quantfund.service.TradeRecordService;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.function.Supplier;
@@ -20,15 +21,30 @@ public class QuantFundScheduler {
     private final TradingCalendarService tradingCalendarService;
     private final SchedulerTaskLogService schedulerTaskLogService;
     private final ScheduledFundTaskService scheduledFundTaskService;
+    private final TradeRecordService tradeRecordService;
 
     public QuantFundScheduler(QuantFundProperties properties,
                               TradingCalendarService tradingCalendarService,
                               SchedulerTaskLogService schedulerTaskLogService,
-                              ScheduledFundTaskService scheduledFundTaskService) {
+                              ScheduledFundTaskService scheduledFundTaskService,
+                              TradeRecordService tradeRecordService) {
         this.properties = properties;
         this.tradingCalendarService = tradingCalendarService;
         this.schedulerTaskLogService = schedulerTaskLogService;
         this.scheduledFundTaskService = scheduledFundTaskService;
+        this.tradeRecordService = tradeRecordService;
+    }
+
+    @Scheduled(cron = "0 5 9 ? * MON-FRI", zone = ZONE)
+    public void createDueRegularInvestTrades() {
+        runTradingTask("CREATE_DUE_REGULAR_INVEST_TRADES", () ->
+                tradeRecordService.createDueRegularInvestTrades(LocalDate.now()));
+    }
+
+    @Scheduled(cron = "0 10 9 ? * MON-FRI", zone = ZONE)
+    public void settleDueProcessingTrades() {
+        runTradingTask("SETTLE_DUE_PROCESSING_TRADES", () ->
+                tradeRecordService.settleDueProcessingTrades(LocalDate.now()));
     }
 
     @Scheduled(cron = "0 30/2 9 ? * MON-FRI", zone = ZONE)

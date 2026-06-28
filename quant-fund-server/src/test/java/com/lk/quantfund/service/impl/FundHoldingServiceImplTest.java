@@ -58,7 +58,9 @@ class FundHoldingServiceImplTest {
     void syncOfficialNavUpsertsDelayedNavSnapshotOnEffectiveDate() {
         FundHolding holding = holding();
         PortfolioAccount account = account();
+        TradingCalendarService tradingCalendarService = mock(TradingCalendarService.class);
         LocalDate navDate = LocalDate.now().minusDays(1);
+        when(tradingCalendarService.nextTradingDay(navDate)).thenReturn(LocalDate.now());
         when(holdingMapper.selectList(any())).thenReturn(List.of(holding), List.of());
         when(fundQueryService.getHistoricalNav(any(), any(), any())).thenReturn(List.of(
                 navPoint(navDate.minusDays(1), "1.0000"),
@@ -76,7 +78,7 @@ class FundHoldingServiceImplTest {
                 strategyService,
                 fundQueryService,
                 valuationService,
-                new TradingCalendarService(new QuantFundProperties()),
+                tradingCalendarService,
                 snapshotMapper,
                 backfillService,
                 tradeRecordMapper
@@ -91,7 +93,7 @@ class FundHoldingServiceImplTest {
         verify(holdingMapper).updateById(any(FundHolding.class));
         verify(snapshotMapper).insert(snapshotCaptor.capture());
         HoldingSnapshot snapshot = snapshotCaptor.getValue();
-        assertThat(snapshot.getSnapshotDate()).isEqualTo(new TradingCalendarService(new QuantFundProperties()).nextTradingDay(navDate));
+        assertThat(snapshot.getSnapshotDate()).isEqualTo(LocalDate.now());
         assertThat(snapshot.getHoldingAmount()).isEqualByComparingTo("1050.0000");
         assertThat(snapshot.getDailyProfit()).isEqualByComparingTo("50.0000");
         assertThat(snapshot.getPositionRate()).isEqualByComparingTo("10.5000");

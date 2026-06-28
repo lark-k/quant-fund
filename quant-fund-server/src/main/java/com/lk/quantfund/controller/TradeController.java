@@ -109,6 +109,14 @@ public class TradeController {
         return ApiResponse.success(tradeRecordService.processing());
     }
 
+    @PostMapping("/settle-due")
+    @RateLimit(key = "trade:settle-due", windowSeconds = 60, maxRequests = 20)
+    @RepeatSubmit(intervalSeconds = 5)
+    @OperationLog(module = "trade", action = "settle_due_processing_trades", bizType = "TRADE_RECORD")
+    public ApiResponse<List<TradeRecordVO>> settleDue() {
+        return ApiResponse.success(tradeRecordService.settleDueProcessingTrades());
+    }
+
     @GetMapping("/{id}")
     @DataScope(resourceType = ResourceType.TRADE_RECORD, idParam = "id", operation = DataOperation.READ)
     @RateLimit(key = "trade:detail", windowSeconds = 60, maxRequests = 120)

@@ -22,6 +22,8 @@ import type {
   FundTheme,
   HoldingCreateRequest,
   HoldingUpdateRequest,
+  InvestmentPlan,
+  InvestmentPlanRequest,
   MarketIndex,
   MarketSessionStatus,
   OperationLog,
@@ -178,5 +180,59 @@ export const quantApi = {
   },
   createConvertPair(request: ConvertPairTradeRequest): Promise<TradeRecord[]> {
     return USE_MOCK ? mockApi.createConvertPair(request) : http.post('/trades/convert-pair', request)
+  },
+  settleDueTrades(): Promise<TradeRecord[]> {
+    return USE_MOCK ? mockApi.trades() : http.post('/trades/settle-due')
+  },
+  investmentPlans(accountId?: number): Promise<InvestmentPlan[]> {
+    return USE_MOCK ? Promise.resolve([]) : http.get('/investment-plans', { params: { accountId } })
+  },
+  createInvestmentPlan(request: InvestmentPlanRequest): Promise<InvestmentPlan> {
+    return USE_MOCK ? Promise.resolve({
+      id: Date.now(),
+      accountId: request.accountId,
+      fundCode: request.fundCode,
+      fundName: request.fundName,
+      planName: request.planName || `${request.fundName}定投`,
+      planType: 'REGULAR_INVEST',
+      amount: request.amount,
+      frequency: request.frequency,
+      nextExecuteDate: request.nextExecuteDate,
+      status: request.status || 'ENABLED',
+      updateTime: new Date().toISOString()
+    }) : http.post('/investment-plans', request)
+  },
+  updateInvestmentPlan(id: number, request: InvestmentPlanRequest): Promise<InvestmentPlan> {
+    return USE_MOCK ? Promise.resolve({
+      id,
+      accountId: request.accountId,
+      fundCode: request.fundCode,
+      fundName: request.fundName,
+      planName: request.planName || `${request.fundName}定投`,
+      planType: 'REGULAR_INVEST',
+      amount: request.amount,
+      frequency: request.frequency,
+      nextExecuteDate: request.nextExecuteDate,
+      status: request.status || 'ENABLED',
+      updateTime: new Date().toISOString()
+    }) : http.put(`/investment-plans/${id}`, request)
+  },
+  updateInvestmentPlanStatus(id: number, status: InvestmentPlan['status']): Promise<InvestmentPlan> {
+    return USE_MOCK ? Promise.resolve({
+      id,
+      accountId: 1,
+      fundCode: '',
+      fundName: '',
+      planName: '定投计划',
+      planType: 'REGULAR_INVEST',
+      amount: 0,
+      frequency: 'WEEKLY',
+      nextExecuteDate: new Date().toISOString().slice(0, 10),
+      status,
+      updateTime: new Date().toISOString()
+    }) : http.put(`/investment-plans/${id}/status`, undefined, { params: { status } })
+  },
+  deleteInvestmentPlan(id: number): Promise<void> {
+    return USE_MOCK ? Promise.resolve() : http.delete(`/investment-plans/${id}`)
   }
 }

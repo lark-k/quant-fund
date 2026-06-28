@@ -6,6 +6,7 @@ import com.lk.quantfund.dto.trade.ConvertPairTradeRequest;
 import com.lk.quantfund.constants.SystemConstants;
 import com.lk.quantfund.dto.trade.TradeRecordRequest;
 import com.lk.quantfund.entity.FundHolding;
+import com.lk.quantfund.entity.InvestmentPlan;
 import com.lk.quantfund.entity.PortfolioAccount;
 import com.lk.quantfund.entity.TradeRecord;
 import com.lk.quantfund.enums.ErrorCode;
@@ -13,16 +14,24 @@ import com.lk.quantfund.enums.FundType;
 import com.lk.quantfund.enums.TradeStatus;
 import com.lk.quantfund.enums.TradeType;
 import com.lk.quantfund.exception.BusinessException;
+import com.lk.quantfund.datasource.model.FundNavPointDTO;
 import com.lk.quantfund.mapper.FundHoldingMapper;
+import com.lk.quantfund.mapper.InvestmentPlanMapper;
 import com.lk.quantfund.mapper.PortfolioAccountMapper;
 import com.lk.quantfund.mapper.TradeRecordMapper;
+import com.lk.quantfund.scheduler.SchedulerTaskResult;
+import com.lk.quantfund.scheduler.TradingCalendarService;
+import com.lk.quantfund.service.FundQueryService;
 import com.lk.quantfund.service.PortfolioAccountService;
 import com.lk.quantfund.service.TradeRecordService;
 import com.lk.quantfund.vo.trade.TradeRecordVO;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -37,15 +46,24 @@ public class TradeRecordServiceImpl implements TradeRecordService {
     private final FundHoldingMapper fundHoldingMapper;
     private final PortfolioAccountMapper portfolioAccountMapper;
     private final PortfolioAccountService portfolioAccountService;
+    private final InvestmentPlanMapper investmentPlanMapper;
+    private final FundQueryService fundQueryService;
+    private final TradingCalendarService tradingCalendarService;
 
     public TradeRecordServiceImpl(TradeRecordMapper tradeRecordMapper,
                                   FundHoldingMapper fundHoldingMapper,
                                   PortfolioAccountMapper portfolioAccountMapper,
-                                  PortfolioAccountService portfolioAccountService) {
+                                  PortfolioAccountService portfolioAccountService,
+                                  InvestmentPlanMapper investmentPlanMapper,
+                                  FundQueryService fundQueryService,
+                                  TradingCalendarService tradingCalendarService) {
         this.tradeRecordMapper = tradeRecordMapper;
         this.fundHoldingMapper = fundHoldingMapper;
         this.portfolioAccountMapper = portfolioAccountMapper;
         this.portfolioAccountService = portfolioAccountService;
+        this.investmentPlanMapper = investmentPlanMapper;
+        this.fundQueryService = fundQueryService;
+        this.tradingCalendarService = tradingCalendarService;
     }
 
     @Override
@@ -141,6 +159,86 @@ public class TradeRecordServiceImpl implements TradeRecordService {
         return list(null, null, null, TradeStatus.PROCESSING);
     }
 
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public List<TradeRecordVO> settleDueProcessingTrades() {
+        Long userId = UserContext.getUserId();
+        settleProcessingTrades(LocalDate.now(), userId);
+        return list(null, null, null, null);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public SchedulerTaskResult settleDueProcessingTrades(LocalDate today) {
+        return settleProcessingTrades(today == null ? LocalDate.now() : today, null);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public SchedulerTaskResult createDueRegularInvestTrades(LocalDate today) {
+        SchedulerTaskResult result = new SchedulerTaskResult();
+        LocalDate runDate = today == null ? LocalDate.now() : today;
+        if (investmentPlanMapper == null) {
+            return result;
+        }
+        List<InvestmentPlan> plans = investmentPlanMapper.selectList(new LambdaQueryWrapper<InvestmentPlan>()
+                .eq(InvestmentPlan::getStatus, "ENABLED")
+                .le(InvestmentPlan::getNextExecuteDate, runDate));
+        for (InvestmentPlan plan : plans) {
+            try {
+                createRegularInvestTrade(plan, runDate);
+                plan.setNextExecuteDate(nextPlanExecuteDate(plan, runDate));
+                plan.setUpdateTime(LocalDateTime.now());
+                investmentPlanMapper.updateById(plan);
+                result.success();
+            } catch (RuntimeException exception) {
+                result.failure(plan.getFundCode() + ": " + exception.getMessage());
+            }
+        }
+        return result;
+    }
+
+    private SchedulerTaskResult settleProcessingTrades(LocalDate today, Long onlyUserId) {
+        SchedulerTaskResult result = new SchedulerTaskResult();
+        List<TradeRecord> records = tradeRecordMapper.selectList(new LambdaQueryWrapper<TradeRecord>()
+                .eq(TradeRecord::getTradeStatus, TradeStatus.PROCESSING.name())
+                .eq(onlyUserId != null, TradeRecord::getUserId, onlyUserId)
+                .orderByAsc(TradeRecord::getTradeTime));
+        for (TradeRecord record : records) {
+            try {
+                if (settleProcessingTrade(record, today)) {
+                    result.success();
+                }
+            } catch (RuntimeException exception) {
+                result.failure(record.getFundCode() + ": " + exception.getMessage());
+            }
+        }
+        return result;
+    }
+
+    private boolean settleProcessingTrade(TradeRecord record, LocalDate today) {
+        TradeSettlement settlement = tradeSettlement(record);
+        if (today.isBefore(settlement.settleDate())) {
+            return false;
+        }
+        Optional<BigDecimal> officialNav = officialNav(record.getFundCode(), settlement.navDate());
+        if (officialNav.isEmpty()) {
+            return false;
+        }
+        FundHolding holding = record.getHoldingId() == null ? null : ensureHoldingOwned(record.getUserId(), record.getHoldingId());
+        if (holding == null) {
+            holding = findHolding(record.getUserId(), record.getAccountId(), record.getFundCode());
+        }
+        record.setTradeNav(officialNav.get());
+        record.setTradeShare(resolveConfirmedShare(record, holding, officialNav.get()));
+        record.setTradeStatus(TradeStatus.COMPLETED.name());
+        record.setUpdateTime(LocalDateTime.now());
+        tradeRecordMapper.updateById(record);
+        applyCompletedTrade(record.getUserId(), record, holding);
+        portfolioAccountService.recalculateOwnedAccount(record.getUserId(), record.getAccountId());
+        return true;
+    }
+
     private FundHolding resolveHoldingForTrade(Long userId, TradeRecordRequest request, TradeType tradeType) {
         if (request.holdingId() != null) {
             FundHolding holding = ensureHoldingOwned(userId, request.holdingId());
@@ -158,6 +256,136 @@ public class TradeRecordServiceImpl implements TradeRecordService {
             return existing;
         }
         throw new BusinessException(ErrorCode.BAD_REQUEST, "holding is required for sell or convert-out trade");
+    }
+
+    private void createRegularInvestTrade(InvestmentPlan plan, LocalDate runDate) {
+        if (plan.getAmount() == null || plan.getAmount().compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "regular investment amount must be greater than zero");
+        }
+        if (planAlreadyGenerated(plan, runDate)) {
+            return;
+        }
+        FundHolding holding = findHolding(plan.getUserId(), plan.getAccountId(), plan.getFundCode());
+        LocalDateTime now = LocalDateTime.now();
+        TradeRecord record = new TradeRecord();
+        record.setUserId(plan.getUserId());
+        record.setAccountId(plan.getAccountId());
+        record.setHoldingId(holding == null ? null : holding.getId());
+        record.setFundCode(plan.getFundCode());
+        record.setFundName(plan.getFundName());
+        record.setTradeType(TradeType.REGULAR_INVEST.name());
+        record.setTradeStatus(TradeStatus.PROCESSING.name());
+        record.setTradeAmount(valueOrZero(plan.getAmount()));
+        record.setTradeShare(null);
+        record.setTradeNav(null);
+        record.setTradeFee(ZERO);
+        record.setTradeTime(runDate.atTime(14, 59));
+        record.setRelatedTradeId(null);
+        record.setRemark(simulatedRemark("定投计划#" + plan.getId() + " " + runDate));
+        record.setCreateTime(now);
+        record.setUpdateTime(now);
+        record.setDeleted(0);
+        tradeRecordMapper.insert(record);
+    }
+
+    private boolean planAlreadyGenerated(InvestmentPlan plan, LocalDate runDate) {
+        TradeRecord existing = tradeRecordMapper.selectOne(new LambdaQueryWrapper<TradeRecord>()
+                .eq(TradeRecord::getUserId, plan.getUserId())
+                .eq(TradeRecord::getAccountId, plan.getAccountId())
+                .eq(TradeRecord::getFundCode, plan.getFundCode())
+                .eq(TradeRecord::getTradeType, TradeType.REGULAR_INVEST.name())
+                .like(TradeRecord::getRemark, "定投计划#" + plan.getId() + " " + runDate)
+                .last("LIMIT 1"));
+        return existing != null;
+    }
+
+    private LocalDate nextPlanExecuteDate(InvestmentPlan plan, LocalDate runDate) {
+        String frequency = plan.getFrequency() == null ? "WEEKLY" : plan.getFrequency().trim().toUpperCase();
+        LocalDate next = switch (frequency) {
+            case "DAILY" -> runDate.plusDays(1);
+            case "BIWEEKLY", "EVERY_TWO_WEEKS" -> runDate.plusWeeks(2);
+            case "MONTHLY" -> runDate.plusMonths(1);
+            default -> runDate.plusWeeks(1);
+        };
+        while (!tradingCalendarService.isTradingDay(next)) {
+            next = next.plusDays(1);
+        }
+        return next;
+    }
+
+    private TradeSettlement tradeSettlement(TradeRecord record) {
+        LocalDate applicationDate = applicationDate(record.getTradeTime());
+        int delayDays = settlementDelayTradingDays(record);
+        LocalDate navDate = applicationDate;
+        for (int index = 1; index < delayDays; index++) {
+            navDate = tradingCalendarService.nextTradingDay(navDate);
+        }
+        LocalDate settleDate = tradingCalendarService.nextTradingDay(navDate);
+        return new TradeSettlement(applicationDate, navDate, settleDate);
+    }
+
+    private LocalDate applicationDate(LocalDateTime tradeTime) {
+        LocalDateTime time = tradeTime == null ? LocalDateTime.now() : tradeTime;
+        LocalDate date = time.toLocalDate();
+        if (!tradingCalendarService.isTradingDay(date) || time.toLocalTime().isAfter(LocalTime.of(15, 0))) {
+            return tradingCalendarService.nextTradingDay(date);
+        }
+        return date;
+    }
+
+    private int settlementDelayTradingDays(TradeRecord record) {
+        return isOverseasT2Fund(record.getFundCode(), record.getFundName(), null) ? 2 : 1;
+    }
+
+    private boolean isOverseasT2Fund(String fundCode, String fundName, String fundType) {
+        String code = fundCode == null ? "" : fundCode.trim();
+        String text = ((fundName == null ? "" : fundName) + " " + (fundType == null ? "" : fundType)).toUpperCase();
+        if ("012922".equals(code) || text.contains("易方达全球精选") || text.contains("全球精选")) {
+            return true;
+        }
+        if (text.contains("恒生") || text.contains("港股") || text.contains("香港") || text.contains("HSTECH")) {
+            return false;
+        }
+        return text.contains("QDII")
+                && (text.contains("全球") || text.contains("海外") || text.contains("纳斯达克")
+                || text.contains("标普") || text.contains("美国") || text.contains("美股"));
+    }
+
+    private Optional<BigDecimal> officialNav(String fundCode, LocalDate navDate) {
+        try {
+            return fundQueryService.getHistoricalNav(fundCode, navDate.minusDays(10), navDate.plusDays(1)).stream()
+                    .filter(point -> navDate.equals(point.navDate()))
+                    .filter(point -> point.unitNav() != null)
+                    .map(FundNavPointDTO::unitNav)
+                    .findFirst();
+        } catch (RuntimeException ignored) {
+            return Optional.empty();
+        }
+    }
+
+    private BigDecimal resolveConfirmedShare(TradeRecord record, FundHolding holding, BigDecimal tradeNav) {
+        BigDecimal explicitShare = valueOrZero(record.getTradeShare());
+        if (explicitShare.compareTo(BigDecimal.ZERO) > 0) {
+            return explicitShare;
+        }
+        TradeType tradeType = TradeType.valueOf(record.getTradeType());
+        if ((tradeType == TradeType.SELL || tradeType == TradeType.CONVERT_OUT)
+                && holding != null
+                && valueOrZero(record.getTradeAmount()).compareTo(valueOrZero(holding.getHoldingAmount())) >= 0) {
+            return valueOrZero(holding.getHoldingShare());
+        }
+        if (tradeNav.compareTo(BigDecimal.ZERO) <= 0) {
+            return ZERO;
+        }
+        return valueOrZero(record.getTradeAmount()).divide(tradeNav, 4, RoundingMode.HALF_UP);
+    }
+
+    private FundHolding findHolding(Long userId, Long accountId, String fundCode) {
+        return fundHoldingMapper.selectOne(new LambdaQueryWrapper<FundHolding>()
+                .eq(FundHolding::getUserId, userId)
+                .eq(FundHolding::getAccountId, accountId)
+                .eq(FundHolding::getFundCode, fundCode == null ? null : fundCode.trim())
+                .last("LIMIT 1"));
     }
 
     private TradeRecordRequest convertOutRequest(ConvertPairTradeRequest request, TradeStatus status, FundHolding outHolding) {
@@ -444,5 +672,8 @@ public class TradeRecordServiceImpl implements TradeRecordService {
             return remark;
         }
         return remark + "，" + SystemConstants.SIMULATED_TRADE_NOTICE;
+    }
+
+    private record TradeSettlement(LocalDate applicationDate, LocalDate navDate, LocalDate settleDate) {
     }
 }

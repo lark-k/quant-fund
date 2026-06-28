@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { quantApi } from '@/api/quant'
-import type { FundHolding, TradeRecord } from '@/types/domain'
+import type { FundHolding, FundSearchResult, TradeRecord } from '@/types/domain'
 import { SIMULATED_TRADE_NOTICE } from '@/types/domain'
 import ActionTag from '@/components/common/ActionTag.vue'
 import DisclaimerBar from '@/components/common/DisclaimerBar.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
+import LoadingState from '@/components/common/LoadingState.vue'
 import MetricTile from '@/components/common/MetricTile.vue'
 import { money } from '@/utils/format'
+import { mergeRecentTrades, rememberRecentTrades } from '@/utils/recentTrades'
 
 type TradeFilter = {
   key: string
@@ -29,12 +31,17 @@ const filters: TradeFilter[] = [
 
 const trades = ref<TradeRecord[]>([])
 const holdings = ref<FundHolding[]>([])
+const loading = ref(true)
 const filter = ref('ALL')
 const dialogOpen = ref(false)
 const saving = ref(false)
+const settling = ref(false)
 const convertDialogOpen = ref(false)
 const convertSaving = ref(false)
 const convertInAmountTouched = ref(false)
+const convertSearching = ref(false)
+const convertSearchKeyword = ref('')
+const convertSearchResults = ref<FundSearchResult[]>([])
 const tradeForm = ref({
   holdingId: undefined as number | undefined,
   fundCode: '',
@@ -60,16 +67,31 @@ const convertForm = ref({
   inTradeShare: 0,
   inTradeNav: 1,
   inTradeFee: 0,
-  tradeStatus: 'COMPLETED' as TradeRecord['tradeStatus'],
+  tradeStatus: 'PROCESSING' as TradeRecord['tradeStatus'],
   remark: SIMULATED_TRADE_NOTICE
 })
 
-onMounted(loadData)
+onMounted(() => {
+  void loadData()
+  window.addEventListener('focus', handleWindowFocus)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('focus', handleWindowFocus)
+})
 
-async function loadData() {
-  const [tradeList, holdingList] = await Promise.all([quantApi.trades(), quantApi.holdings()])
-  trades.value = tradeList
-  holdings.value = holdingList
+function handleWindowFocus() {
+  void loadData(false)
+}
+
+async function loadData(showLoading = true) {
+  if (showLoading) loading.value = true
+  try {
+    const [tradeList, holdingList] = await Promise.all([quantApi.trades(), quantApi.holdings()])
+    trades.value = mergeRecentTrades(tradeList)
+    holdings.value = holdingList
+  } finally {
+    if (showLoading) loading.value = false
+  }
 }
 
 const activeFilter = computed(() => filters.find((item) => item.key === filter.value) || filters[0])
@@ -121,10 +143,27 @@ function statusLabel(status: TradeRecord['tradeStatus']) {
   }[status]
 }
 
+function nullableMoney(value: number | null | undefined, digits = 2) {
+  return value === null || value === undefined ? '--' : money(value, digits)
+}
+
+function nullableNav(value: number | null | undefined) {
+  return value === null || value === undefined ? '--' : value.toFixed(4)
+}
+
 function localDateTime() {
   const date = new Date()
   const pad = (value: number) => String(value).padStart(2, '0')
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
+function displayDateTime(value?: string | null) {
+  if (!value) return '--'
+  const normalized = value.replace('T', ' ').replace(/\.\d+$/, '')
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(normalized)) {
+    return `${normalized}:00`
+  }
+  return normalized
 }
 
 function simulatedRemark(value?: string) {
@@ -171,6 +210,7 @@ async function saveTrade() {
   try {
     const holding = holdings.value.find((item) => item.id === tradeForm.value.holdingId)
     const nav = Number(tradeForm.value.tradeNav) || 1
+    const isProcessing = tradeForm.value.tradeStatus === 'PROCESSING'
     const trade = await quantApi.createTrade({
       accountId: holding?.accountId || 1,
       holdingId: tradeForm.value.holdingId,
@@ -179,15 +219,16 @@ async function saveTrade() {
       tradeType: tradeForm.value.tradeType,
       tradeStatus: tradeForm.value.tradeStatus,
       tradeAmount: Number(tradeForm.value.tradeAmount),
-      tradeShare: Number(tradeForm.value.tradeShare) || Math.round(Number(tradeForm.value.tradeAmount) / Math.max(nav, 0.0001)),
-      tradeNav: nav,
+      tradeShare: isProcessing ? undefined : Number(tradeForm.value.tradeShare) || Math.round(Number(tradeForm.value.tradeAmount) / Math.max(nav, 0.0001)),
+      tradeNav: isProcessing ? undefined : nav,
       tradeFee: Number(tradeForm.value.tradeFee),
       tradeTime: localDateTime(),
       remark: simulatedRemark(tradeForm.value.remark)
     })
+    rememberRecentTrades(trade)
     trades.value = [trade, ...trades.value.filter((item) => item.id !== trade.id)]
     dialogOpen.value = false
-    ElMessage.success('模拟交易记录已保存')
+    ElMessage.success('交易记录已保存，待确认交易会在入账日自动结算')
   } finally {
     saving.value = false
   }
@@ -209,13 +250,15 @@ function resetConvertForm() {
     inTradeShare: 0,
     inTradeNav: 1,
     inTradeFee: 0,
-    tradeStatus: 'COMPLETED',
+    tradeStatus: 'PROCESSING',
     remark: SIMULATED_TRADE_NOTICE
   }
 }
 
 function openConvertDialog() {
   resetConvertForm()
+  convertSearchKeyword.value = ''
+  convertSearchResults.value = []
   convertDialogOpen.value = true
 }
 
@@ -246,6 +289,33 @@ function markConvertInAmountTouched() {
   convertInAmountTouched.value = true
 }
 
+async function searchConvertFunds() {
+  const keyword = convertSearchKeyword.value.trim()
+  if (!keyword) {
+    ElMessage.warning('请输入转入基金名称或代码')
+    return
+  }
+  convertSearching.value = true
+  try {
+    convertSearchResults.value = await quantApi.searchFunds(keyword, 'FUZZY')
+    if (!convertSearchResults.value.length) {
+      ElMessage.info('未搜索到转入基金')
+    }
+  } finally {
+    convertSearching.value = false
+  }
+}
+
+function chooseConvertFund(result: FundSearchResult) {
+  const existing = holdings.value.find((item) => item.fundCode === result.fundCode)
+  convertForm.value.inHoldingId = existing?.id
+  convertForm.value.inFundCode = result.fundCode
+  convertForm.value.inFundName = result.fundName
+  convertForm.value.inTradeNav = existing?.latestOfficialNav || existing?.currentEstimateNav || 1
+  convertSearchResults.value = []
+  convertSearchKeyword.value = `${result.fundCode} ${result.fundName}`
+}
+
 async function saveConvertPair() {
   const outHolding = holdings.value.find((item) => item.id === convertForm.value.outHoldingId)
   if (!outHolding || convertForm.value.outTradeAmount <= 0 || !convertForm.value.inFundCode || !convertForm.value.inFundName || convertForm.value.inTradeAmount <= 0) {
@@ -261,30 +331,43 @@ async function saveConvertPair() {
   try {
     const outNav = Number(convertForm.value.outTradeNav) || 1
     const inNav = Number(convertForm.value.inTradeNav) || 1
+    const isProcessing = convertForm.value.tradeStatus === 'PROCESSING'
     const pair = await quantApi.createConvertPair({
       accountId: outHolding.accountId,
       outHoldingId: outHolding.id,
       outTradeAmount: Number(convertForm.value.outTradeAmount),
-      outTradeShare: Number(convertForm.value.outTradeShare) || Math.round(Number(convertForm.value.outTradeAmount) / Math.max(outNav, 0.0001)),
-      outTradeNav: outNav,
+      outTradeShare: isProcessing ? undefined : Number(convertForm.value.outTradeShare) || Math.round(Number(convertForm.value.outTradeAmount) / Math.max(outNav, 0.0001)),
+      outTradeNav: isProcessing ? undefined : outNav,
       outTradeFee: Number(convertForm.value.outTradeFee),
       inHoldingId: convertForm.value.inHoldingId,
       inFundCode: convertForm.value.inFundCode,
       inFundName: convertForm.value.inFundName,
       inTradeAmount: Number(convertForm.value.inTradeAmount),
-      inTradeShare: Number(convertForm.value.inTradeShare) || Math.round(Number(convertForm.value.inTradeAmount) / Math.max(inNav, 0.0001)),
-      inTradeNav: inNav,
+      inTradeShare: isProcessing ? undefined : Number(convertForm.value.inTradeShare) || Math.round(Number(convertForm.value.inTradeAmount) / Math.max(inNav, 0.0001)),
+      inTradeNav: isProcessing ? undefined : inNav,
       inTradeFee: Number(convertForm.value.inTradeFee),
       tradeStatus: convertForm.value.tradeStatus,
       tradeTime: localDateTime(),
       remark: simulatedRemark(convertForm.value.remark)
     })
+    rememberRecentTrades(pair)
     trades.value = [...pair, ...trades.value.filter((item) => !pair.some((trade) => trade.id === item.id))]
     filter.value = 'CONVERT'
     convertDialogOpen.value = false
     ElMessage.success('成对转换记录已保存')
   } finally {
     convertSaving.value = false
+  }
+}
+
+async function settleDueTrades() {
+  settling.value = true
+  try {
+    trades.value = await quantApi.settleDueTrades()
+    holdings.value = await quantApi.holdings()
+    ElMessage.success('已尝试结算到期交易')
+  } finally {
+    settling.value = false
   }
 }
 </script>
@@ -301,36 +384,40 @@ async function saveConvertPair() {
             <button v-for="item in filters" :key="item.key" :class="{ active: filter === item.key }" @click="filter = item.key">{{ item.label }}</button>
           </div>
           <button class="ghost-button" @click="openConvertDialog">成对转换</button>
+          <button class="ghost-button" :disabled="settling" @click="settleDueTrades">{{ settling ? '结算中' : '结算到期交易' }}</button>
           <button class="primary-button" @click="openDialog">添加交易记录</button>
         </div>
       </div>
       <div class="panel-body">
-        <div class="metric-row trade-summary">
-          <MetricTile label="当前筛选金额" :value="money(totalAmount)" />
-          <MetricTile label="筛选记录数" :value="`${filtered.length} 笔`" />
-          <MetricTile label="进行中交易" :value="`${processingCount} 笔`" tone="warning" />
-          <MetricTile label="已完成交易" :value="`${completedCount} 笔`" tone="info" />
-        </div>
+        <LoadingState v-if="loading" text="正在加载模拟交易记录" />
+        <template v-else>
+          <div class="metric-row trade-summary">
+            <MetricTile label="当前筛选金额" :value="money(totalAmount)" />
+            <MetricTile label="筛选记录数" :value="`${filtered.length} 笔`" />
+            <MetricTile label="进行中交易" :value="`${processingCount} 笔`" tone="warning" />
+            <MetricTile label="已完成交易" :value="`${completedCount} 笔`" tone="info" />
+          </div>
 
-        <table v-if="filtered.length" class="terminal-table">
-          <thead>
-            <tr><th>时间</th><th>基金</th><th>类型</th><th>状态</th><th>金额</th><th>份额</th><th>净值</th><th>手续费</th><th>备注</th></tr>
-          </thead>
-          <tbody>
-            <tr v-for="item in filtered" :key="item.id">
-              <td>{{ item.tradeTime }}</td>
-              <td>{{ item.fundCode }} · {{ item.fundName }}</td>
-              <td><ActionTag :action="actionForTrade(item.tradeType)" :text="tradeTypeLabel(item.tradeType)" /></td>
-              <td><span class="status-pill" :class="item.tradeStatus.toLowerCase()">{{ statusLabel(item.tradeStatus) }}</span></td>
-              <td>{{ money(item.tradeAmount) }}</td>
-              <td>{{ money(item.tradeShare, 0) }}</td>
-              <td>{{ item.tradeNav.toFixed(4) }}</td>
-              <td>{{ money(item.tradeFee) }}</td>
-              <td>{{ item.remark }}</td>
-            </tr>
-          </tbody>
-        </table>
-        <EmptyState v-else title="暂无交易记录" description="当前筛选条件下还没有模拟交易记录。" />
+          <table v-if="filtered.length" class="terminal-table">
+            <thead>
+              <tr><th>时间</th><th>基金</th><th>类型</th><th>状态</th><th>金额</th><th>份额</th><th>净值</th><th>手续费</th><th>备注</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in filtered" :key="item.id">
+                <td>{{ displayDateTime(item.tradeTime) }}</td>
+                <td>{{ item.fundCode }} · {{ item.fundName }}</td>
+                <td><ActionTag :action="actionForTrade(item.tradeType)" :text="tradeTypeLabel(item.tradeType)" /></td>
+                <td><span class="status-pill" :class="item.tradeStatus.toLowerCase()">{{ statusLabel(item.tradeStatus) }}</span></td>
+                <td>{{ money(item.tradeAmount) }}</td>
+                <td>{{ nullableMoney(item.tradeShare, 0) }}</td>
+                <td>{{ nullableNav(item.tradeNav) }}</td>
+                <td>{{ money(item.tradeFee) }}</td>
+                <td>{{ item.remark }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <EmptyState v-else title="暂无交易记录" description="当前筛选条件下还没有模拟交易记录。" />
+        </template>
       </div>
     </section>
 
@@ -392,6 +479,18 @@ async function saveConvertPair() {
             <option v-for="item in holdings" :key="item.id" :value="item.id">{{ item.fundCode }} · {{ item.fundName }}</option>
           </select>
         </label>
+        <div class="full-span convert-search">
+          <label>搜索转入基金
+            <input v-model="convertSearchKeyword" class="form-control" placeholder="输入基金名称、代码或拼音" @keydown.enter.prevent="searchConvertFunds" />
+          </label>
+          <button class="ghost-button" :disabled="convertSearching" @click="searchConvertFunds">{{ convertSearching ? '搜索中' : '搜索' }}</button>
+        </div>
+        <div v-if="convertSearchResults.length" class="full-span search-results">
+          <button v-for="result in convertSearchResults" :key="result.fundCode" class="search-result-row" @click="chooseConvertFund(result)">
+            <span>{{ result.fundCode }} · {{ result.fundName }}</span>
+            <small>{{ holdings.some((item) => item.fundCode === result.fundCode) ? '已在持仓，直接转入' : '新基金，结算时创建持仓' }}</small>
+          </button>
+        </div>
         <label>转入基金代码<input v-model="convertForm.inFundCode" class="form-control" /></label>
         <label>转入基金名称<input v-model="convertForm.inFundName" class="form-control" /></label>
         <label>转入金额<input v-model.number="convertForm.inTradeAmount" class="form-control" type="number" min="0" @input="markConvertInAmountTouched" /></label>
@@ -400,8 +499,8 @@ async function saveConvertPair() {
         <label>转入手续费<input v-model.number="convertForm.inTradeFee" class="form-control" type="number" min="0" @input="syncConvertInAmountFromOut" /></label>
         <label>交易状态
           <select v-model="convertForm.tradeStatus" class="form-control">
-            <option value="COMPLETED">已完成</option>
             <option value="PROCESSING">进行中</option>
+            <option value="COMPLETED">已完成</option>
           </select>
         </label>
         <label class="full-span">备注<textarea v-model="convertForm.remark" class="form-control text-area"></textarea></label>
@@ -412,3 +511,45 @@ async function saveConvertPair() {
     </el-dialog>
   </div>
 </template>
+
+<style scoped>
+.convert-search {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.search-results {
+  display: grid;
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+}
+
+.search-result-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 12px;
+  color: var(--text);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.search-result-row:last-child {
+  border-bottom: 0;
+}
+
+.search-result-row:hover {
+  background: var(--surface-2);
+}
+
+.search-result-row small {
+  color: var(--muted);
+  white-space: nowrap;
+}
+</style>
