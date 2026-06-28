@@ -810,8 +810,6 @@ async function settleDueTrades() {
             <option v-for="item in holdings" :key="item.id" :value="item.id">{{ item.fundCode }} · {{ item.fundName }}</option>
           </select>
           <button class="ghost-button" :disabled="recalculating" @click="recalculateHolding">{{ recalculating ? '重算中' : '刷新净值并重算' }}</button>
-          <button class="ghost-button" :disabled="settlingTrades" @click="settleDueTrades">{{ settlingTrades ? '结算中' : '结算到期交易' }}</button>
-          <button class="ghost-button" :disabled="clearing" @click="openClearDialog">{{ clearing ? '清仓中' : '清仓持仓' }}</button>
           <button class="ghost-button danger-button" :disabled="deleting" @click="deleteCurrentHolding">{{ deleting ? '删除中' : '删除持仓' }}</button>
           <button class="primary-button" :disabled="saving" @click="saveHolding">{{ saving ? '保存中' : '保存持仓' }}</button>
         </div>

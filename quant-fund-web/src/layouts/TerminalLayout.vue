@@ -39,7 +39,7 @@ const navItems = [
   { to: '/ai-analysis', label: '智能分析', icon: DataAnalysis },
   { to: '/profit-analysis', label: '收益分析', icon: TrendCharts },
   { to: '/profit-calendar', label: '收益日历', icon: Calendar },
-  { to: '/trades', label: '模拟交易', icon: Operation },
+  { to: '/trades', label: '交易流水', icon: Operation },
   { to: '/strategy-config', label: '策略配置', icon: Histogram },
   { to: '/system-config', label: '系统配置', icon: Setting }
 ]
@@ -52,7 +52,6 @@ const mobileNavItems = [
   { to: '/profile', label: '我的', icon: UserFilled }
 ]
 
-const pageTitle = computed(() => String(route.meta.title || '首页总览'))
 const nowText = computed(() => now.value.toLocaleTimeString('zh-CN', { hour12: false }))
 const dateText = computed(() => {
   return now.value.toLocaleDateString('zh-CN', {
@@ -176,7 +175,6 @@ async function refreshEstimateFromHeader() {
         </button>
         <div>
           <h1>QuantFund - AI Fund Quant Dashboard</h1>
-          <span class="page-kicker">{{ pageTitle }}</span>
         </div>
         <div class="header-status">
           <button class="header-refresh-button" :disabled="estimateRefreshing" type="button" @click="refreshEstimateFromHeader">

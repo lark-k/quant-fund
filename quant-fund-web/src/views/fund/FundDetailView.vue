@@ -20,6 +20,8 @@ const refreshing = ref(false)
 const generating = ref(false)
 const addingHolding = ref(false)
 const holding = ref<FundHolding>()
+const holdingOptions = ref<FundHolding[]>([])
+const selectedHoldingId = ref(0)
 const basicInfo = ref<FundBasicInfo>()
 const estimate = ref<FundEstimate | null>(null)
 const navPoints = ref<FundNavPoint[]>([])
@@ -124,7 +126,7 @@ const maxDrawdown = computed(() => {
     return Math.min(min, (point.nav - peak) / peak * 100)
   }, 0)
 })
-const managerText = computed(() => basicInfo.value?.managerName || '基金经理待同步')
+const managerText = computed(() => basicInfo.value?.managerName || '')
 const rankText = computed(() => {
   if (!peerRank.value) return '--'
   if (peerRank.value.rank && peerRank.value.total) return `${peerRank.value.rank}/${peerRank.value.total}`
@@ -159,6 +161,12 @@ function legendTone(value: number | null | undefined) {
 
 function navHistoryPageText() {
   return `${navHistoryPage.value}/${navHistoryTotalPages.value}`
+}
+
+function switchCurrentHolding() {
+  const selected = holdingOptions.value.find((item) => item.id === selectedHoldingId.value)
+  if (!selected) return
+  router.push({ path: '/fund-detail', query: { fundCode: selected.fundCode, holdingId: selected.id } })
 }
 
 function previousNavHistoryPage() {
@@ -310,6 +318,7 @@ async function loadDetail() {
   loading.value = true
   try {
     const holdings = await quiet(quantApi.holdings()) || []
+    holdingOptions.value = holdings
     const queryHoldingId = Number(route.query.holdingId)
     const queryCode = String(route.query.fundCode || '')
     let matchedHolding = Number.isFinite(queryHoldingId) && queryHoldingId > 0
@@ -321,6 +330,7 @@ async function loadDetail() {
     if (!matchedHolding && !queryCode) {
       matchedHolding = holdings[0]
     }
+    selectedHoldingId.value = matchedHolding?.id || 0
     hasMatchedHolding.value = Boolean(matchedHolding)
     const code = matchedHolding?.fundCode || queryCode || ''
     if (!code) {
@@ -492,28 +502,24 @@ async function generateAiAnalysis() {
   <div v-else class="screen-grid">
     <section class="panel">
       <div class="panel-header">
-        <h2 class="panel-title">{{ holding.fundName }} · {{ holding.fundCode }}</h2>
+        <h2 class="panel-title">
+          {{ holding.fundName }} · {{ holding.fundCode }}<template v-if="managerText"> · {{ managerText }}</template>
+        </h2>
         <div class="toolbar-row">
+          <label v-if="holdingOptions.length" class="fund-switch-control" aria-label="切换当前基金">
+            <select v-model.number="selectedHoldingId" class="form-control fund-switch-select" @change="switchCurrentHolding">
+              <option :value="0" disabled>选择持仓基金</option>
+              <option v-for="item in holdingOptions" :key="item.id" :value="item.id">
+                {{ item.fundCode }} · {{ item.fundName }}
+              </option>
+            </select>
+          </label>
           <button class="ghost-button" :disabled="refreshing" @click="refreshEstimate">{{ refreshing ? '刷新中' : '刷新估值' }}</button>
           <button v-if="!hasMatchedHolding" class="ghost-button" :disabled="addingHolding" @click="addCurrentFundToHolding">{{ addingHolding ? '加入中' : '加入持仓' }}</button>
           <button class="primary-button" :disabled="generating || !canGenerateAiAnalysis" @click="generateAiAnalysis">{{ generating ? '生成中' : '生成 AI 分析' }}</button>
         </div>
       </div>
       <div class="panel-body">
-        <div class="detail-hero">
-          <div>
-            <div class="fund-code">{{ basicInfo?.fundType || holding.fundType }} / {{ managerText }}</div>
-            <p>当日收益按关联板块或真实重仓行情估算；正式净值以基金公司晚间披露为准。</p>
-            <p class="item-meta">{{ detailStatusDescription }}</p>
-          </div>
-          <div class="fund-badges">
-            <span>{{ detailStatusText }}</span>
-            <span>{{ holding.marketStatus || '--' }}</span>
-            <span>{{ holding.estimateBasis || '基金估值涨跌率' }}</span>
-            <span>{{ holding.valuationSource || estimate?.sourceName || '真实数据源' }}</span>
-          </div>
-        </div>
-
         <div class="metric-row">
           <MetricTile label="当日估值" :value="navText(holding.currentEstimateNav ?? estimate?.estimateNav)" :delta="nullablePercent(effectiveEstimateRate)" :tone="metricTone(effectiveEstimateRate)" />
           <MetricTile label="关联板块" :value="relatedThemeText(holding.relatedThemeName)" :delta="nullablePercent(holding.relatedThemeRate)" :tone="metricTone(holding.relatedThemeRate || 0)" />

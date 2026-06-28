@@ -417,9 +417,6 @@ async function settleDueTrades() {
           <div class="segmented trade-filter">
             <button v-for="item in filters" :key="item.key" :class="{ active: filter === item.key }" @click="filter = item.key">{{ item.label }}</button>
           </div>
-          <button class="ghost-button" @click="openConvertDialog">成对转换</button>
-          <button class="ghost-button" :disabled="settling" @click="settleDueTrades">{{ settling ? '结算中' : '结算到期交易' }}</button>
-          <button class="primary-button" @click="openDialog">添加交易记录</button>
         </div>
       </div>
       <div class="panel-body">
