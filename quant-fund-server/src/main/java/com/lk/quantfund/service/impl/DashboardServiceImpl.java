@@ -206,6 +206,7 @@ public class DashboardServiceImpl implements DashboardService {
         LocalDate endDate = today;
         List<HoldingSnapshot> snapshots = holdingSnapshotMapper.selectList(new LambdaQueryWrapper<HoldingSnapshot>()
                 .eq(HoldingSnapshot::getUserId, userId)
+                .eq(HoldingSnapshot::getDeleted, 0)
                 .ge(HoldingSnapshot::getSnapshotDate, startDate)
                 .orderByAsc(HoldingSnapshot::getSnapshotDate));
         Map<LocalDate, List<HoldingSnapshot>> byDate = snapshots.stream()

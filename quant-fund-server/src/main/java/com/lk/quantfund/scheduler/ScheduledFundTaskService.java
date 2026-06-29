@@ -410,7 +410,7 @@ public class ScheduledFundTaskService {
         snapshot.setCreateTime(now);
         snapshot.setUpdateTime(now);
         snapshot.setDeleted(0);
-        upsertSnapshot(snapshot, legacyDelayedSnapshot(holding, navDate, snapshotDate));
+        upsertSnapshot(snapshot);
     }
 
     private void upsertSnapshot(HoldingSnapshot snapshot) {
@@ -464,16 +464,6 @@ public class ScheduledFundTaskService {
 
     private boolean historicalSnapshotDate(LocalDate snapshotDate) {
         return snapshotDate != null && snapshotDate.isBefore(LocalDate.now());
-    }
-
-    private HoldingSnapshot legacyDelayedSnapshot(FundHolding holding, LocalDate navDate, LocalDate snapshotDate) {
-        if (!delayedOfficialNavFund(holding) || navDate == null || navDate.equals(snapshotDate)) {
-            return null;
-        }
-        return holdingSnapshotMapper.selectOne(new LambdaQueryWrapper<HoldingSnapshot>()
-                .eq(HoldingSnapshot::getHoldingId, holding.getId())
-                .eq(HoldingSnapshot::getSnapshotDate, navDate)
-                .last("LIMIT 1"));
     }
 
     private LocalDate officialNavEffectiveDate(FundHolding holding, LocalDate navDate) {

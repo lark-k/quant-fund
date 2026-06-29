@@ -61,6 +61,9 @@ class AnalyticsServiceImplTest {
         if (TableInfoHelper.getTableInfo(FundHolding.class) == null) {
             TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), ""), FundHolding.class);
         }
+        if (TableInfoHelper.getTableInfo(HoldingSnapshot.class) == null) {
+            TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), ""), HoldingSnapshot.class);
+        }
         when(marketDataService.historicalIndex(Mockito.anyString(), Mockito.any(LocalDate.class), Mockito.any(LocalDate.class)))
                 .thenReturn(List.of());
         when(marketDataService.intradayIndex(Mockito.anyString())).thenReturn(List.of());
@@ -341,6 +344,27 @@ class AnalyticsServiceImplTest {
                         assertThat(day.tradingDay()).isFalse();
                         assertThat(day.dailyProfit()).isEqualByComparingTo("0.0000");
                     });
+        }
+    }
+
+    @Test
+    void profitCalendarSnapshotQueryShouldExcludeDeletedSnapshots() {
+        AnalyticsServiceImpl service = service(LocalDate.of(2026, 6, 27));
+        when(holdingSnapshotMapper.selectList(any(LambdaQueryWrapper.class))).thenAnswer(invocation -> {
+            LambdaQueryWrapper<HoldingSnapshot> wrapper = invocation.getArgument(0);
+            assertThat(wrapper.getSqlSegment()).contains("deleted");
+            return List.of(snapshot(LocalDate.of(2026, 6, 26), "-124.5900"));
+        });
+        when(fundHoldingMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(), List.of(), List.of());
+        when(portfolioAccountService.summary()).thenReturn(summary());
+
+        try (MockedStatic<UserContext> userContext = Mockito.mockStatic(UserContext.class)) {
+            userContext.when(UserContext::getUserId).thenReturn(1L);
+            var calendar = service.profitCalendar(YearMonth.of(2026, 6));
+
+            assertThat(calendar.days()).filteredOn(day -> day.date().equals(LocalDate.of(2026, 6, 26)))
+                    .singleElement()
+                    .satisfies(day -> assertThat(day.dailyProfit()).isEqualByComparingTo("-124.5900"));
         }
     }
 

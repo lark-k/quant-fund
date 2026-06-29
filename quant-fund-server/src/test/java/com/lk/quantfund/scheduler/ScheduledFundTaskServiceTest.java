@@ -130,7 +130,7 @@ class ScheduledFundTaskServiceTest {
         ));
         when(accountMapper.selectById(10L)).thenReturn(account());
         when(tradingCalendarService.nextTradingDay(navDate)).thenReturn(snapshotDate);
-        when(snapshotMapper.selectOne(any())).thenReturn(null, existingSnapshot);
+        when(snapshotMapper.selectOne(any())).thenReturn(existingSnapshot);
         ScheduledFundTaskService service = new ScheduledFundTaskService(
                 properties,
                 fundQueryService,
@@ -150,6 +150,54 @@ class ScheduledFundTaskServiceTest {
         verify(snapshotMapper, never()).insert(any(HoldingSnapshot.class));
         verify(snapshotMapper, never()).updateById(any(HoldingSnapshot.class));
         verify(portfolioAccountService).recalculateOwnedAccount(1L, 10L);
+    }
+
+    @Test
+    void syncOfficialNavDoesNotMoveExistingNavDateSnapshotForDelayedFund() {
+        QuantFundProperties properties = new QuantFundProperties();
+        FundQueryService fundQueryService = mock(FundQueryService.class);
+        FundHoldingMapper fundHoldingMapper = mock(FundHoldingMapper.class);
+        PortfolioAccountMapper accountMapper = mock(PortfolioAccountMapper.class);
+        HoldingSnapshotMapper snapshotMapper = mock(HoldingSnapshotMapper.class);
+        PortfolioAccountService portfolioAccountService = mock(PortfolioAccountService.class);
+        TradingCalendarService tradingCalendarService = mock(TradingCalendarService.class);
+        FundHolding holding = holding("QDII", "Global Growth QDII");
+        LocalDate navDate = LocalDate.now().minusDays(1);
+        LocalDate effectiveDate = LocalDate.now();
+        HoldingSnapshot existingNavDateSnapshot = new HoldingSnapshot();
+        existingNavDateSnapshot.setId(300L);
+        existingNavDateSnapshot.setHoldingId(holding.getId());
+        existingNavDateSnapshot.setSnapshotDate(navDate);
+        existingNavDateSnapshot.setDailyProfit(new BigDecimal("40.5300"));
+        when(tradingCalendarService.nextTradingDay(navDate)).thenReturn(effectiveDate);
+        when(fundHoldingMapper.selectList(any())).thenReturn(List.of(holding));
+        when(fundQueryService.getHistoricalNav(any(), any(), any())).thenReturn(List.of(
+                navPoint(navDate.minusDays(1), "1.0000", null),
+                navPoint(navDate, "0.9500", "-5.0000")
+        ));
+        when(accountMapper.selectById(10L)).thenReturn(account());
+        when(snapshotMapper.selectOne(any())).thenReturn(null, existingNavDateSnapshot);
+        ScheduledFundTaskService service = new ScheduledFundTaskService(
+                properties,
+                fundQueryService,
+                mock(AiAnalysisService.class),
+                mock(StrategyService.class),
+                portfolioAccountService,
+                fundHoldingMapper,
+                accountMapper,
+                snapshotMapper,
+                mock(FundValuationService.class),
+                tradingCalendarService
+        );
+        ArgumentCaptor<HoldingSnapshot> snapshotCaptor = ArgumentCaptor.forClass(HoldingSnapshot.class);
+
+        SchedulerTaskResult result = service.syncOfficialNav();
+
+        assertThat(result.getSuccessCount()).isEqualTo(1);
+        verify(snapshotMapper).insert(snapshotCaptor.capture());
+        assertThat(snapshotCaptor.getValue().getSnapshotDate()).isEqualTo(effectiveDate);
+        verify(snapshotMapper, never()).updateById(any(HoldingSnapshot.class));
+        verify(snapshotMapper, never()).deleteById(300L);
     }
 
     @Test

@@ -324,6 +324,7 @@ public class AnalyticsServiceImpl implements AnalyticsService {
     private List<HoldingSnapshot> snapshots(Long userId, LocalDate startDate, LocalDate endDate) {
         return holdingSnapshotMapper.selectList(new LambdaQueryWrapper<HoldingSnapshot>()
                 .eq(HoldingSnapshot::getUserId, userId)
+                .eq(HoldingSnapshot::getDeleted, 0)
                 .ge(HoldingSnapshot::getSnapshotDate, startDate)
                 .le(HoldingSnapshot::getSnapshotDate, endDate)
                 .orderByAsc(HoldingSnapshot::getSnapshotDate));
