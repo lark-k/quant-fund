@@ -1,0 +1,22 @@
+[project]
+name = "quant-engine"
+version = "0.1.0"
+description = "QuantFund intraday rule-based quant decision engine"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.30.0",
+  "pydantic>=2.7.0",
+  "pydantic-settings>=2.3.0",
+  "numpy>=1.26.0",
+  "pandas>=2.2.0",
+  "httpx>=0.27.0",
+  "python-dotenv>=1.0.1",
+  "joblib>=1.4.0",
+  "orjson>=3.10.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["app/tests"]
+pythonpath = ["."]
+addopts = "-q"

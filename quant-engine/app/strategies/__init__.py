@@ -1,0 +1,1 @@
+"""Rule-based quant strategies."""

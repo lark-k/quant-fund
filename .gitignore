@@ -29,5 +29,10 @@ dist/
 tmp/
 .cache/
 qa-artifacts/
+__pycache__/
+.pytest_cache/
+quant-engine/.venv/
+quant-engine/.cache/
+quant-engine/models/artifacts/
 # codegraph
 .codegraph
