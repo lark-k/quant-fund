@@ -11,8 +11,8 @@ import BaseChart from '@/components/charts/BaseChart.vue'
 import { returnTrendOption } from '@/components/charts/chartOptions'
 import { quantApi } from '@/api/quant'
 import { useDashboardStore } from '@/stores/dashboard'
-import { metricTone, money, percent, signed, toneClass } from '@/utils/format'
-import type { MarketSessionStatus, ProfitAnalysis, StrategySignal } from '@/types/domain'
+import { actionPercent, metricTone, money, percent, percentUnsigned, signed, toneClass } from '@/utils/format'
+import type { AiAnalysisReport, MarketSessionStatus, ProfitAnalysis, QuantSignal, StrategySignal } from '@/types/domain'
 
 const store = useDashboardStore()
 const router = useRouter()
@@ -37,9 +37,11 @@ const activeRange = ref<TrendRange>('TODAY')
 const activeIndexCode = ref<BenchmarkIndex>('000300')
 const refreshing = ref(false)
 const trendLoading = ref(false)
+const quantLoading = ref(false)
 const showAllStrategySignals = ref(false)
 const profitAnalysis = ref<ProfitAnalysis>()
 const intradayTrendPoints = ref<TrendPoint[]>([])
+const quantSignals = ref<QuantSignal[]>([])
 let refreshTimer: number | undefined
 let initialOverviewPromise: Promise<unknown> | null = null
 let lastOfficialNavSyncAt = 0
@@ -75,6 +77,7 @@ onMounted(() => {
       initialOverviewPromise = null
     })
   loadReturnTrend()
+  loadQuantSignals()
   refreshTimer = window.setInterval(autoRefreshEstimate, AUTO_ESTIMATE_REFRESH_INTERVAL_MS)
 })
 
@@ -105,26 +108,13 @@ const buySellSuggestionCount = computed(() => {
 const watchSuggestionCount = computed(() => {
   return overview.value?.todayAiSuggestions.filter((item) => item.action === 'WATCH' || item.action === 'HOLD').length || 0
 })
-const highRiskSignalCount = computed(() => {
-  return overview.value?.latestStrategySignals.filter((item) => item.riskLevel === 'HIGH').length || 0
-})
-const mediumRiskSignalCount = computed(() => {
-  return overview.value?.latestStrategySignals.filter((item) => item.riskLevel === 'MEDIUM').length || 0
-})
-const lowRiskSignalCount = computed(() => {
-  return overview.value?.latestStrategySignals.filter((item) => item.riskLevel === 'LOW').length || 0
-})
 const activeSignalCount = computed(() => {
-  return overview.value?.latestStrategySignals.filter((item) => item.action !== 'HOLD' && item.action !== 'WATCH').length || 0
+  return quantSignals.value.filter((item) => item.action !== 'HOLD' && item.action !== 'WATCH').length
 })
-const signalRiskBuckets = computed(() => {
-  const total = Math.max(overview.value?.latestStrategySignals.length || 0, 1)
-  return [
-    { label: '高', level: 'HIGH', count: highRiskSignalCount.value, width: highRiskSignalCount.value / total * 100 },
-    { label: '中', level: 'MEDIUM', count: mediumRiskSignalCount.value, width: mediumRiskSignalCount.value / total * 100 },
-    { label: '低', level: 'LOW', count: lowRiskSignalCount.value, width: lowRiskSignalCount.value / total * 100 }
-  ]
-})
+const quantBuySellCount = computed(() => quantSignals.value.filter((item) => item.action === 'BUY' || item.action === 'SELL' || item.action === 'CONVERT').length)
+const quantWatchCount = computed(() => quantSignals.value.filter((item) => item.action === 'WATCH' || item.action === 'HOLD').length)
+const visibleQuantSignals = computed(() => showAllStrategySignals.value ? quantSignals.value : quantSignals.value.slice(0, 5))
+const quantSignalCollapsed = computed(() => quantSignals.value.length > 5)
 const strategySignalGroups = computed<StrategySignalGroup[]>(() => {
   const signals = overview.value?.latestStrategySignals || []
   const groups = new Map<string, StrategySignal[]>()
@@ -232,6 +222,39 @@ async function loadReturnTrend() {
   }
 }
 
+async function loadQuantSignals() {
+  quantLoading.value = true
+  try {
+    quantSignals.value = (await quantApi.quantSignals())
+      .slice()
+      .sort((left, right) => Date.parse(right.signalTime) - Date.parse(left.signalTime))
+  } catch {
+    quantSignals.value = []
+  } finally {
+    quantLoading.value = false
+  }
+}
+
+async function analyzeQuantAccount() {
+  const accountId = overview.value?.topHoldings[0]?.accountId
+  if (!accountId) {
+    ElMessage.warning('暂无可分析的持仓账户')
+    return
+  }
+  quantLoading.value = true
+  try {
+    await quantApi.analyzeQuantAccount(accountId)
+    await quantApi.generateAiAccountAnalysis(accountId)
+    quantSignals.value = (await quantApi.quantSignals({ accountId }))
+      .slice()
+      .sort((left, right) => Date.parse(right.signalTime) - Date.parse(left.signalTime))
+    await store.fetchOverview()
+    ElMessage.success('今日量化建议和 AI 解释已刷新')
+  } finally {
+    quantLoading.value = false
+  }
+}
+
 function selectTrendRange(range: TrendRange) {
   if (activeRange.value === range) return
   activeRange.value = range
@@ -301,6 +324,19 @@ function displaySuggestionFund(item: { fundCode: string; fundName?: string }) {
   }
   return item.fundCode
 }
+
+function aiExecutionText(item: AiAnalysisReport) {
+  if (item.action === 'SELL') {
+    return `减仓 ${actionPercent(item.action, item.suggestRatio)} · 约 ${money(item.suggestAmount)} 元`
+  }
+  if (item.action === 'BUY') {
+    return `买入 ${actionPercent(item.action, item.suggestRatio)} · 约 ${money(item.suggestAmount)} 元`
+  }
+  if (item.action === 'CONVERT') {
+    return `转换 ${actionPercent(item.action, item.suggestRatio)} · 约 ${money(item.suggestAmount)} 元`
+  }
+  return item.action === 'HOLD' ? '持有不动 · 继续跟踪' : '暂不操作 · 继续观察'
+}
 function updatedBadgeText(date?: string | null) {
   if (!date) return '已更新'
   const today = new Date().toISOString().slice(0, 10)
@@ -358,6 +394,7 @@ async function refreshEstimate() {
   if (Date.now() - lastEstimateRefreshAt < ESTIMATE_REFRESH_COOLDOWN_MS) {
     await store.fetchOverview()
     await loadReturnTrend()
+    await loadQuantSignals()
     ElMessage.info('刚刚刷新过，已使用最新数据')
     return
   }
@@ -369,6 +406,7 @@ async function refreshEstimate() {
     const officialUpdatedCount = officialHoldings.filter((holding) => holding.officialNavUpdated).length
     if (!isAShareEstimateRefreshAllowed(marketStatus)) {
       await store.fetchOverview()
+      await loadQuantSignals()
       if (officialUpdatedCount) {
         ElMessage.success(`已同步 ${officialUpdatedCount} 只基金最新正式净值，并按最终净值重算收益`)
       } else {
@@ -388,6 +426,7 @@ async function refreshEstimate() {
     }))
     await store.fetchOverview()
     await loadReturnTrend()
+    await loadQuantSignals()
     const successCount = results.filter((result) => result.status === 'fulfilled').length
     const failedCount = results.length - successCount
     if (officialUpdatedCount) {
@@ -454,6 +493,7 @@ async function autoRefreshEstimate() {
       await syncOfficialNavWhenAllowed()
       await store.fetchOverview()
       await loadReturnTrend()
+      await loadQuantSignals()
     } finally {
       autoRefreshing = false
     }
@@ -475,6 +515,7 @@ async function autoRefreshEstimate() {
     }))
     await store.fetchOverview()
     await loadReturnTrend()
+    await loadQuantSignals()
   } finally {
     refreshing.value = false
   }
@@ -612,14 +653,13 @@ function go(path: string) {
         <div v-if="overview.todayAiSuggestions.length" class="visual-table-wrap">
           <table class="visual-table ai-table">
             <thead>
-              <tr><th>基金</th><th>建议</th><th>风险</th><th>置信</th><th>时间</th></tr>
+              <tr><th>基金</th><th>建议</th><th>执行参考</th><th>时间</th></tr>
             </thead>
             <tbody>
               <tr v-for="item in overview.todayAiSuggestions" :key="item.id">
                 <td class="visual-name-cell">{{ displaySuggestionFund(item) }}</td>
-                <td><ActionTag :action="item.action" :text="item.actionText" /></td>
-                <td><span :class="['risk-pill', riskCellClass(item.riskLevel)]">{{ displayRiskLevel(item.riskLevel) }}</span></td>
-                <td>{{ percent(item.confidence * 100, 0) }}</td>
+                <td class="ai-action-cell"><ActionTag :action="item.action" :text="item.actionText" /></td>
+                <td class="ai-execution-cell">{{ aiExecutionText(item) }}</td>
                 <td>{{ item.analysisTime.slice(11, 16) }}</td>
               </tr>
             </tbody>
@@ -634,41 +674,37 @@ function go(path: string) {
       <div class="dashboard-signal-column">
     <section class="panel strategy-panel">
       <div class="panel-header">
-        <h2 class="panel-title">策略信号（实时）</h2>
-        <button class="panel-link" @click="go('/strategy-config')">更多 ›</button>
+        <h2 class="panel-title">今日量化建议</h2>
+        <button class="panel-link" :disabled="quantLoading" @click="analyzeQuantAccount">{{ quantLoading ? '刷新中' : '生成' }}</button>
       </div>
       <div class="panel-body visual-panel-body">
-        <div class="signal-risk-bars">
-          <div v-for="bucket in signalRiskBuckets" :key="bucket.level" :class="['risk-bar-row', riskCellClass(bucket.level)]">
-            <span>{{ bucket.label }}</span>
-            <div class="risk-bar-track">
-              <i :class="riskCellClass(bucket.level)" :style="{ width: `${Math.max(bucket.width, bucket.count ? 8 : 0)}%` }"></i>
-            </div>
-            <strong>{{ bucket.count }}</strong>
-          </div>
+        <div class="insight-stat-row compact">
+          <div><span>买卖/转换</span><strong>{{ quantBuySellCount }}</strong></div>
+          <div><span>观察/持有</span><strong>{{ quantWatchCount }}</strong></div>
+          <div><span>覆盖持仓</span><strong>{{ quantSignals.length }}</strong></div>
         </div>
-        <div v-if="visibleStrategySignalGroups.length" class="visual-table-wrap">
+        <div v-if="visibleQuantSignals.length" class="visual-table-wrap">
           <table class="visual-table signal-table">
             <thead>
-              <tr><th>基金</th><th>信号</th><th>动作</th><th>风险</th><th>强度</th><th>时间</th></tr>
+              <tr><th>基金</th><th>动作</th><th>总分</th><th>风险</th><th>置信</th><th>时间</th></tr>
             </thead>
             <tbody>
-              <tr v-for="signalGroup in visibleStrategySignalGroups" :key="signalGroup.key">
-                <td class="visual-name-cell">{{ displaySignalFund(signalGroup.latest) }}</td>
-                <td>{{ displaySignalType(signalGroup.latest.signalType) }}</td>
-                <td><ActionTag :action="signalGroup.latest.action" :text="signalGroup.latest.actionText" /></td>
-                <td><span :class="['risk-pill', riskCellClass(signalGroup.latest.riskLevel)]">{{ displayRiskLevel(signalGroup.latest.riskLevel) }}</span></td>
-                <td>{{ percent(signalGroup.latest.confidence * 100, 0) }}</td>
-                <td>{{ signalGroup.latest.signalTime.slice(11, 16) }}</td>
+              <tr v-for="signal in visibleQuantSignals" :key="signal.id">
+                <td class="visual-name-cell">{{ displaySignalFund(signal) }}</td>
+                <td><ActionTag :action="signal.action" :text="signal.actionText" /></td>
+                <td>{{ signal.totalScore.toFixed(1) }}</td>
+                <td><span :class="['risk-pill', riskCellClass(signal.riskLevel)]">{{ displayRiskLevel(signal.riskLevel) }}</span></td>
+                <td>{{ percentUnsigned(signal.confidence * 100, 0) }}</td>
+                <td>{{ signal.signalTime.slice(11, 16) }}</td>
               </tr>
             </tbody>
           </table>
         </div>
-        <EmptyState v-else title="暂无策略信号" description="策略规则触发后会在此展示。" />
-        <button v-if="strategySignalCollapsed" class="panel-link signal-toggle" type="button" @click="showAllStrategySignals = !showAllStrategySignals">
-          {{ showAllStrategySignals ? '收起' : `展开全部（${strategySignalGroups.length}）` }}
+        <EmptyState v-else title="暂无量化建议" description="点击生成后会调用规则多因子量化引擎。" />
+        <button v-if="quantSignalCollapsed" class="panel-link signal-toggle" type="button" @click="showAllStrategySignals = !showAllStrategySignals">
+          {{ showAllStrategySignals ? '收起' : `展开全部（${quantSignals.length}）` }}
         </button>
-        <div class="visual-footnote">活跃 {{ activeSignalCount }} · 高风险 {{ highRiskSignalCount }} · 监控 {{ summary.holdingCount }} 只基金</div>
+        <div class="visual-footnote">活跃 {{ activeSignalCount }} · 模型建议只做参考</div>
       </div>
     </section>
       </div>

@@ -53,7 +53,7 @@ public class DeepSeekAiAnalysisClient implements AiAnalysisClient {
             return responseValidator.fallback("", "DeepSeek API key is not configured");
         }
         try {
-            WebClient webClient = webClientBuilder.baseUrl(ai.getBaseUrl()).build();
+            WebClient webClient = webClientBuilder.clone().baseUrl(ai.getBaseUrl()).build();
             Map<String, Object> request = buildRequest(ai, context);
             String response = webClient.post()
                     .uri("/chat/completions")

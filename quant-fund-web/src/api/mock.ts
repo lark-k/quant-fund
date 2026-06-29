@@ -31,6 +31,8 @@ import type {
   ProfitAnalysis,
   ProfitCalendar,
   ProfileUpdateRequest,
+  QuantEngineHealth,
+  QuantSignal,
   RiskProfile,
   RiskProfileRequest,
   StrategyConfig,
@@ -213,6 +215,51 @@ export const strategySignals: StrategySignal[] = signalSeeds.map((item, index) =
   signalTime: atTime(9, 41 - index * 4),
   disclaimer: DISCLAIMER
 }))
+
+function toQuantSignal(holding: FundHolding, index = 0): QuantSignal {
+  const strongOpportunity = holding.currentEstimateGrowthRate > 0.8 && holding.positionRate < 18
+  const weakRisk = holding.currentEstimateGrowthRate < -0.5 || holding.positionRate > 20
+  const action: QuantSignal['action'] = weakRisk ? 'WATCH' : strongOpportunity ? 'BUY' : 'HOLD'
+  const totalScore = weakRisk ? 52 - index : strongOpportunity ? 82 - index : 66 - index
+  const suggestRatio = action === 'BUY' ? Math.min(5, Math.max(0, 25 - holding.positionRate)) : 0
+  return {
+    id: 9000 + holding.id,
+    accountId: holding.accountId,
+    holdingId: holding.id,
+    fundCode: holding.fundCode,
+    fundName: holding.fundName,
+    action,
+    actionText: action === 'BUY' ? '建议小额加仓' : action === 'WATCH' ? '建议重点观察' : '建议持有观察',
+    suggestAmount: action === 'BUY' ? portfolios[0].totalAsset * suggestRatio / 100 : 0,
+    suggestRatio,
+    riskLevel: weakRisk ? 'MEDIUM' : strongOpportunity ? 'HIGH' : 'LOW',
+    confidence: action === 'BUY' ? 0.78 : 0.62,
+    totalScore,
+    trendScore: totalScore + 3,
+    opportunityScore: action === 'BUY' ? 84 : 58,
+    riskScore: weakRisk ? 48 : 76,
+    positionScore: Math.max(35, 92 - holding.positionRate * 2),
+    momentumScore: 50 + holding.currentEstimateGrowthRate * 8,
+    reasons: [
+      `规则多因子评分 ${totalScore.toFixed(2)}，结合趋势、机会、风险、仓位和动量生成。`,
+      `当前估值 ${holding.currentEstimateGrowthRate.toFixed(2)}%，单基金仓位 ${holding.positionRate.toFixed(2)}%。`
+    ],
+    risks: ['盘中估值不是最终净值，建议结合 15:00 前平台规则自行确认。'],
+    metricsJson: JSON.stringify({
+      estimateGrowthRate: holding.currentEstimateGrowthRate,
+      positionRate: holding.positionRate,
+      holdingProfitRate: holding.holdingProfitRate
+    }),
+    modelName: 'QuantRuleEngine',
+    modelVersion: 'rule-v1.0.0',
+    deadline: atTime(15, 0),
+    signalTime: atTime(14, 50 - index),
+    fallbackUsed: false,
+    disclaimer: DISCLAIMER
+  }
+}
+
+export const quantSignals: QuantSignal[] = holdings.slice(0, 6).map(toQuantSignal)
 
 export const aiSuggestions: AiAnalysisReport[] = [
   {
@@ -1114,6 +1161,55 @@ export const mockApi = {
   async strategies() {
     return strategySignals
   },
+  async quantHealth(): Promise<QuantEngineHealth> {
+    return {
+      status: 'UP',
+      service: 'quant-engine',
+      modelVersion: 'rule-v1.0.0',
+      enabled: true
+    }
+  },
+  async quantSignals(query: { accountId?: number; holdingId?: number; fundCode?: string; action?: string } = {}) {
+    const latestByHolding = new Map<number, QuantSignal>()
+    for (const signal of [...quantSignals].sort((left, right) => {
+      const timeDiff = new Date(right.signalTime).getTime() - new Date(left.signalTime).getTime()
+      if (timeDiff !== 0) return timeDiff
+      return right.id - left.id
+    })) {
+      if (!latestByHolding.has(signal.holdingId)) {
+        latestByHolding.set(signal.holdingId, signal)
+      }
+    }
+    return Array.from(latestByHolding.values()).filter((item) => {
+      if (query.accountId && item.accountId !== query.accountId) return false
+      if (query.holdingId && item.holdingId !== query.holdingId) return false
+      if (query.fundCode && item.fundCode !== query.fundCode) return false
+      if (query.action && item.action !== query.action) return false
+      return true
+    })
+  },
+  async analyzeQuantHolding(holdingId: number) {
+    const holding = holdings.find((item) => item.id === holdingId)
+    if (!holding) throw new Error('未找到持仓记录')
+    const signal = { ...toQuantSignal(holding), id: Date.now(), signalTime: now }
+    const existingIndex = quantSignals.findIndex((item) => item.holdingId === holdingId)
+    if (existingIndex >= 0) quantSignals.splice(existingIndex, 1, signal)
+    else quantSignals.unshift(signal)
+    return signal
+  },
+  async analyzeQuantAccount(accountId: number) {
+    const results = holdings.filter((item) => item.accountId === accountId).map((item, index) => ({
+      ...toQuantSignal(item, index),
+      id: Date.now() + index,
+      signalTime: now
+    }))
+    results.forEach((signal) => {
+      const existingIndex = quantSignals.findIndex((item) => item.holdingId === signal.holdingId)
+      if (existingIndex >= 0) quantSignals.splice(existingIndex, 1, signal)
+      else quantSignals.unshift(signal)
+    })
+    return results
+  },
   async aiHistory() {
     const activeHoldingIds = new Set(holdings.map((holding) => holding.id))
     activeHoldingIds.forEach((holdingId) => pruneAiHistory(holdingId))
@@ -1297,6 +1393,14 @@ export const mockApi = {
     aiSuggestions.unshift(report)
     pruneAiHistory(holding.id)
     return report
+  },
+  async generateAiAccountAnalysis(accountId: number) {
+    const reports = await Promise.all(
+      holdings
+        .filter((item) => item.accountId === accountId)
+        .map((item) => this.generateAiAnalysis(item.id))
+    )
+    return reports
   },
   async createTrade(request: TradeRecordRequest) {
     const trade: TradeRecord = {

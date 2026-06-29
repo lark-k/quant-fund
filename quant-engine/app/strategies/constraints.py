@@ -15,8 +15,6 @@ def buy_blockers(request: QuantAnalyzeRequest, features: dict) -> list[str]:
         blockers.append("14:57 后不得生成 BUY 建议")
     if request.holding.positionRate >= request.riskProfile.maxSingleFundPositionRate:
         blockers.append("单基金仓位已达到或超过风险配置上限")
-    if request.account.equityPositionRate >= request.riskProfile.maxEquityPositionRate:
-        blockers.append("权益类总仓位已达到或超过风险配置上限")
     if features.get("isQdiiOrOverseas") and request.market.trading:
         blockers.append("QDII/海外基金不得使用 A 股盘中波动生成当日买入建议")
     if not request.market.tradingDay:

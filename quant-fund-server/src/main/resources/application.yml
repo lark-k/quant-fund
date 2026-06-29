@@ -56,8 +56,9 @@ quantfund:
     base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
     api-key: ${DEEPSEEK_API_KEY:}
     timeout-ms: ${DEEPSEEK_TIMEOUT_MS:15000}
-    max-tokens: ${DEEPSEEK_MAX_TOKENS:3000}
+    max-tokens: ${DEEPSEEK_MAX_TOKENS:1200}
     reasoning-enabled: ${DEEPSEEK_REASONING_ENABLED:false}
+    account-analysis-concurrency: ${DEEPSEEK_ACCOUNT_ANALYSIS_CONCURRENCY:5}
   fund-data-source:
     timeout-ms: 5000
     refresh-interval-seconds: 120
@@ -70,6 +71,18 @@ quantfund:
     east-money-fund-detail-url: https://fund.eastmoney.com/pingzhongdata/{fundCode}.js
     east-money-fund-archive-url: https://fundf10.eastmoney.com/FundArchivesDatas.aspx
     east-money-quote-url: https://push2.eastmoney.com/api/qt/ulist.np/get
+  quant-engine:
+    enabled: ${QUANT_ENGINE_ENABLED:true}
+    base-url: ${QUANT_ENGINE_BASE_URL:http://127.0.0.1:8091}
+    timeout-ms: ${QUANT_ENGINE_TIMEOUT_MS:8000}
+    batch-timeout-ms: ${QUANT_ENGINE_BATCH_TIMEOUT_MS:60000}
+    backtest-timeout-ms: ${QUANT_ENGINE_BACKTEST_TIMEOUT_MS:300000}
+    model-version: ${QUANT_ENGINE_MODEL_VERSION:rule-v1.1.0}
+    fallback-to-java-rules: ${QUANT_ENGINE_FALLBACK_TO_JAVA_RULES:true}
+    decision-deadline: ${QUANT_ENGINE_DECISION_DEADLINE:15:00:00}
+    max-batch-holdings: ${QUANT_ENGINE_MAX_BATCH_HOLDINGS:100}
+    max-backtest-funds: ${QUANT_ENGINE_MAX_BACKTEST_FUNDS:1000}
+    max-param-grid: ${QUANT_ENGINE_MAX_PARAM_GRID:100}
   scheduler:
     enabled: ${QUANTFUND_SCHEDULER_ENABLED:true}
     holidays: ${QUANTFUND_TRADING_HOLIDAYS:2026-01-01,2026-02-16,2026-02-17,2026-02-18,2026-02-19,2026-02-20,2026-04-06,2026-05-01,2026-05-04,2026-05-05,2026-06-19,2026-09-25,2026-10-01,2026-10-02,2026-10-05,2026-10-06,2026-10-07}

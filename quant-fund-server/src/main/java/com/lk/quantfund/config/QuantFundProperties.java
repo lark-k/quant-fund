@@ -11,6 +11,7 @@ public class QuantFundProperties {
 
     private final Ai ai = new Ai();
     private final FundDataSource fundDataSource = new FundDataSource();
+    private final QuantEngine quantEngine = new QuantEngine();
     private final Scheduler scheduler = new Scheduler();
 
     public Ai getAi() {
@@ -19,6 +20,10 @@ public class QuantFundProperties {
 
     public FundDataSource getFundDataSource() {
         return fundDataSource;
+    }
+
+    public QuantEngine getQuantEngine() {
+        return quantEngine;
     }
 
     public Scheduler getScheduler() {
@@ -40,6 +45,8 @@ public class QuantFundProperties {
         @Min(256)
         private int maxTokens = 1200;
         private boolean reasoningEnabled = false;
+        @Min(1)
+        private int accountAnalysisConcurrency = 5;
 
         public boolean isEnabled() {
             return enabled;
@@ -111,6 +118,14 @@ public class QuantFundProperties {
 
         public void setReasoningEnabled(boolean reasoningEnabled) {
             this.reasoningEnabled = reasoningEnabled;
+        }
+
+        public int getAccountAnalysisConcurrency() {
+            return accountAnalysisConcurrency;
+        }
+
+        public void setAccountAnalysisConcurrency(int accountAnalysisConcurrency) {
+            this.accountAnalysisConcurrency = accountAnalysisConcurrency;
         }
     }
 
@@ -222,6 +237,117 @@ public class QuantFundProperties {
 
         public void setEastMoneyQuoteUrl(String eastMoneyQuoteUrl) {
             this.eastMoneyQuoteUrl = eastMoneyQuoteUrl;
+        }
+    }
+
+    public static class QuantEngine {
+        private boolean enabled = true;
+        @NotBlank
+        private String baseUrl = "http://127.0.0.1:8091";
+        @Min(1000)
+        private int timeoutMs = 8000;
+        @Min(1000)
+        private int batchTimeoutMs = 60000;
+        @Min(1000)
+        private int backtestTimeoutMs = 300000;
+        @NotBlank
+        private String modelVersion = "rule-v1.0.0";
+        private boolean fallbackToJavaRules = true;
+        @NotBlank
+        private String decisionDeadline = "15:00:00";
+        @Min(1)
+        private int maxBatchHoldings = 100;
+        @Min(1)
+        private int maxBacktestFunds = 1000;
+        @Min(1)
+        private int maxParamGrid = 100;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public String getBaseUrl() {
+            return baseUrl;
+        }
+
+        public void setBaseUrl(String baseUrl) {
+            this.baseUrl = baseUrl;
+        }
+
+        public int getTimeoutMs() {
+            return timeoutMs;
+        }
+
+        public void setTimeoutMs(int timeoutMs) {
+            this.timeoutMs = timeoutMs;
+        }
+
+        public int getBatchTimeoutMs() {
+            return batchTimeoutMs;
+        }
+
+        public void setBatchTimeoutMs(int batchTimeoutMs) {
+            this.batchTimeoutMs = batchTimeoutMs;
+        }
+
+        public int getBacktestTimeoutMs() {
+            return backtestTimeoutMs;
+        }
+
+        public void setBacktestTimeoutMs(int backtestTimeoutMs) {
+            this.backtestTimeoutMs = backtestTimeoutMs;
+        }
+
+        public String getModelVersion() {
+            return modelVersion;
+        }
+
+        public void setModelVersion(String modelVersion) {
+            this.modelVersion = modelVersion;
+        }
+
+        public boolean isFallbackToJavaRules() {
+            return fallbackToJavaRules;
+        }
+
+        public void setFallbackToJavaRules(boolean fallbackToJavaRules) {
+            this.fallbackToJavaRules = fallbackToJavaRules;
+        }
+
+        public String getDecisionDeadline() {
+            return decisionDeadline;
+        }
+
+        public void setDecisionDeadline(String decisionDeadline) {
+            this.decisionDeadline = decisionDeadline;
+        }
+
+        public int getMaxBatchHoldings() {
+            return maxBatchHoldings;
+        }
+
+        public void setMaxBatchHoldings(int maxBatchHoldings) {
+            this.maxBatchHoldings = maxBatchHoldings;
+        }
+
+        public int getMaxBacktestFunds() {
+            return maxBacktestFunds;
+        }
+
+        public void setMaxBacktestFunds(int maxBacktestFunds) {
+            this.maxBacktestFunds = maxBacktestFunds;
+        }
+
+        public int getMaxParamGrid() {
+            return maxParamGrid;
+        }
+
+        public void setMaxParamGrid(int maxParamGrid) {
+            this.maxParamGrid = maxParamGrid;
         }
     }
 

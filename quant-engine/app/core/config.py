@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     host: str = "127.0.0.1"
     port: int = 8091
-    rule_model_version: str = "rule-v1.0.0"
+    rule_model_version: str = "rule-v1.1.0"
     default_deadline: str = "15:00:00"
     log_level: str = "INFO"
     workers: int = 1

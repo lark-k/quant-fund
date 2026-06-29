@@ -33,6 +33,8 @@ import type {
   PortfolioAccountRequest,
   ProfitAnalysis,
   ProfitCalendar,
+  QuantEngineHealth,
+  QuantSignal,
   RiskProfile,
   RiskProfileRequest,
   StrategyConfig,
@@ -81,6 +83,18 @@ export const quantApi = {
   },
   strategies(): Promise<StrategySignal[]> {
     return USE_MOCK ? mockApi.strategies() : http.get('/strategies/signals')
+  },
+  quantHealth(): Promise<QuantEngineHealth> {
+    return USE_MOCK ? mockApi.quantHealth() : http.get('/quant/health')
+  },
+  quantSignals(params?: { accountId?: number; holdingId?: number; fundCode?: string; action?: string }): Promise<QuantSignal[]> {
+    return USE_MOCK ? mockApi.quantSignals(params) : http.get('/quant/signals', { params, suppressErrorMessage: true })
+  },
+  analyzeQuantHolding(holdingId: number): Promise<QuantSignal> {
+    return USE_MOCK ? mockApi.analyzeQuantHolding(holdingId) : http.post(`/quant/holdings/${holdingId}/analyze`, undefined, { timeout: 60000 })
+  },
+  analyzeQuantAccount(accountId: number): Promise<QuantSignal[]> {
+    return USE_MOCK ? mockApi.analyzeQuantAccount(accountId) : http.post(`/quant/accounts/${accountId}/analyze`, undefined, { timeout: 90000 })
   },
   aiHistory(): Promise<AiAnalysisReport[]> {
     return USE_MOCK ? mockApi.aiHistory() : http.get('/ai-analysis/history')
@@ -173,7 +187,10 @@ export const quantApi = {
     return USE_MOCK ? mockApi.refreshEstimate(fundCode) : http.post(`/funds/${fundCode}/refresh-estimate`)
   },
   generateAiAnalysis(holdingId: number): Promise<AiAnalysisReport> {
-    return USE_MOCK ? mockApi.generateAiAnalysis(holdingId) : http.post(`/ai-analysis/holdings/${holdingId}`)
+    return USE_MOCK ? mockApi.generateAiAnalysis(holdingId) : http.post(`/ai-analysis/holdings/${holdingId}`, undefined, { timeout: 90000 })
+  },
+  generateAiAccountAnalysis(accountId: number): Promise<AiAnalysisReport[]> {
+    return USE_MOCK ? mockApi.generateAiAccountAnalysis(accountId) : http.post(`/ai-analysis/accounts/${accountId}`, undefined, { timeout: 120000 })
   },
   createTrade(request: TradeRecordRequest): Promise<TradeRecord> {
     return USE_MOCK ? mockApi.createTrade(request) : http.post('/trades', request)

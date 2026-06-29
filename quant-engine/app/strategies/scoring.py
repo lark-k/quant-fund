@@ -14,10 +14,10 @@ def calculate_scores(features: dict, risk_profile: RiskProfile) -> ScoreBreakdow
     position_score = _position_score(features)
     momentum_score = _momentum_score(features)
     total = (
-        trend_score * 0.30
-        + opportunity_score * 0.20
-        + risk_score * 0.20
-        + position_score * 0.20
+        trend_score * 0.35
+        + opportunity_score * 0.25
+        + risk_score * 0.15
+        + position_score * 0.15
         + momentum_score * 0.10
     )
     return ScoreBreakdown(
@@ -55,7 +55,7 @@ def _risk_score(features: dict, risk_profile: RiskProfile) -> float:
     volatility20 = float(features.get("volatility20d", 0))
     drawdown60 = abs(float(features.get("maxDrawdown60d", 0)))
     loss_ratio = float(features.get("lossDayRatio20d", 0))
-    score = 82 - volatility20 * 0.9 - drawdown60 * 1.6 - max(loss_ratio - 50, 0) * 0.4
+    score = 78 - volatility20 * 0.45 - drawdown60 * 1.2 - max(loss_ratio - 50, 0) * 0.35
     if risk_profile.riskLevel == "LOW":
         score -= 6
     elif risk_profile.riskLevel == "HIGH":
@@ -65,10 +65,9 @@ def _risk_score(features: dict, risk_profile: RiskProfile) -> float:
 
 def _position_score(features: dict) -> float:
     position_ratio = float(features.get("positionToSingleLimit", 0))
-    equity_ratio = float(features.get("equityPositionToLimit", 0))
     profit_buffer = float(features.get("profitBuffer", 0))
     loss_pressure = float(features.get("lossPressure", 0))
-    score = 92 - position_ratio * 35 - equity_ratio * 20 + min(profit_buffer, 20) * 0.4 - loss_pressure * 1.2
+    score = 92 - position_ratio * 35 + min(profit_buffer, 20) * 0.4 - loss_pressure * 1.2
     if features.get("shouldReduceByPosition"):
         score -= 25
     return clamp(score)

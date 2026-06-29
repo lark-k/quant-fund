@@ -143,8 +143,8 @@ public class DashboardServiceImpl implements DashboardService {
         List<AiAnalysisReport> todayAiReports = aiAnalysisReportMapper.selectList(new LambdaQueryWrapper<AiAnalysisReport>()
                 .eq(AiAnalysisReport::getUserId, userId)
                 .ge(AiAnalysisReport::getAnalysisTime, today.atStartOfDay())
-                .orderByAsc(AiAnalysisReport::getFallbackUsed)
                 .orderByDesc(AiAnalysisReport::getAnalysisTime)
+                .orderByDesc(AiAnalysisReport::getId)
                 .last("LIMIT 50"));
         List<AiAnalysisReportVO> todayAiSuggestions = latestAiSuggestions(todayAiReports, activeHoldingIds)
                 .stream()
@@ -381,7 +381,6 @@ public class DashboardServiceImpl implements DashboardService {
         Map<Long, AiAnalysisReport> latestByHolding = new LinkedHashMap<>();
         reports.stream()
                 .filter(report -> activeHoldingIds.contains(report.getHoldingId()))
-                .filter(report -> !Boolean.TRUE.equals(report.getFallbackUsed()))
                 .sorted(latestFirst)
                 .forEach(report -> latestByHolding.putIfAbsent(report.getHoldingId(), report));
         return new ArrayList<>(latestByHolding.values());

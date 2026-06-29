@@ -13,8 +13,8 @@ def calculate_position_features(
     position_to_limit = holding.positionRate / single_limit if single_limit > 0 else 1.0
     equity_to_limit = account.equityPositionRate / equity_limit if equity_limit > 0 else 1.0
 
-    can_buy_more = holding.positionRate < single_limit and account.equityPositionRate < equity_limit
-    should_reduce = holding.positionRate > single_limit or account.equityPositionRate > equity_limit
+    can_buy_more = holding.positionRate < single_limit
+    should_reduce = holding.positionRate > single_limit
 
     return {
         "positionRate": round(holding.positionRate, 4),

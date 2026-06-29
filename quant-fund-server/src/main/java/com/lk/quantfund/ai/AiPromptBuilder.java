@@ -25,6 +25,7 @@ public class AiPromptBuilder {
                 如果数据不足、估值延迟、策略信号不足或不确定，必须返回 WATCH。
                 所有买卖建议必须保守、可解释、可复盘，且不得承诺收益。
                 必须说明当日估值不等于最终净值，最终净值以晚间正式净值为准。
+                如果 latestQuantSignal 不为空，AI 只能解释 latestQuantSignal，输出 action、actionText、suggestAmount、suggestRatio、riskLevel 不得与 latestQuantSignal 冲突。
                 不要在 finalConclusion、reasons、risks、dataSummary 中重复输出免责声明或“用户自行到原基金平台操作”之类的固定话术。
                 """;
     }

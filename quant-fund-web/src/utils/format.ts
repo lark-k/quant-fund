@@ -10,6 +10,17 @@ export function percent(value: number, digits = 2) {
   return `${sign}${value.toFixed(digits)}%`
 }
 
+export function percentUnsigned(value: number, digits = 2) {
+  return `${value.toFixed(digits)}%`
+}
+
+export function actionPercent(action: string, value: number, digits = 2) {
+  const ratio = Math.abs(value)
+  if (action === 'SELL') return `-${ratio.toFixed(digits)}%`
+  if (action === 'BUY' || action === 'CONVERT') return `+${ratio.toFixed(digits)}%`
+  return percent(value, digits)
+}
+
 export function signed(value: number, digits = 2) {
   const sign = value > 0 ? '+' : ''
   return `${sign}${money(value, digits)}`

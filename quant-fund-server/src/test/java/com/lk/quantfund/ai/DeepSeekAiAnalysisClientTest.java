@@ -58,6 +58,7 @@ class DeepSeekAiAnalysisClientTest {
                 BigDecimal.ZERO,
                 BigDecimal.ZERO,
                 "MEDIUM",
+                null,
                 List.of()
         );
     }

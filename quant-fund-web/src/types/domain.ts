@@ -157,6 +157,42 @@ export interface StrategySignal {
   disclaimer: string
 }
 
+export interface QuantSignal {
+  id: number
+  accountId: number
+  holdingId: number
+  fundCode: string
+  fundName?: string
+  action: StrategyAction
+  actionText: string
+  suggestAmount: number
+  suggestRatio: number
+  riskLevel: RiskLevel
+  confidence: number
+  totalScore: number
+  trendScore: number
+  opportunityScore: number
+  riskScore: number
+  positionScore: number
+  momentumScore: number
+  reasons: string[]
+  risks: string[]
+  metricsJson: string
+  modelName: string
+  modelVersion: string
+  deadline?: string | null
+  signalTime: string
+  fallbackUsed: boolean
+  disclaimer: string
+}
+
+export interface QuantEngineHealth {
+  status: string
+  service: string
+  modelVersion: string
+  enabled: boolean
+}
+
 export interface DashboardRiskAlert {
   id: string
   sourceType: string

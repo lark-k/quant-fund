@@ -17,6 +17,8 @@ import com.lk.quantfund.entity.RiskProfile;
 import com.lk.quantfund.entity.StrategySignal;
 import com.lk.quantfund.enums.ErrorCode;
 import com.lk.quantfund.enums.RiskLevel;
+import com.lk.quantfund.enums.SignalType;
+import com.lk.quantfund.enums.StrategyAction;
 import com.lk.quantfund.exception.BusinessException;
 import com.lk.quantfund.mapper.AiAnalysisReportMapper;
 import com.lk.quantfund.mapper.FundHoldingMapper;
@@ -24,13 +26,23 @@ import com.lk.quantfund.mapper.PortfolioAccountMapper;
 import com.lk.quantfund.mapper.RiskProfileMapper;
 import com.lk.quantfund.mapper.StrategySignalMapper;
 import com.lk.quantfund.service.AiAnalysisService;
+import com.lk.quantfund.service.QuantAnalysisService;
 import com.lk.quantfund.service.StrategyService;
 import com.lk.quantfund.vo.ai.AiAnalysisReportVO;
+import com.lk.quantfund.vo.quant.QuantSignalVO;
 import com.lk.quantfund.vo.strategy.StrategySignalVO;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -43,9 +55,14 @@ public class AiAnalysisServiceImpl implements AiAnalysisService {
     private static final Logger log = LoggerFactory.getLogger(AiAnalysisServiceImpl.class);
     private static final BigDecimal ZERO = BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP);
     private static final int AI_HISTORY_LIMIT = 5;
+    private static final int MODEL_NAME_MAX_LENGTH = 128;
+    private static final int ACTION_TEXT_MAX_LENGTH = 128;
+    private static final int DEADLINE_MAX_LENGTH = 32;
+    private static final int STRATEGY_MAX_LENGTH = 512;
 
     private final AiAnalysisClient aiAnalysisClient;
     private final StrategyService strategyService;
+    private final QuantAnalysisService quantAnalysisService;
     private final QuantFundProperties properties;
     private final ObjectMapper objectMapper;
     private final AiAnalysisReportMapper aiAnalysisReportMapper;
@@ -56,6 +73,7 @@ public class AiAnalysisServiceImpl implements AiAnalysisService {
 
     public AiAnalysisServiceImpl(AiAnalysisClient aiAnalysisClient,
                                  StrategyService strategyService,
+                                 QuantAnalysisService quantAnalysisService,
                                  QuantFundProperties properties,
                                  ObjectMapper objectMapper,
                                  AiAnalysisReportMapper aiAnalysisReportMapper,
@@ -65,6 +83,7 @@ public class AiAnalysisServiceImpl implements AiAnalysisService {
                                  StrategySignalMapper strategySignalMapper) {
         this.aiAnalysisClient = aiAnalysisClient;
         this.strategyService = strategyService;
+        this.quantAnalysisService = quantAnalysisService;
         this.properties = properties;
         this.objectMapper = objectMapper;
         this.aiAnalysisReportMapper = aiAnalysisReportMapper;
@@ -85,32 +104,80 @@ public class AiAnalysisServiceImpl implements AiAnalysisService {
     public AiAnalysisReportVO analyzeHoldingForUser(Long userId, Long holdingId) {
         FundHolding holding = loadOwnedHolding(userId, holdingId);
         PortfolioAccount account = loadOwnedAccount(userId, holding.getAccountId());
-        refreshStrategySignals(userId, holdingId);
-        AiAnalysisContext context = buildContext(userId, account, holding);
-        AiAnalysisResult result = aiAnalysisClient.analyze(context);
+        QuantSignalVO quantSignal = refreshStrategySignals(userId, holdingId);
+        return analyzeHoldingWithQuantSignal(userId, account, holding, quantSignal);
+    }
+
+    private AiAnalysisReportVO analyzeHoldingWithQuantSignal(Long userId,
+                                                             PortfolioAccount account,
+                                                             FundHolding holding,
+                                                             QuantSignalVO quantSignal) {
+        AiAnalysisContext context = buildContext(userId, account, holding, quantSignal);
+        AiAnalysisResult result = alignWithQuantSignal(aiAnalysisClient.analyze(context), quantSignal);
         return toVO(saveReport(userId, context, result));
     }
 
-    private void refreshStrategySignals(Long userId, Long holdingId) {
+    private QuantSignalVO refreshStrategySignals(Long userId, Long holdingId) {
+        QuantSignalVO quantSignal = quantAnalysisService.analyzeHoldingForUser(userId, holdingId);
         try {
             strategyService.analyzeHoldingForUser(userId, holdingId);
         } catch (RuntimeException exception) {
             log.warn("Strategy analysis skipped before AI analysis for holding {}: {}", holdingId, exception.getMessage());
         }
+        return quantSignal;
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public List<AiAnalysisReportVO> analyzeAccount(Long accountId) {
         Long userId = UserContext.getUserId();
-        loadOwnedAccount(userId, accountId);
-        return fundHoldingMapper.selectList(new LambdaQueryWrapper<FundHolding>()
+        PortfolioAccount account = loadOwnedAccount(userId, accountId);
+        List<FundHolding> holdings = fundHoldingMapper.selectList(new LambdaQueryWrapper<FundHolding>()
                         .eq(FundHolding::getUserId, userId)
                         .eq(FundHolding::getAccountId, accountId)
-                        .orderByDesc(FundHolding::getHoldingAmount))
+                        .orderByDesc(FundHolding::getHoldingAmount));
+        if (holdings.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, QuantSignalVO> latestQuantSignals = quantAnalysisService.latestSignals(accountId, null, null, null)
                 .stream()
-                .map(holding -> analyzeHolding(holding.getId()))
-                .toList();
+                .collect(Collectors.toMap(QuantSignalVO::holdingId, Function.identity(), (left, right) -> left));
+        int concurrency = Math.min(properties.getAi().getAccountAnalysisConcurrency(), holdings.size());
+        ExecutorService executor = Executors.newFixedThreadPool(concurrency);
+        try {
+            List<CompletableFuture<AiAnalysisReportVO>> futures = holdings.stream()
+                    .map(holding -> CompletableFuture.supplyAsync(
+                            () -> analyzeHoldingForAccount(userId, account, holding, latestQuantSignals),
+                            executor))
+                    .toList();
+            return futures.stream()
+                    .map(this::joinAnalysisFuture)
+                    .toList();
+        } finally {
+            executor.shutdown();
+        }
+    }
+
+    private AiAnalysisReportVO analyzeHoldingForAccount(Long userId,
+                                                        PortfolioAccount account,
+                                                        FundHolding holding,
+                                                        Map<Long, QuantSignalVO> latestQuantSignals) {
+        QuantSignalVO quantSignal = latestQuantSignals.get(holding.getId());
+        if (quantSignal == null) {
+            quantSignal = quantAnalysisService.analyzeHoldingForUser(userId, holding.getId());
+        }
+        return analyzeHoldingWithQuantSignal(userId, account, holding, quantSignal);
+    }
+
+    private AiAnalysisReportVO joinAnalysisFuture(CompletableFuture<AiAnalysisReportVO> future) {
+        try {
+            return future.join();
+        } catch (CompletionException exception) {
+            Throwable cause = exception.getCause();
+            if (cause instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            throw exception;
+        }
     }
 
     @Override
@@ -140,7 +207,7 @@ public class AiAnalysisServiceImpl implements AiAnalysisService {
         if (StringUtils.hasText(fundCode)) {
             wrapper.eq(AiAnalysisReport::getFundCode, fundCode.trim());
         }
-        wrapper.orderByAsc(AiAnalysisReport::getFallbackUsed).orderByDesc(AiAnalysisReport::getAnalysisTime);
+        wrapper.orderByDesc(AiAnalysisReport::getAnalysisTime).orderByDesc(AiAnalysisReport::getId);
         return aiAnalysisReportMapper.selectList(wrapper).stream().map(this::toVO).toList();
     }
 
@@ -161,13 +228,18 @@ public class AiAnalysisServiceImpl implements AiAnalysisService {
         return analyzeHolding(report.getHoldingId());
     }
 
-    private AiAnalysisContext buildContext(Long userId, PortfolioAccount account, FundHolding holding) {
+    private AiAnalysisContext buildContext(Long userId, PortfolioAccount account, FundHolding holding, QuantSignalVO quantSignal) {
         List<StrategySignalVO> signals = strategySignalMapper.selectList(new LambdaQueryWrapper<StrategySignal>()
                         .eq(StrategySignal::getUserId, userId)
                         .eq(StrategySignal::getHoldingId, holding.getId())
                         .orderByDesc(StrategySignal::getSignalTime)
-                        .last("LIMIT 10"))
+                        .last("LIMIT 20"))
                 .stream()
+                .sorted(Comparator
+                        .comparing((StrategySignal signal) -> SignalType.QUANT_MODEL.name().equals(signal.getSignalType()))
+                        .reversed()
+                        .thenComparing(StrategySignal::getSignalTime, Comparator.nullsLast(Comparator.reverseOrder())))
+                .limit(10)
                 .map(this::toStrategySignalVO)
                 .toList();
         RiskProfile riskProfile = riskProfileMapper.selectOne(new LambdaQueryWrapper<RiskProfile>()
@@ -202,8 +274,75 @@ public class AiAnalysisServiceImpl implements AiAnalysisService {
                 riskProfile == null ? ZERO : valueOrZero(riskProfile.getDailyRiseAlertRate()),
                 riskProfile == null ? ZERO : valueOrZero(riskProfile.getDrawdownAlertRate()),
                 riskProfile == null ? RiskLevel.MEDIUM.name() : riskProfile.getRiskLevel(),
+                quantSignal,
                 signals
         );
+    }
+
+    private AiAnalysisResult alignWithQuantSignal(AiAnalysisResult result, QuantSignalVO quantSignal) {
+        if (quantSignal == null) {
+            return result;
+        }
+        StrategyAction quantAction = parseAction(quantSignal.action());
+        RiskLevel quantRiskLevel = parseRiskLevel(quantSignal.riskLevel());
+        List<String> reasons = mergeText(
+                List.of("AI 报告以最新量化建议为准：" + quantSignal.actionText()),
+                quantSignal.reasons(),
+                result.reasons()
+        );
+        List<String> risks = mergeText(quantSignal.risks(), result.risks());
+        String dataSummary = result.dataSummary();
+        if (!StringUtils.hasText(dataSummary)) {
+            dataSummary = "量化评分 " + scale(quantSignal.totalScore()) + "，模型版本 " + quantSignal.modelVersion();
+        }
+        return new AiAnalysisResult(
+                quantAction,
+                quantSignal.actionText(),
+                scale(quantSignal.suggestAmount()),
+                scale(quantSignal.suggestRatio()),
+                scale(quantSignal.confidence()),
+                quantRiskLevel,
+                StringUtils.hasText(quantSignal.deadline()) ? quantSignal.deadline() : result.deadline(),
+                StringUtils.hasText(result.strategy()) ? result.strategy() : "AI 解释量化建议",
+                reasons,
+                risks,
+                dataSummary,
+                "以最新量化建议为准：" + quantSignal.actionText() + "。AI 仅解释该量化结果，不覆盖模型动作。",
+                result.fallbackUsed(),
+                result.rawResponse()
+        );
+    }
+
+    private StrategyAction parseAction(String action) {
+        try {
+            return StrategyAction.valueOf(action);
+        } catch (RuntimeException exception) {
+            return StrategyAction.WATCH;
+        }
+    }
+
+    private RiskLevel parseRiskLevel(String riskLevel) {
+        try {
+            return RiskLevel.valueOf(riskLevel);
+        } catch (RuntimeException exception) {
+            return RiskLevel.MEDIUM;
+        }
+    }
+
+    @SafeVarargs
+    private final List<String> mergeText(List<String>... groups) {
+        List<String> result = new java.util.ArrayList<>();
+        for (List<String> group : groups) {
+            if (group == null) {
+                continue;
+            }
+            for (String item : group) {
+                if (StringUtils.hasText(item) && !result.contains(item)) {
+                    result.add(item);
+                }
+            }
+        }
+        return result;
     }
 
     private AiAnalysisReport saveReport(Long userId, AiAnalysisContext context, AiAnalysisResult result) {
@@ -213,15 +352,15 @@ public class AiAnalysisServiceImpl implements AiAnalysisService {
         report.setAccountId(context.accountId());
         report.setHoldingId(context.holdingId());
         report.setFundCode(context.fundCode());
-        report.setModelName(properties.getAi().getModel());
+        report.setModelName(limitText(properties.getAi().getModel(), MODEL_NAME_MAX_LENGTH));
         report.setAction(result.action().name());
-        report.setActionText(result.actionText());
+        report.setActionText(limitText(result.actionText(), ACTION_TEXT_MAX_LENGTH));
         report.setSuggestAmount(scale(result.suggestAmount()));
         report.setSuggestRatio(scale(result.suggestRatio()));
         report.setConfidence(scale(result.confidence()));
         report.setRiskLevel(result.riskLevel().name());
-        report.setDeadline(result.deadline());
-        report.setStrategy(result.strategy());
+        report.setDeadline(limitText(result.deadline(), DEADLINE_MAX_LENGTH));
+        report.setStrategy(limitText(result.strategy(), STRATEGY_MAX_LENGTH));
         report.setReasonsJson(writeJson(result.reasons()));
         report.setRisksJson(writeJson(result.risks()));
         report.setDataSummary(result.dataSummary());
@@ -376,5 +515,12 @@ public class AiAnalysisServiceImpl implements AiAnalysisService {
 
     private BigDecimal valueOrZero(BigDecimal value) {
         return value == null ? ZERO : value.setScale(4, RoundingMode.HALF_UP);
+    }
+
+    private String limitText(String value, int maxLength) {
+        if (value == null || value.length() <= maxLength) {
+            return value;
+        }
+        return value.substring(0, maxLength);
     }
 }

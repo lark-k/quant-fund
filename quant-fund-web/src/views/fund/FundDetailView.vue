@@ -9,9 +9,9 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import MetricTile from '@/components/common/MetricTile.vue'
 import { fundNavOption } from '@/components/charts/chartOptions'
-import { formatDateTime, metricTone, money, percent, signed, toneClass } from '@/utils/format'
+import { actionPercent, formatDateTime, metricTone, money, percent, percentUnsigned, signed, toneClass } from '@/utils/format'
 import { DISCLAIMER } from '@/types/domain'
-import type { FundBasicInfo, FundEstimate, FundHolding, FundNavPoint, FundPeerRank, FundStockHolding, FundTheme, TradeRecord } from '@/types/domain'
+import type { FundBasicInfo, FundEstimate, FundHolding, FundNavPoint, FundPeerRank, FundStockHolding, FundTheme, QuantSignal, TradeRecord } from '@/types/domain'
 
 const route = useRoute()
 const router = useRouter()
@@ -36,6 +36,7 @@ const tradePoints = ref<TradeRecord[]>([])
 const heavyStocks = ref<FundStockHolding[]>([])
 const themes = ref<FundTheme[]>([])
 const peerRank = ref<FundPeerRank | null>(null)
+const quantSignal = ref<QuantSignal | null>(null)
 const hasMatchedHolding = ref(false)
 const infoLoadFailed = ref(false)
 const activeNavRange = ref('1M')
@@ -308,6 +309,7 @@ function resetDetailState() {
   heavyStocks.value = []
   themes.value = []
   peerRank.value = null
+  quantSignal.value = null
   hasMatchedHolding.value = false
   infoLoadFailed.value = false
 }
@@ -376,6 +378,9 @@ async function loadDetail() {
     heavyStocks.value = stocks || []
     themes.value = themeList || []
     peerRank.value = rank
+    quantSignal.value = matchedHolding?.id
+      ? ((await quiet(quantApi.quantSignals({ holdingId: matchedHolding.id }))) || [])[0] || null
+      : null
     holding.value = matchedHolding || {
       id: 0,
       accountId: 0,
@@ -492,13 +497,14 @@ async function addCurrentFundToHolding() {
 async function generateAiAnalysis() {
   const currentHolding = holding.value
   if (!canGenerateAiAnalysis.value || !currentHolding?.id) {
-    ElMessage.warning('请先将基金加入持仓后再生成 AI 分析')
+    ElMessage.warning('请先将基金加入持仓后再生成量化分析')
     return
   }
   generating.value = true
   try {
+    quantSignal.value = await quantApi.analyzeQuantHolding(currentHolding.id)
     await quantApi.generateAiAnalysis(currentHolding.id)
-    ElMessage.success('AI 分析已生成')
+    ElMessage.success('量化建议和 AI 解释已生成')
     router.push({ path: '/ai-analysis', query: { holdingId: currentHolding.id, fundCode: currentHolding.fundCode } })
   } finally {
     generating.value = false
@@ -526,7 +532,7 @@ async function generateAiAnalysis() {
           </label>
           <button class="ghost-button" :disabled="refreshing" @click="refreshEstimate">{{ refreshing ? '刷新中' : '刷新估值' }}</button>
           <button v-if="!hasMatchedHolding" class="ghost-button" :disabled="addingHolding" @click="addCurrentFundToHolding">{{ addingHolding ? '加入中' : '加入持仓' }}</button>
-          <button class="primary-button" :disabled="generating || !canGenerateAiAnalysis" @click="generateAiAnalysis">{{ generating ? '生成中' : '生成 AI 分析' }}</button>
+          <button class="primary-button" :disabled="generating || !canGenerateAiAnalysis" @click="generateAiAnalysis">{{ generating ? '量化分析中' : '生成量化分析' }}</button>
         </div>
       </div>
       <div class="panel-body">
@@ -555,6 +561,31 @@ async function generateAiAnalysis() {
               </div>
               <EmptyState v-if="!themes.length" title="暂无关联板块" description="真实数据源暂未返回板块或持仓信息。" />
             </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section v-if="quantSignal" class="panel">
+      <div class="panel-header">
+        <h2 class="panel-title">今日量化建议</h2>
+        <span class="item-meta">{{ quantSignal.modelName }} · {{ quantSignal.modelVersion }}</span>
+      </div>
+      <div class="panel-body">
+        <div class="metric-row">
+          <MetricTile label="建议动作" :value="quantSignal.actionText" :delta="quantSignal.action" tone="info" />
+          <MetricTile label="综合评分" :value="quantSignal.totalScore.toFixed(1)" :delta="`趋势 ${quantSignal.trendScore.toFixed(1)}`" tone="info" />
+          <MetricTile label="机会/风险" :value="`${quantSignal.opportunityScore.toFixed(1)} / ${quantSignal.riskScore.toFixed(1)}`" sub-label="规则多因子" tone="neutral" />
+          <MetricTile label="建议金额" :value="money(quantSignal.suggestAmount)" :delta="actionPercent(quantSignal.action, quantSignal.suggestRatio)" tone="warning" />
+          <MetricTile label="置信度" :value="percentUnsigned(quantSignal.confidence * 100, 0)" :delta="quantSignal.fallbackUsed ? 'Java fallback' : 'Python 引擎'" tone="info" />
+          <MetricTile label="风险等级" :value="quantSignal.riskLevel" sub-label="LOW / MEDIUM / HIGH" tone="fall" />
+        </div>
+        <div class="insight-grid two">
+          <div class="bullet-list">
+            <p v-for="reason in quantSignal.reasons" :key="reason">{{ reason }}</p>
+          </div>
+          <div class="bullet-list warning">
+            <p v-for="risk in quantSignal.risks" :key="risk">{{ risk }}</p>
           </div>
         </div>
       </div>

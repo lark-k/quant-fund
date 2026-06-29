@@ -72,6 +72,11 @@ class TradeRecord(ApiModel):
     tradeNav: float = 0
     tradeTime: str | None = None
 
+    @field_validator("tradeAmount", "tradeShare", "tradeNav", mode="before")
+    @classmethod
+    def default_missing_number(cls, value: Any) -> Any:
+        return 0 if value is None else value
+
 
 class MarketContext(ApiModel):
     tradingDay: bool = True

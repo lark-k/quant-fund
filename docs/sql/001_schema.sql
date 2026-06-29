@@ -297,7 +297,7 @@ CREATE TABLE IF NOT EXISTS ai_analysis_report (
   confidence DECIMAL(10,4) NOT NULL DEFAULT 0.0000 COMMENT 'AI confidence',
   risk_level VARCHAR(32) NOT NULL DEFAULT 'MEDIUM' COMMENT 'AI risk level',
   deadline VARCHAR(32) NOT NULL DEFAULT '15:00前' COMMENT 'Suggestion deadline',
-  strategy VARCHAR(128) DEFAULT NULL COMMENT 'Triggered strategy',
+  strategy VARCHAR(512) DEFAULT NULL COMMENT 'Triggered strategy',
   reasons_json JSON NOT NULL COMMENT 'AI reasons JSON',
   risks_json JSON NOT NULL COMMENT 'AI risks JSON',
   data_summary TEXT DEFAULT NULL COMMENT 'AI data summary',

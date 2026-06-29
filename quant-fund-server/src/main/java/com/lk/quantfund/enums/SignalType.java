@@ -6,6 +6,6 @@ public enum SignalType {
     POSITION_RISK,
     MARKET_RISK,
     CLASSIFICATION,
+    QUANT_MODEL,
     WATCH
 }
-

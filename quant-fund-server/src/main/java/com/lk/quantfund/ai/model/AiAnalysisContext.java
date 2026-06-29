@@ -1,6 +1,7 @@
 package com.lk.quantfund.ai.model;
 
 import com.lk.quantfund.vo.strategy.StrategySignalVO;
+import com.lk.quantfund.vo.quant.QuantSignalVO;
 import java.math.BigDecimal;
 import java.util.List;
 
@@ -28,6 +29,7 @@ public record AiAnalysisContext(
         BigDecimal dailyRiseAlertRate,
         BigDecimal drawdownAlertRate,
         String userRiskLevel,
+        QuantSignalVO latestQuantSignal,
         List<StrategySignalVO> strategySignals
 ) {
 }
