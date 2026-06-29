@@ -63,6 +63,14 @@ const dateText = computed(() => {
 })
 const isTradingSession = computed(() => Boolean(marketStatus.value?.trading))
 const marketStatusText = computed(() => marketStatus.value?.primaryStatusText || '市场状态同步中')
+const aShareMarket = computed(() => marketStatus.value?.markets.find((item) => item.market === 'A股'))
+const isAShareTrading = computed(() => aShareMarket.value?.trading === true)
+const refreshButtonText = computed(() => {
+  if (estimateRefreshing.value) {
+    return isAShareTrading.value ? '刷新中' : '同步中'
+  }
+  return isAShareTrading.value ? '估值刷新' : '同步净值'
+})
 let clockTimer: number | undefined
 let marketTimer: number | undefined
 
@@ -178,7 +186,7 @@ async function refreshEstimateFromHeader() {
         </div>
         <div class="header-status">
           <button class="header-refresh-button" :disabled="estimateRefreshing" type="button" @click="refreshEstimateFromHeader">
-            <span>{{ estimateRefreshing ? '同步中' : '估值刷新' }}</span>
+            <span>{{ refreshButtonText }}</span>
             <el-icon :class="{ spinning: estimateRefreshing }"><Refresh /></el-icon>
           </button>
           <span :class="isTradingSession ? 'trade-open' : 'trade-closed'">{{ marketStatusText }} {{ nowText }}</span>

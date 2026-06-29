@@ -361,7 +361,7 @@ async function refreshEstimate() {
       if (officialUpdatedCount) {
         ElMessage.success(`已同步 ${officialUpdatedCount} 只基金最新正式净值，并按最终净值重算收益`)
       } else {
-        ElMessage.warning(`当前${aShareStatusText(marketStatus)}，暂不刷新盘中估值`)
+        ElMessage.info(`当前${aShareStatusText(marketStatus)}，已尝试同步正式净值；若数据源尚未发布，请稍后再试`)
       }
       return
     }
