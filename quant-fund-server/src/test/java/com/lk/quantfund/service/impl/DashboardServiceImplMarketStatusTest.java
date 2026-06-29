@@ -265,6 +265,118 @@ class DashboardServiceImplMarketStatusTest {
     }
 
     @Test
+    void overviewShouldAlignDailyProfitDirectionWithCurrentValuationRate() {
+        LocalDate fixedToday = LocalDate.of(2026, 6, 29);
+        PortfolioAccountService portfolioAccountService = mock(PortfolioAccountService.class);
+        FundHoldingMapper fundHoldingMapper = mock(FundHoldingMapper.class);
+        StrategySignalMapper strategySignalMapper = mock(StrategySignalMapper.class);
+        AiAnalysisReportMapper aiAnalysisReportMapper = mock(AiAnalysisReportMapper.class);
+        HoldingSnapshotMapper holdingSnapshotMapper = mock(HoldingSnapshotMapper.class);
+        FundEstimateIntradayMapper fundEstimateIntradayMapper = mock(FundEstimateIntradayMapper.class);
+        FundNavDailyMapper fundNavDailyMapper = mock(FundNavDailyMapper.class);
+        MarketDataService marketDataService = mock(MarketDataService.class);
+        FundValuationService fundValuationService = mock(FundValuationService.class);
+        FundHolding holding = holding(21L, "012922", "41.0500");
+        holding.setHoldingAmount(new BigDecimal("795.5806"));
+        holding.setHoldingShare(new BigDecimal("153.9049"));
+        holding.setHoldingCost(new BigDecimal("660.0200"));
+        holding.setHoldingProfit(new BigDecimal("135.5606"));
+        holding.setHoldingProfitRate(new BigDecimal("20.5389"));
+        holding.setLatestOfficialNav(new BigDecimal("5.1693"));
+        holding.setCurrentEstimateNav(new BigDecimal("5.1693"));
+        when(portfolioAccountService.summary()).thenReturn(summary("4491.7100", "466.5300", "41.0500"));
+        when(fundHoldingMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(holding));
+        when(strategySignalMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
+        when(aiAnalysisReportMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
+        when(holdingSnapshotMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
+        when(fundNavDailyMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
+        when(fundEstimateIntradayMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(todayEstimate("012922", fixedToday)));
+        when(marketDataService.historicalIndex(Mockito.eq("000300"), any(LocalDate.class), any(LocalDate.class))).thenReturn(List.of());
+        when(fundValuationService.estimate(any(), any(), any(), any()))
+                .thenReturn(new FundValuationResult("娴峰鍩洪噾", new BigDecimal("-2.6900"), "TEST", "TEST", "A鑲′氦鏄撲腑"));
+        when(fundValuationService.marketStatus(any(), any())).thenReturn("A鑲′氦鏄撲腑");
+        DashboardServiceImpl service = dashboardService(
+                portfolioAccountService,
+                fundHoldingMapper,
+                strategySignalMapper,
+                aiAnalysisReportMapper,
+                holdingSnapshotMapper,
+                fundEstimateIntradayMapper,
+                fundNavDailyMapper,
+                fundValuationService,
+                marketDataService,
+                fixedToday,
+                fixedToday.atTime(13, 4)
+        );
+
+        try (MockedStatic<UserContext> userContext = Mockito.mockStatic(UserContext.class)) {
+            userContext.when(UserContext::getUserId).thenReturn(1L);
+            var overview = service.overview();
+
+            assertThat(overview.topHoldings().getFirst().relatedThemeRate()).isEqualByComparingTo("-2.6900");
+            assertThat(overview.topHoldings().getFirst().dailyProfit()).isLessThan(BigDecimal.ZERO);
+            assertThat(overview.topHoldings().getFirst().holdingProfit()).isEqualByComparingTo("114.1595");
+            assertThat(overview.summary().dailyProfit()).isLessThan(BigDecimal.ZERO);
+            assertThat(overview.summary().currentProfit()).isEqualByComparingTo(overview.topHoldings().getFirst().holdingProfit());
+        }
+    }
+
+    @Test
+    void overviewHoldingProfitShouldUseSameIntradayDisplayBasisAsSummaryProfit() {
+        LocalDate fixedToday = LocalDate.of(2026, 6, 29);
+        PortfolioAccountService portfolioAccountService = mock(PortfolioAccountService.class);
+        FundHoldingMapper fundHoldingMapper = mock(FundHoldingMapper.class);
+        StrategySignalMapper strategySignalMapper = mock(StrategySignalMapper.class);
+        AiAnalysisReportMapper aiAnalysisReportMapper = mock(AiAnalysisReportMapper.class);
+        HoldingSnapshotMapper holdingSnapshotMapper = mock(HoldingSnapshotMapper.class);
+        FundEstimateIntradayMapper fundEstimateIntradayMapper = mock(FundEstimateIntradayMapper.class);
+        FundNavDailyMapper fundNavDailyMapper = mock(FundNavDailyMapper.class);
+        MarketDataService marketDataService = mock(MarketDataService.class);
+        FundValuationService fundValuationService = mock(FundValuationService.class);
+        FundHolding holding = holding(21L, "012922", "16.0000");
+        holding.setHoldingAmount(new BigDecimal("795.5604"));
+        holding.setHoldingCost(new BigDecimal("660.0200"));
+        holding.setHoldingProfit(new BigDecimal("135.5404"));
+        holding.setHoldingProfitRate(new BigDecimal("20.5358"));
+        when(portfolioAccountService.summary()).thenReturn(summary("795.5604", "135.5404", "16.0000"));
+        when(fundHoldingMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(holding));
+        when(strategySignalMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
+        when(aiAnalysisReportMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
+        when(holdingSnapshotMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
+        when(fundNavDailyMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
+        when(fundEstimateIntradayMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(todayEstimate("012922", fixedToday)));
+        when(marketDataService.historicalIndex(Mockito.eq("000300"), any(LocalDate.class), any(LocalDate.class))).thenReturn(List.of());
+        when(fundValuationService.estimate(any(), any(), any(), any()))
+                .thenReturn(new FundValuationResult("海外基金", new BigDecimal("-2.6900"), "TEST", "TEST", "港股交易中"));
+        when(fundValuationService.marketStatus(any(), any())).thenReturn("港股交易中");
+        DashboardServiceImpl service = dashboardService(
+                portfolioAccountService,
+                fundHoldingMapper,
+                strategySignalMapper,
+                aiAnalysisReportMapper,
+                holdingSnapshotMapper,
+                fundEstimateIntradayMapper,
+                fundNavDailyMapper,
+                fundValuationService,
+                marketDataService,
+                fixedToday,
+                fixedToday.atTime(15, 2)
+        );
+
+        try (MockedStatic<UserContext> userContext = Mockito.mockStatic(UserContext.class)) {
+            userContext.when(UserContext::getUserId).thenReturn(1L);
+            var overview = service.overview();
+
+            assertThat(overview.topHoldings()).singleElement()
+                    .satisfies(item -> {
+                        assertThat(item.dailyProfit()).isEqualByComparingTo("-21.4006");
+                        assertThat(item.holdingProfit()).isEqualByComparingTo("114.1398");
+                    });
+            assertThat(overview.summary().currentProfit()).isEqualByComparingTo("114.1398");
+        }
+    }
+
+    @Test
     void overviewSummaryDailyProfitShouldIncludeHoldingsBeyondTopTen() {
         LocalDate fixedToday = LocalDate.of(2026, 6, 25);
         PortfolioAccountService portfolioAccountService = mock(PortfolioAccountService.class);
@@ -398,6 +510,16 @@ class DashboardServiceImplMarketStatusTest {
         snapshot.setHoldingProfit(new BigDecimal("500.0000"));
         snapshot.setDailyProfit(new BigDecimal(dailyProfit));
         return snapshot;
+    }
+
+    private com.lk.quantfund.entity.FundEstimateIntraday todayEstimate(String fundCode, LocalDate date) {
+        com.lk.quantfund.entity.FundEstimateIntraday estimate = new com.lk.quantfund.entity.FundEstimateIntraday();
+        estimate.setFundCode(fundCode);
+        estimate.setEstimateDate(date);
+        estimate.setEstimateTime(date.atTime(13, 0));
+        estimate.setEstimateGrowthRate(new BigDecimal("-2.6900"));
+        estimate.setDelayed(0);
+        return estimate;
     }
 
     private FundHolding holding() {

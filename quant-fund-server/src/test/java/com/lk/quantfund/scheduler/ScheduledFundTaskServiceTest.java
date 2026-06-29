@@ -196,6 +196,49 @@ class ScheduledFundTaskServiceTest {
     }
 
     @Test
+    void syncOfficialNavUsesFrozenAmountInsteadOfShareDerivedAmount() {
+        QuantFundProperties properties = new QuantFundProperties();
+        FundQueryService fundQueryService = mock(FundQueryService.class);
+        FundHoldingMapper fundHoldingMapper = mock(FundHoldingMapper.class);
+        PortfolioAccountMapper accountMapper = mock(PortfolioAccountMapper.class);
+        HoldingSnapshotMapper snapshotMapper = mock(HoldingSnapshotMapper.class);
+        PortfolioAccountService portfolioAccountService = mock(PortfolioAccountService.class);
+        FundHolding holding = holding("MIXED", "Active Fund");
+        holding.setHoldingAmount(new BigDecimal("1000.0000"));
+        holding.setHoldingShare(new BigDecimal("1200.0000"));
+        LocalDate today = LocalDate.now();
+        when(fundHoldingMapper.selectList(any())).thenReturn(List.of(holding));
+        when(fundQueryService.getHistoricalNav(any(), any(), any())).thenReturn(List.of(
+                navPoint(today.minusDays(1), "1.0000", null),
+                navPoint(today, "0.9800", "-2.0000")
+        ));
+        when(accountMapper.selectById(10L)).thenReturn(account());
+        when(snapshotMapper.selectOne(any())).thenReturn(null);
+        ScheduledFundTaskService service = new ScheduledFundTaskService(
+                properties,
+                fundQueryService,
+                mock(AiAnalysisService.class),
+                mock(StrategyService.class),
+                portfolioAccountService,
+                fundHoldingMapper,
+                accountMapper,
+                snapshotMapper,
+                mock(FundValuationService.class),
+                new TradingCalendarService(properties)
+        );
+        ArgumentCaptor<FundHolding> holdingCaptor = ArgumentCaptor.forClass(FundHolding.class);
+
+        SchedulerTaskResult result = service.syncOfficialNav();
+
+        assertThat(result.getSuccessCount()).isEqualTo(1);
+        verify(fundHoldingMapper).updateById(holdingCaptor.capture());
+        FundHolding saved = holdingCaptor.getValue();
+        assertThat(saved.getHoldingAmount()).isEqualByComparingTo("980.0000");
+        assertThat(saved.getDailyProfit()).isEqualByComparingTo("-20.0000");
+        assertThat(saved.getHoldingProfit()).isEqualByComparingTo("80.0000");
+    }
+
+    @Test
     void refreshIntradayEstimatesKeepsHoldingAmountUntilOfficialNav() {
         QuantFundProperties properties = new QuantFundProperties();
         FundQueryService fundQueryService = mock(FundQueryService.class);
@@ -245,7 +288,7 @@ class ScheduledFundTaskServiceTest {
     }
 
     @Test
-    void refreshIntradayEstimatesKeepsPlatformAmountWhenEstimateMoved() {
+    void refreshIntradayEstimatesKeepsStoredAmountWhenEstimateMoves() {
         QuantFundProperties properties = new QuantFundProperties();
         FundQueryService fundQueryService = mock(FundQueryService.class);
         FundHoldingMapper fundHoldingMapper = mock(FundHoldingMapper.class);

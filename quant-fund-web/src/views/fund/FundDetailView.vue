@@ -25,6 +25,7 @@ const selectedHoldingId = ref(0)
 const basicInfo = ref<FundBasicInfo>()
 const estimate = ref<FundEstimate | null>(null)
 const navPoints = ref<FundNavPoint[]>([])
+const metricNavPoints = ref<FundNavPoint[]>([])
 type NavCacheEntry = {
   points: FundNavPoint[]
   fetchedAt: number
@@ -114,14 +115,16 @@ const detailStatusDescription = computed(() => {
   return '该基金尚未加入持仓，持有金额、收益、成本、持有天数等个人指标不展示。'
 })
 const oneYearReturn = computed(() => {
-  if (navPoints.value.length < 2) return holding.value?.holdingProfitRate || 0
-  const first = navPoints.value[0].nav
-  const last = navPoints.value[navPoints.value.length - 1].nav
+  const points = filterNavPoints(metricNavPoints.value, '1Y')
+  if (points.length < 2) return holding.value?.holdingProfitRate || 0
+  const first = points[0].nav
+  const last = points[points.length - 1].nav
   return first > 0 ? (last - first) / first * 100 : 0
 })
 const maxDrawdown = computed(() => {
-  let peak = navPoints.value[0]?.nav || 1
-  return navPoints.value.reduce((min, point) => {
+  const points = metricNavPoints.value
+  let peak = points[0]?.nav || 1
+  return points.reduce((min, point) => {
     peak = Math.max(peak, point.nav)
     return Math.min(min, (point.nav - peak) / peak * 100)
   }, 0)
@@ -133,6 +136,7 @@ const rankText = computed(() => {
   return peerRank.value.rankText || '--'
 })
 let navRequestSeq = 0
+let detailRequestSeq = 0
 let navRefreshTimer: ReturnType<typeof window.setInterval> | null = null
 
 onMounted(loadDetail)
@@ -214,23 +218,24 @@ function latestNavDate(points: FundNavPoint[]) {
   return points[points.length - 1]?.date || ''
 }
 
-function freshCacheEntry(indexCode: string) {
-  const entry = navCache.value[indexCode]
+function navCacheKey(code: string, indexCode: string) {
+  return `${code}::${indexCode}`
+}
+
+function freshCacheEntry(code: string, indexCode: string) {
+  const entry = navCache.value[navCacheKey(code, indexCode)]
   if (!entry?.points.length) return null
   return Date.now() - entry.fetchedAt <= NAV_CACHE_TTL_MS ? entry : null
 }
 
-function cacheNav(indexCode: string, points: FundNavPoint[]) {
+function cacheNav(code: string, indexCode: string, points: FundNavPoint[]) {
   const sorted = sortNavPoints(points)
   const nextEntry = {
     points: sorted,
     fetchedAt: Date.now(),
     latestDate: latestNavDate(sorted)
   }
-  const currentLatestDate = latestNavDate(navPoints.value)
-  navCache.value = currentLatestDate && nextEntry.latestDate && nextEntry.latestDate !== currentLatestDate
-    ? { [indexCode]: nextEntry }
-    : { ...navCache.value, [indexCode]: nextEntry }
+  navCache.value = { ...navCache.value, [navCacheKey(code, indexCode)]: nextEntry }
   return nextEntry
 }
 
@@ -252,33 +257,34 @@ async function loadSelectedIndexNav(force = false) {
   const code = fundCode.value
   if (!code) return
   const indexCode = selectedIndexCode.value
-  const cached = freshCacheEntry(indexCode)
+  const cached = freshCacheEntry(code, indexCode)
   if (!force && cached) {
     navPoints.value = cached.points
     return
   }
   const requestSeq = ++navRequestSeq
+  const requestCode = code
   const nav = await quiet(quantApi.fundNav(code, {
     startDate: navHistoryStartDate('3Y'),
     endDate: navHistoryEndDate(),
     indexCode
   }))
-  const entry = cacheNav(indexCode, nav || [])
-  if (requestSeq === navRequestSeq && selectedIndexCode.value === indexCode) {
+  const entry = cacheNav(requestCode, indexCode, nav || [])
+  if (requestSeq === navRequestSeq && fundCode.value === requestCode && selectedIndexCode.value === indexCode) {
     navPoints.value = entry.points
   }
 }
 
 function prefetchIndexNavs(code: string) {
   for (const option of indexOptions) {
-    if (option.value === selectedIndexCode.value || freshCacheEntry(option.value)) continue
+    if (option.value === selectedIndexCode.value || freshCacheEntry(code, option.value)) continue
     void quantApi.fundNav(code, {
       startDate: navHistoryStartDate('3Y'),
       endDate: navHistoryEndDate(),
       indexCode: option.value
     }).then((nav) => {
       if (fundCode.value !== code) return
-      cacheNav(option.value, nav)
+      cacheNav(code, option.value, nav)
     }).catch(() => undefined)
   }
 }
@@ -296,6 +302,7 @@ function resetDetailState() {
   basicInfo.value = undefined
   estimate.value = null
   navPoints.value = []
+  metricNavPoints.value = []
   navCache.value = {}
   tradePoints.value = []
   heavyStocks.value = []
@@ -315,6 +322,7 @@ async function quiet<T>(request: Promise<T>): Promise<T | null> {
 
 async function loadDetail() {
   stopNavRefreshTimer()
+  const requestSeq = ++detailRequestSeq
   loading.value = true
   try {
     const holdings = await quiet(quantApi.holdings()) || []
@@ -350,6 +358,7 @@ async function loadDetail() {
       quiet(quantApi.peerRank(code)),
       quiet(quantApi.trades())
     ])
+    if (requestSeq !== detailRequestSeq || fundCode.value !== code) return
     infoLoadFailed.value = !infoResult
     const info = infoResult || {
       fundCode: code,
@@ -361,7 +370,8 @@ async function loadDetail() {
     estimate.value = estimateResult
     const sortedNav = sortNavPoints(nav || [])
     navPoints.value = sortedNav
-    cacheNav(selectedIndexCode.value, sortedNav)
+    metricNavPoints.value = sortedNav.map((point) => ({ ...point, indexReturnRate: null, indexCode: null, indexName: null }))
+    cacheNav(code, selectedIndexCode.value, sortedNav)
     tradePoints.value = (tradeList || []).filter((trade) => trade.fundCode === code)
     heavyStocks.value = stocks || []
     themes.value = themeList || []

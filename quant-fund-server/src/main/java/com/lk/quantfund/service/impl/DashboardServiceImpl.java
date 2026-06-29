@@ -58,6 +58,7 @@ public class DashboardServiceImpl implements DashboardService {
 
     private static final BigDecimal ZERO = BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP);
     private static final BigDecimal ONE_HUNDRED = new BigDecimal("100.0000");
+    private static final BigDecimal NAV_AMOUNT_SYNC_TOLERANCE = new BigDecimal("1.0000");
 
     private final PortfolioAccountService portfolioAccountService;
     private final FundHoldingMapper fundHoldingMapper;
@@ -126,7 +127,9 @@ public class DashboardServiceImpl implements DashboardService {
                 .limit(10)
                 .map(holding -> toHoldingVO(holding, intradayDisplayWindow, latestOfficialNavByFund, todayEstimateFundCodes))
                 .toList();
-        PortfolioSummaryVO effectiveSummary = dashboardSummary(summary, holdings, latestOfficialNavByFund, dashboardDailyProfit(holdings, intradayDisplayWindow, latestOfficialNavByFund, todayEstimateFundCodes));
+        PortfolioSummaryVO effectiveSummary = dashboardSummary(summary, holdings, latestOfficialNavByFund,
+                dashboardDailyProfit(holdings, intradayDisplayWindow, latestOfficialNavByFund, todayEstimateFundCodes),
+                intradayDisplayWindow, todayEstimateFundCodes);
         List<StrategySignal> signals = activeHoldingIds.isEmpty()
                 ? List.of()
                 : strategySignalMapper.selectList(new LambdaQueryWrapper<StrategySignal>()
@@ -552,7 +555,6 @@ public class DashboardServiceImpl implements DashboardService {
         BigDecimal estimateRate = currentEstimateGrowthRate(holding, officialNav, intradayDisplayWindow, intradayFresh);
         boolean intradayAllowed = intradayDisplayWindow && intradayFresh;
         boolean officialUpdated = officialNavUpdated(holding, officialNav);
-        BigDecimal dailyProfit = officialUpdated || intradayAllowed ? scale(holding.getDailyProfit()) : ZERO;
         BigDecimal displayEstimateRate = officialUpdated || intradayAllowed ? estimateRate : ZERO;
         FundValuationResult valuation = fundValuationService.estimate(
                 holding.getFundCode(), holding.getFundName(), holding.getFundType(), displayEstimateRate);
@@ -568,12 +570,20 @@ public class DashboardServiceImpl implements DashboardService {
                     valuation.marketStatus()
             );
         }
-        BigDecimal holdingAmount = effectiveHoldingAmount(holding, officialNav);
-        BigDecimal holdingProfit = effectiveHoldingProfit(holding, officialNav);
+        BigDecimal dailyProfit = officialUpdated || intradayAllowed
+                ? displayDailyProfit(holding, valuation.themeRate())
+                : ZERO;
+        BigDecimal holdingAmount = effectiveHoldingAmount(holding);
+        BigDecimal holdingProfit = !officialUpdated && intradayAllowed
+                ? effectiveHoldingProfit(holding, officialNav, dailyProfit, true)
+                : scale(holding.getHoldingProfit());
+        BigDecimal holdingProfitRate = !officialUpdated && intradayAllowed
+                ? rate(holdingProfit, holding.getHoldingCost())
+                : scale(holding.getHoldingProfitRate());
         BigDecimal accountTotal = fundHoldingMapper.selectList(new LambdaQueryWrapper<FundHolding>()
                         .eq(FundHolding::getAccountId, holding.getAccountId()))
                 .stream()
-                .map(accountHolding -> effectiveHoldingAmount(accountHolding, latestOfficialNavByFund.get(accountHolding.getFundCode())))
+                .map(this::effectiveHoldingAmount)
                 .reduce(ZERO, BigDecimal::add);
         return new FundHoldingVO(
                 holding.getId(),
@@ -588,7 +598,7 @@ public class DashboardServiceImpl implements DashboardService {
                 officialUpdated ? officialNav.getUnitNav() : holding.getCurrentEstimateNav(),
                 officialUpdated ? officialNav.getUnitNav() : holding.getLatestOfficialNav(),
                 holdingProfit,
-                effectiveHoldingProfitRate(holding, officialNav),
+                holdingProfitRate,
                 dailyProfit,
                 ZERO,
                 rate(holdingAmount, accountTotal),
@@ -701,7 +711,24 @@ public class DashboardServiceImpl implements DashboardService {
                                           FundNavDaily officialNav, boolean intradayFresh) {
         boolean intradayAllowed = intradayDisplayWindow && intradayFresh;
         boolean officialUpdated = officialNavUpdated(holding, officialNav);
-        return officialUpdated || intradayAllowed ? scale(holding.getDailyProfit()) : ZERO;
+        if (!officialUpdated && intradayAllowed) {
+            BigDecimal estimateRate = currentEstimateGrowthRate(holding, officialNav, intradayDisplayWindow, intradayFresh);
+            FundValuationResult valuation = fundValuationService.estimate(
+                    holding.getFundCode(), holding.getFundName(), holding.getFundType(), estimateRate);
+            return displayDailyProfit(holding, valuation.themeRate());
+        }
+        return officialUpdated ? scale(holding.getDailyProfit()) : ZERO;
+    }
+
+    private BigDecimal displayDailyProfit(FundHolding holding, BigDecimal valuationRate) {
+        BigDecimal storedDailyProfit = scale(holding.getDailyProfit());
+        BigDecimal rate = scale(valuationRate);
+        if (rate.compareTo(BigDecimal.ZERO) == 0
+                || storedDailyProfit.compareTo(BigDecimal.ZERO) == 0
+                || storedDailyProfit.signum() == rate.signum()) {
+            return storedDailyProfit;
+        }
+        return amountChangeByRate(effectiveHoldingAmount(holding), rate);
     }
 
     private boolean intradayDataFreshToday(FundHolding holding, Set<String> todayEstimateFundCodes) {
@@ -719,24 +746,33 @@ public class DashboardServiceImpl implements DashboardService {
 
     private PortfolioSummaryVO dashboardSummary(PortfolioSummaryVO summary, List<FundHolding> holdings,
                                                 Map<String, FundNavDaily> latestOfficialNavByFund,
-                                                BigDecimal dailyProfit) {
+                                                BigDecimal dailyProfit,
+                                                boolean intradayDisplayWindow,
+                                                Set<String> todayEstimateFundCodes) {
         if (holdings.isEmpty()) {
             return dashboardSummary(summary, summary.totalAsset(), summary.currentProfit(),
                     summary.equityPositionRate(), summary.bondPositionRate(), dailyProfit);
         }
         BigDecimal totalAsset = holdings.stream()
-                .map(holding -> effectiveHoldingAmount(holding, latestOfficialNavByFund.get(holding.getFundCode())))
+                .map(this::effectiveHoldingAmount)
                 .reduce(ZERO, BigDecimal::add);
         BigDecimal currentProfit = holdings.stream()
-                .map(holding -> effectiveHoldingProfit(holding, latestOfficialNavByFund.get(holding.getFundCode())))
+                .map(holding -> {
+                    FundNavDaily officialNav = latestOfficialNavByFund.get(holding.getFundCode());
+                    boolean intradayFresh = intradayDataFreshToday(holding, todayEstimateFundCodes);
+                    boolean intradayAllowed = intradayDisplayWindow && intradayFresh;
+                    boolean officialUpdated = officialNavUpdated(holding, officialNav);
+                    BigDecimal holdingDailyProfit = holdingDailyProfit(holding, intradayDisplayWindow, officialNav, intradayFresh);
+                    return effectiveHoldingProfit(holding, officialNav, holdingDailyProfit, !officialUpdated && intradayAllowed);
+                })
                 .reduce(ZERO, BigDecimal::add);
         BigDecimal equityAmount = holdings.stream()
                 .filter(holding -> isEquityType(holding.getFundType()))
-                .map(holding -> effectiveHoldingAmount(holding, latestOfficialNavByFund.get(holding.getFundCode())))
+                .map(this::effectiveHoldingAmount)
                 .reduce(ZERO, BigDecimal::add);
         BigDecimal bondAmount = holdings.stream()
                 .filter(holding -> isBondType(holding.getFundType()))
-                .map(holding -> effectiveHoldingAmount(holding, latestOfficialNavByFund.get(holding.getFundCode())))
+                .map(this::effectiveHoldingAmount)
                 .reduce(ZERO, BigDecimal::add);
         return dashboardSummary(summary, totalAsset, currentProfit, rate(equityAmount, totalAsset), rate(bondAmount, totalAsset), dailyProfit);
     }
@@ -759,15 +795,36 @@ public class DashboardServiceImpl implements DashboardService {
     }
 
     private BigDecimal effectiveHoldingAmount(FundHolding holding, FundNavDaily officialNav) {
-        return scale(holding.getHoldingAmount());
+        return effectiveHoldingAmount(holding);
+    }
+
+    private BigDecimal effectiveHoldingAmount(FundHolding holding) {
+        BigDecimal storedAmount = scale(holding.getHoldingAmount());
+        return storedAmount;
+    }
+
+    private boolean isUsingStoredHoldingAmount(FundHolding holding, BigDecimal effectiveAmount) {
+        BigDecimal storedAmount = scale(holding.getHoldingAmount());
+        return storedAmount.compareTo(BigDecimal.ZERO) > 0
+                && storedAmount.compareTo(effectiveAmount) == 0;
     }
 
     private BigDecimal effectiveHoldingProfit(FundHolding holding, FundNavDaily officialNav) {
-        return scale(holding.getHoldingProfit());
+        return effectiveHoldingProfit(holding, officialNav, ZERO, false);
     }
 
-    private BigDecimal effectiveHoldingProfitRate(FundHolding holding, FundNavDaily officialNav) {
-        return scale(holding.getHoldingProfitRate());
+    private BigDecimal effectiveHoldingProfit(FundHolding holding, FundNavDaily officialNav,
+                                              BigDecimal dailyProfit, boolean includeDailyProfit) {
+        BigDecimal holdingAmount = effectiveHoldingAmount(holding, officialNav);
+        BigDecimal profitBaseAmount = includeDailyProfit ? holdingAmount.add(scale(dailyProfit)) : holdingAmount;
+        return scale(profitBaseAmount.subtract(scale(holding.getHoldingCost())));
+    }
+
+    private BigDecimal amountChangeByRate(BigDecimal amount, BigDecimal rate) {
+        if (rate == null) {
+            return ZERO;
+        }
+        return scale(amount).multiply(rate).divide(ONE_HUNDRED, 4, RoundingMode.HALF_UP);
     }
 
     private boolean isEquityType(String fundType) {

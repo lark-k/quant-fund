@@ -190,10 +190,11 @@ public class ScheduledFundTaskService {
                 snapshot.setHoldingId(holding.getId());
                 snapshot.setSnapshotDate(snapshotDate);
                 snapshot.setTotalAsset(scale(account.getTotalAsset()));
-                snapshot.setHoldingAmount(scale(holding.getHoldingAmount()));
-                snapshot.setHoldingProfit(scale(holding.getHoldingProfit()));
+                BigDecimal holdingAmount = effectiveHoldingAmount(holding);
+                snapshot.setHoldingAmount(holdingAmount);
+                snapshot.setHoldingProfit(effectiveHoldingProfit(holding, holdingAmount));
                 snapshot.setDailyProfit(scale(holding.getDailyProfit()));
-                snapshot.setPositionRate(positionRate(holding.getHoldingAmount(), account.getTotalAsset()));
+                snapshot.setPositionRate(positionRate(holdingAmount, account.getTotalAsset()));
                 snapshot.setCreateTime(now);
                 snapshot.setUpdateTime(now);
                 snapshot.setDeleted(0);
@@ -235,7 +236,7 @@ public class ScheduledFundTaskService {
     private void applyEstimate(FundHolding holding, FundEstimateDTO estimate) {
         BigDecimal estimateNav = scale(estimate.estimateNav());
         BigDecimal holdingShare = scale(holding.getHoldingShare());
-        BigDecimal frozenHoldingAmount = frozenHoldingAmount(holding, holdingShare, holding.getLatestOfficialNav());
+        BigDecimal frozenHoldingAmount = scale(holding.getHoldingAmount());
         holding.setCurrentEstimateNav(estimateNav);
         holding.setHoldingAmount(frozenHoldingAmount);
         BigDecimal dailyProfit;
@@ -272,15 +273,33 @@ public class ScheduledFundTaskService {
         return ZERO;
     }
 
+    private BigDecimal effectiveHoldingAmount(FundHolding holding) {
+        BigDecimal holdingAmount = scale(holding.getHoldingAmount());
+        if (holdingAmount.compareTo(BigDecimal.ZERO) > 0) {
+            return holdingAmount;
+        }
+        BigDecimal holdingShare = scale(holding.getHoldingShare());
+        BigDecimal latestOfficialNav = holding.getLatestOfficialNav();
+        if (latestOfficialNav != null && latestOfficialNav.compareTo(BigDecimal.ZERO) > 0
+                && holdingShare.compareTo(BigDecimal.ZERO) > 0) {
+            return scale(holdingShare.multiply(latestOfficialNav));
+        }
+        return ZERO;
+    }
+
+    private BigDecimal effectiveHoldingProfit(FundHolding holding, BigDecimal holdingAmount) {
+        return scale(holdingAmount.subtract(scale(holding.getHoldingCost())));
+    }
+
     private void applyOfficialNav(FundHolding holding, FundNavPointDTO navPoint, BigDecimal previousUnitNav) {
         BigDecimal unitNav = scale(navPoint.unitNav());
         BigDecimal previousNav = previousUnitNav == null ? holding.getLatestOfficialNav() : previousUnitNav;
         BigDecimal holdingShare = scale(holding.getHoldingShare());
-        BigDecimal baseAmount = frozenHoldingAmount(holding, holdingShare, previousNav);
         boolean sameOfficialNavAlreadyApplied = holding.getLatestOfficialNav() != null
                 && holding.getLatestOfficialNav().compareTo(unitNav) == 0
                 && holding.getCurrentEstimateNav() != null
                 && holding.getCurrentEstimateNav().compareTo(unitNav) == 0;
+        BigDecimal baseAmount = frozenHoldingAmount(holding, holdingShare, sameOfficialNavAlreadyApplied ? unitNav : previousNav);
         holding.setLatestOfficialNav(unitNav);
         holding.setCurrentEstimateNav(unitNav);
         if (sameOfficialNavAlreadyApplied) {
@@ -383,10 +402,11 @@ public class ScheduledFundTaskService {
         snapshot.setHoldingId(holding.getId());
         snapshot.setSnapshotDate(snapshotDate);
         snapshot.setTotalAsset(scale(account.getTotalAsset()));
-        snapshot.setHoldingAmount(scale(holding.getHoldingAmount()));
-        snapshot.setHoldingProfit(scale(holding.getHoldingProfit()));
+        BigDecimal holdingAmount = effectiveHoldingAmount(holding);
+        snapshot.setHoldingAmount(holdingAmount);
+        snapshot.setHoldingProfit(effectiveHoldingProfit(holding, holdingAmount));
         snapshot.setDailyProfit(scale(holding.getDailyProfit()));
-        snapshot.setPositionRate(positionRate(holding.getHoldingAmount(), account.getTotalAsset()));
+        snapshot.setPositionRate(positionRate(holdingAmount, account.getTotalAsset()));
         snapshot.setCreateTime(now);
         snapshot.setUpdateTime(now);
         snapshot.setDeleted(0);

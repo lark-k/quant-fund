@@ -24,6 +24,8 @@ import com.lk.quantfund.scheduler.TradingCalendarService;
 import com.lk.quantfund.service.MarketDataService;
 import com.lk.quantfund.service.PortfolioAccountService;
 import com.lk.quantfund.service.analytics.SnapshotProfitStatusResolver;
+import com.lk.quantfund.service.valuation.FundValuationResult;
+import com.lk.quantfund.service.valuation.FundValuationService;
 import com.lk.quantfund.vo.market.MarketIndexDailyVO;
 import com.lk.quantfund.vo.market.MarketIndexIntradayPointVO;
 import com.lk.quantfund.vo.market.MarketIndexVO;
@@ -52,6 +54,7 @@ class AnalyticsServiceImplTest {
     private final TradingCalendarService tradingCalendarService = new TradingCalendarService(new QuantFundProperties());
     private final HoldingSnapshotBackfillService holdingSnapshotBackfillService = mock(HoldingSnapshotBackfillService.class);
     private final MarketDataService marketDataService = mock(MarketDataService.class);
+    private final FundValuationService fundValuationService = mock(FundValuationService.class);
 
     @BeforeEach
     void setUp() {
@@ -62,6 +65,8 @@ class AnalyticsServiceImplTest {
                 .thenReturn(List.of());
         when(marketDataService.intradayIndex(Mockito.anyString())).thenReturn(List.of());
         when(fundNavDailyMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
+        when(fundValuationService.estimate(Mockito.anyString(), Mockito.anyString(), Mockito.anyString(), Mockito.any()))
+                .thenAnswer(invocation -> new FundValuationResult("TEST", invocation.getArgument(3), "TEST", "TEST", "TRADING"));
     }
 
     @Test
@@ -130,6 +135,56 @@ class AnalyticsServiceImplTest {
                     .singleElement()
                     .satisfies(day -> {
                         assertThat(day.dailyProfit()).isEqualByComparingTo("100.0000");
+                        assertThat(day.profitStatus()).isEqualTo("ESTIMATED");
+                    });
+        }
+    }
+
+    @Test
+    void profitAnalysisTodayShouldUseDashboardDisplayDailyProfitLogic() {
+        AnalyticsServiceImpl service = service(LocalDate.of(2026, 6, 25), LocalDateTime.of(2026, 6, 25, 14, 30));
+        FundHolding holding = holding("16.0000");
+        holding.setCurrentEstimateNav(new BigDecimal("0.9800"));
+        holding.setLatestOfficialNav(new BigDecimal("1.0000"));
+        when(holdingSnapshotMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
+        when(fundHoldingMapper.selectList(any(LambdaQueryWrapper.class)))
+                .thenReturn(List.of(holding), List.of(), List.of());
+        when(portfolioAccountService.summary()).thenReturn(summary());
+        when(marketDataService.marketReadings()).thenReturn(List.of(hs300("1.0000")));
+        when(fundValuationService.estimate(Mockito.eq("510300"), Mockito.anyString(), Mockito.anyString(), Mockito.any()))
+                .thenReturn(new FundValuationResult("沪深300", new BigDecimal("-2.0000"), "TEST", "TEST", "TRADING"));
+
+        try (MockedStatic<UserContext> userContext = Mockito.mockStatic(UserContext.class)) {
+            userContext.when(UserContext::getUserId).thenReturn(1L);
+            var analysis = service.profitAnalysis(LocalDate.of(2026, 6, 25), LocalDate.of(2026, 6, 25));
+
+            assertThat(analysis.todayProfit()).isEqualByComparingTo("-200.0000");
+            assertThat(analysis.trend()).singleElement()
+                    .satisfies(point -> assertThat(point.dailyProfit()).isEqualByComparingTo("-200.0000"));
+        }
+    }
+
+    @Test
+    void profitCalendarTodayShouldUseDashboardDisplayDailyProfitLogic() {
+        AnalyticsServiceImpl service = service(LocalDate.of(2026, 6, 25), LocalDateTime.of(2026, 6, 25, 14, 30));
+        FundHolding holding = holding("16.0000");
+        holding.setCurrentEstimateNav(new BigDecimal("0.9800"));
+        holding.setLatestOfficialNav(new BigDecimal("1.0000"));
+        when(holdingSnapshotMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
+        when(fundHoldingMapper.selectList(any(LambdaQueryWrapper.class)))
+                .thenReturn(List.of(holding), List.of(), List.of());
+        when(portfolioAccountService.summary()).thenReturn(summary());
+        when(fundValuationService.estimate(Mockito.eq("510300"), Mockito.anyString(), Mockito.anyString(), Mockito.any()))
+                .thenReturn(new FundValuationResult("沪深300", new BigDecimal("-2.0000"), "TEST", "TEST", "TRADING"));
+
+        try (MockedStatic<UserContext> userContext = Mockito.mockStatic(UserContext.class)) {
+            userContext.when(UserContext::getUserId).thenReturn(1L);
+            var calendar = service.profitCalendar(YearMonth.of(2026, 6));
+
+            assertThat(calendar.days()).filteredOn(day -> day.date().equals(LocalDate.of(2026, 6, 25)))
+                    .singleElement()
+                    .satisfies(day -> {
+                        assertThat(day.dailyProfit()).isEqualByComparingTo("-200.0000");
                         assertThat(day.profitStatus()).isEqualTo("ESTIMATED");
                     });
         }
@@ -384,7 +439,8 @@ class AnalyticsServiceImplTest {
                 tradingCalendarService,
                 holdingSnapshotBackfillService,
                 marketDataService,
-                snapshotProfitStatusResolver
+                snapshotProfitStatusResolver,
+                fundValuationService
         ) {
             @Override
             protected LocalDate today() {

@@ -21,6 +21,8 @@ import com.lk.quantfund.service.PortfolioAccountService;
 import com.lk.quantfund.service.analytics.OfficialNavTiming;
 import com.lk.quantfund.service.analytics.SnapshotProfitStatusResolver;
 import com.lk.quantfund.service.analytics.SnapshotProfitStatusResolver.ProfitStatus;
+import com.lk.quantfund.service.valuation.FundValuationResult;
+import com.lk.quantfund.service.valuation.FundValuationService;
 import com.lk.quantfund.vo.analytics.FundProfitRankVO;
 import com.lk.quantfund.vo.analytics.IndexCompareVO;
 import com.lk.quantfund.vo.analytics.ProfitAnalysisVO;
@@ -72,6 +74,7 @@ public class AnalyticsServiceImpl implements AnalyticsService {
     private final HoldingSnapshotBackfillService holdingSnapshotBackfillService;
     private final MarketDataService marketDataService;
     private final SnapshotProfitStatusResolver snapshotProfitStatusResolver;
+    private final FundValuationService fundValuationService;
 
     public AnalyticsServiceImpl(HoldingSnapshotMapper holdingSnapshotMapper,
                                 FundHoldingMapper fundHoldingMapper,
@@ -82,7 +85,8 @@ public class AnalyticsServiceImpl implements AnalyticsService {
                                 TradingCalendarService tradingCalendarService,
                                 HoldingSnapshotBackfillService holdingSnapshotBackfillService,
                                 MarketDataService marketDataService,
-                                SnapshotProfitStatusResolver snapshotProfitStatusResolver) {
+                                SnapshotProfitStatusResolver snapshotProfitStatusResolver,
+                                FundValuationService fundValuationService) {
         this.holdingSnapshotMapper = holdingSnapshotMapper;
         this.fundHoldingMapper = fundHoldingMapper;
         this.fundEstimateIntradayMapper = fundEstimateIntradayMapper;
@@ -93,6 +97,7 @@ public class AnalyticsServiceImpl implements AnalyticsService {
         this.holdingSnapshotBackfillService = holdingSnapshotBackfillService;
         this.marketDataService = marketDataService;
         this.snapshotProfitStatusResolver = snapshotProfitStatusResolver;
+        this.fundValuationService = fundValuationService;
     }
 
     public ProfitAnalysisVO profitAnalysis(LocalDate startDate, LocalDate endDate) {
@@ -339,12 +344,52 @@ public class AnalyticsServiceImpl implements AnalyticsService {
     private BigDecimal currentDailyProfit(FundHolding holding, boolean intradayDisplayWindow, Set<String> todayEstimateFundCodes) {
         FundNavDaily officialNav = latestOfficialNav(holding.getFundCode());
         if (officialNavUpdated(holding, officialNav)) {
-            return holding.getDailyProfit();
+            return scale(holding.getDailyProfit());
         }
         if (intradayDisplayWindow && intradayDataFreshToday(holding, todayEstimateFundCodes)) {
-            return holding.getDailyProfit();
+            BigDecimal estimateRate = currentEstimateGrowthRate(holding, officialNav, intradayDisplayWindow, true);
+            FundValuationResult valuation = fundValuationService.estimate(
+                    holding.getFundCode(), holding.getFundName(), holding.getFundType(), estimateRate);
+            return displayDailyProfit(holding, valuation.themeRate());
         }
         return ZERO;
+    }
+
+    private BigDecimal currentEstimateGrowthRate(FundHolding holding, FundNavDaily officialNav,
+                                                 boolean intradayDisplayWindow, boolean intradayFresh) {
+        if (officialNavUpdated(holding, officialNav) && officialNav.getDailyGrowthRate() != null) {
+            return scale(officialNav.getDailyGrowthRate());
+        }
+        if (!intradayDisplayWindow || !intradayFresh) {
+            return ZERO;
+        }
+        if (holding.getCurrentEstimateNav() == null || holding.getLatestOfficialNav() == null
+                || holding.getLatestOfficialNav().compareTo(BigDecimal.ZERO) <= 0) {
+            return ZERO;
+        }
+        return rate(holding.getCurrentEstimateNav().subtract(holding.getLatestOfficialNav()), holding.getLatestOfficialNav());
+    }
+
+    private BigDecimal displayDailyProfit(FundHolding holding, BigDecimal valuationRate) {
+        BigDecimal storedDailyProfit = scale(holding.getDailyProfit());
+        BigDecimal rate = scale(valuationRate);
+        if (rate.compareTo(BigDecimal.ZERO) == 0
+                || storedDailyProfit.compareTo(BigDecimal.ZERO) == 0
+                || storedDailyProfit.signum() == rate.signum()) {
+            return storedDailyProfit;
+        }
+        return amountChangeByRate(effectiveHoldingAmount(holding), rate);
+    }
+
+    private BigDecimal effectiveHoldingAmount(FundHolding holding) {
+        return scale(holding.getHoldingAmount());
+    }
+
+    private BigDecimal amountChangeByRate(BigDecimal amount, BigDecimal rate) {
+        if (rate == null) {
+            return ZERO;
+        }
+        return scale(amount).multiply(rate).divide(HUNDRED, 4, RoundingMode.HALF_UP);
     }
 
     private Set<String> todayEstimateFundCodes(List<FundHolding> holdings, LocalDate today) {

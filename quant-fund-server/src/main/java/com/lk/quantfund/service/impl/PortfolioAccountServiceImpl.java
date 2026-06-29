@@ -168,23 +168,24 @@ public class PortfolioAccountServiceImpl implements PortfolioAccountService {
         List<FundHolding> holdings = fundHoldingMapper.selectList(new LambdaQueryWrapper<FundHolding>()
                 .eq(FundHolding::getUserId, userId)
                 .eq(FundHolding::getAccountId, accountId));
-        BigDecimal totalAsset = sumHoldings(holdings, FundHolding::getHoldingAmount);
+        BigDecimal totalAsset = holdings.stream()
+                .map(this::effectiveHoldingAmount)
+                .reduce(ZERO, BigDecimal::add);
         BigDecimal totalInvest = sumHoldings(holdings, FundHolding::getHoldingCost);
-        BigDecimal profit = sumHoldings(holdings, FundHolding::getHoldingProfit);
+        BigDecimal profit = holdings.stream()
+                .map(this::effectiveHoldingProfit)
+                .reduce(ZERO, BigDecimal::add);
         BigDecimal dailyProfit = sumHoldings(holdings, FundHolding::getDailyProfit);
         BigDecimal equityAmount = holdings.stream()
                 .filter(holding -> isEquityType(holding.getFundType()))
-                .map(FundHolding::getHoldingAmount)
-                .map(this::valueOrZero)
+                .map(this::effectiveHoldingAmount)
                 .reduce(ZERO, BigDecimal::add);
         BigDecimal bondAmount = holdings.stream()
                 .filter(holding -> isBondType(holding.getFundType()))
-                .map(FundHolding::getHoldingAmount)
-                .map(this::valueOrZero)
+                .map(this::effectiveHoldingAmount)
                 .reduce(ZERO, BigDecimal::add);
         BigDecimal maxSingleAmount = holdings.stream()
-                .map(FundHolding::getHoldingAmount)
-                .map(this::valueOrZero)
+                .map(this::effectiveHoldingAmount)
                 .max(BigDecimal::compareTo)
                 .orElse(ZERO);
 
@@ -278,6 +279,8 @@ public class PortfolioAccountServiceImpl implements PortfolioAccountService {
         FundNavDaily officialNav = latestOfficialNav(holding.getFundCode());
         boolean officialUpdated = officialNavUpdated(holding, officialNav);
         BigDecimal dailyProfit = delayedOfficialNavFund(holding) && !officialUpdated ? ZERO : valueOrZero(holding.getDailyProfit());
+        BigDecimal holdingAmount = effectiveHoldingAmount(holding);
+        BigDecimal holdingProfit = effectiveHoldingProfit(holding, dailyProfit, !officialUpdated && dailyProfit.compareTo(BigDecimal.ZERO) != 0);
         FundValuationResult valuation = fundValuationService.estimate(
                 holding.getFundCode(), holding.getFundName(), holding.getFundType(), estimateRate);
         if (officialUpdated) {
@@ -290,16 +293,16 @@ public class PortfolioAccountServiceImpl implements PortfolioAccountService {
                 holding.getFundName(),
                 holding.getFundType(),
                 toBool(holding.getActiveFund()),
-                valueOrZero(holding.getHoldingAmount()),
+                holdingAmount,
                 valueOrZero(holding.getHoldingShare()),
                 valueOrZero(holding.getHoldingCost()),
                 holding.getCurrentEstimateNav(),
                 holding.getLatestOfficialNav(),
-                valueOrZero(holding.getHoldingProfit()),
-                valueOrZero(holding.getHoldingProfitRate()),
+                holdingProfit,
+                rate(holdingProfit, holding.getHoldingCost()),
                 dailyProfit,
                 ZERO,
-                rate(valueOrZero(holding.getHoldingAmount()), accountTotal),
+                rate(holdingAmount, accountTotal),
                 estimateRate,
                 officialUpdated,
                 officialUpdated ? officialNav.getNavDate() : null,
@@ -332,9 +335,24 @@ public class PortfolioAccountServiceImpl implements PortfolioAccountService {
         return fundHoldingMapper.selectList(new LambdaQueryWrapper<FundHolding>()
                         .eq(FundHolding::getAccountId, accountId))
                 .stream()
-                .map(FundHolding::getHoldingAmount)
-                .map(this::valueOrZero)
+                .map(this::effectiveHoldingAmount)
                 .reduce(ZERO, BigDecimal::add);
+    }
+
+    private BigDecimal effectiveHoldingAmount(FundHolding holding) {
+        return valueOrZero(holding.getHoldingAmount());
+    }
+
+    private BigDecimal effectiveHoldingProfit(FundHolding holding) {
+        FundNavDaily officialNav = latestOfficialNav(holding.getFundCode());
+        boolean officialUpdated = officialNavUpdated(holding, officialNav);
+        return effectiveHoldingProfit(holding, valueOrZero(holding.getDailyProfit()), !officialUpdated);
+    }
+
+    private BigDecimal effectiveHoldingProfit(FundHolding holding, BigDecimal dailyProfit, boolean includeDailyProfit) {
+        BigDecimal holdingAmount = effectiveHoldingAmount(holding);
+        BigDecimal profitBaseAmount = includeDailyProfit ? holdingAmount.add(valueOrZero(dailyProfit)) : holdingAmount;
+        return scale(profitBaseAmount.subtract(valueOrZero(holding.getHoldingCost())));
     }
 
     private BigDecimal currentEstimateGrowthRate(FundHolding holding) {

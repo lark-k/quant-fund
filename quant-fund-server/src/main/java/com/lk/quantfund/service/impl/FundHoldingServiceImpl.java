@@ -475,10 +475,6 @@ public class FundHoldingServiceImpl implements FundHoldingService {
                     holding.setFundName(estimate.fundName());
                 }
                 holding.setCurrentEstimateNav(estimate.estimateNav());
-                BigDecimal latestOfficialNav = deriveOfficialNav(estimate)
-                        .or(() -> latestOfficialNav(holding.getFundCode()))
-                        .orElse(holding.getLatestOfficialNav());
-                holding.setLatestOfficialNav(latestOfficialNav);
                 return;
             } catch (RuntimeException ignored) {
                 // Estimates can be unavailable before data opens; official NAV is still useful.
@@ -546,7 +542,7 @@ public class FundHoldingServiceImpl implements FundHoldingService {
                 return scale(valueOrZero(holding.getHoldingShare()).multiply(context.todayNav().subtract(previousNav)));
             }
             if (context.dailyGrowthRate() != null) {
-                return dailyProfitByRate(holding.getHoldingAmount(),
+                return dailyProfitByRate(displayHoldingAmount(holding),
                         valueOrZero(holding.getHoldingShare()),
                         null,
                         context.dailyGrowthRate());
@@ -584,11 +580,13 @@ public class FundHoldingServiceImpl implements FundHoldingService {
             share = valueOrZero(holding.getHoldingAmount()).divide(context.todayNav(), 4, RoundingMode.HALF_UP);
             holding.setHoldingShare(share);
         }
-        BigDecimal baseAmount = officialBaseAmount(holding, share, context.previousNav(), previousStoredNav);
         boolean sameOfficialNavAlreadyApplied = previousStoredNav != null
                 && previousStoredNav.compareTo(context.todayNav()) == 0
                 && holding.getCurrentEstimateNav() != null
                 && holding.getCurrentEstimateNav().compareTo(context.todayNav()) == 0;
+        BigDecimal baseAmount = sameOfficialNavAlreadyApplied
+                ? officialBaseAmount(holding, share, context.todayNav(), previousStoredNav)
+                : officialBaseAmount(holding, share, context.previousNav(), previousStoredNav);
         BigDecimal dailyProfit = ZERO;
         if (!sameOfficialNavAlreadyApplied) {
             if (context.previousNav() != null && context.previousNav().compareTo(BigDecimal.ZERO) > 0) {
@@ -611,21 +609,21 @@ public class FundHoldingServiceImpl implements FundHoldingService {
     }
 
     private BigDecimal officialBaseAmount(FundHolding holding, BigDecimal share, BigDecimal previousNav, BigDecimal previousStoredNav) {
-        BigDecimal amount = valueOrZero(holding.getHoldingAmount());
-        if (amount.compareTo(BigDecimal.ZERO) > 0) {
-            return scale(amount);
-        }
         BigDecimal fallbackNav = previousNav != null && previousNav.compareTo(BigDecimal.ZERO) > 0
                 ? previousNav
                 : previousStoredNav;
         if (fallbackNav != null && fallbackNav.compareTo(BigDecimal.ZERO) > 0 && share.compareTo(BigDecimal.ZERO) > 0) {
             return scale(share.multiply(fallbackNav));
         }
+        BigDecimal amount = valueOrZero(holding.getHoldingAmount());
+        if (amount.compareTo(BigDecimal.ZERO) > 0) {
+            return scale(amount);
+        }
         return ZERO;
     }
 
     private BigDecimal dailyProfitByRate(FundHolding holding, BigDecimal rate) {
-        return dailyProfitByRate(valueOrZero(holding.getHoldingAmount()),
+        return dailyProfitByRate(displayHoldingAmount(holding),
                 valueOrZero(holding.getHoldingShare()),
                 holding.getLatestOfficialNav(),
                 rate);
@@ -694,8 +692,7 @@ public class FundHoldingServiceImpl implements FundHoldingService {
         return fundHoldingMapper.selectList(new LambdaQueryWrapper<FundHolding>()
                         .eq(FundHolding::getAccountId, accountId))
                 .stream()
-                .map(FundHolding::getHoldingAmount)
-                .map(this::valueOrZero)
+                .map(this::displayHoldingAmount)
                 .reduce(ZERO, BigDecimal::add);
     }
 
@@ -749,6 +746,9 @@ public class FundHoldingServiceImpl implements FundHoldingService {
                     valuation.marketStatus()
             );
         }
+        BigDecimal holdingAmount = displayHoldingAmount(holding);
+        BigDecimal profitBaseAmount = !officialUpdated && intradayAllowed ? holdingAmount.add(dailyProfit) : holdingAmount;
+        BigDecimal holdingProfit = profitBaseAmount.subtract(valueOrZero(holding.getHoldingCost()));
         return new FundHoldingVO(
                 holding.getId(),
                 holding.getAccountId(),
@@ -756,16 +756,16 @@ public class FundHoldingServiceImpl implements FundHoldingService {
                 holding.getFundName(),
                 holding.getFundType(),
                 toBool(holding.getActiveFund()),
-                valueOrZero(holding.getHoldingAmount()),
+                holdingAmount,
                 valueOrZero(holding.getHoldingShare()),
                 valueOrZero(holding.getHoldingCost()),
                 holding.getCurrentEstimateNav(),
                 holding.getLatestOfficialNav(),
-                valueOrZero(holding.getHoldingProfit()),
-                valueOrZero(holding.getHoldingProfitRate()),
+                scale(holdingProfit),
+                rate(holdingProfit, holding.getHoldingCost()),
                 dailyProfit,
                 yesterdayProfit(holding),
-                rate(valueOrZero(holding.getHoldingAmount()), accountTotal),
+                rate(holdingAmount, accountTotal),
                 displayEstimateRate,
                 officialUpdated,
                 officialUpdated ? officialNav.navDate() : null,
@@ -782,6 +782,10 @@ public class FundHoldingServiceImpl implements FundHoldingService {
                 holding.getUpdateTime(),
                 SystemConstants.DISCLAIMER
         );
+    }
+
+    private BigDecimal displayHoldingAmount(FundHolding holding) {
+        return valueOrZero(holding.getHoldingAmount());
     }
 
     private FundValuationResult officialNavValuation(FundValuationResult valuation, BigDecimal officialRate) {

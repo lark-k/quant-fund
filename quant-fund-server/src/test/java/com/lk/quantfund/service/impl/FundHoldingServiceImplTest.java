@@ -32,6 +32,7 @@ import com.lk.quantfund.service.PortfolioAccountService;
 import com.lk.quantfund.service.StrategyService;
 import com.lk.quantfund.service.valuation.FundValuationResult;
 import com.lk.quantfund.service.valuation.FundValuationService;
+import com.lk.quantfund.vo.holding.FundHoldingVO;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -369,6 +370,80 @@ class FundHoldingServiceImplTest {
         assertThat(saved.getLatestOfficialNav()).isEqualByComparingTo("1.5117");
         assertThat(saved.getDailyProfit()).isGreaterThan(BigDecimal.ZERO);
         verify(fundQueryService, never()).getIntradayEstimate(any(), any(Boolean.class));
+    }
+
+    @Test
+    void listShouldKeepStoredAmountDuringIntradayDisplay() {
+        FundHolding holding = holding();
+        holding.setHoldingAmount(new BigDecimal("1215.4200"));
+        holding.setHoldingShare(new BigDecimal("153.9049"));
+        holding.setLatestOfficialNav(new BigDecimal("5.1693"));
+        holding.setCurrentEstimateNav(new BigDecimal("5.1693"));
+        holding.setHoldingCost(new BigDecimal("660.0100"));
+        when(holdingMapper.selectList(any())).thenReturn(List.of(holding), List.of(holding));
+        when(fundQueryService.getHistoricalNav(any(), any(), any())).thenReturn(List.of(
+                navPoint(LocalDate.now().minusDays(1), "5.1693")
+        ));
+        when(valuationService.estimate(any(), any(), any(), any()))
+                .thenReturn(new FundValuationResult("海外基金", BigDecimal.ZERO, "TEST", "TEST", "TEST"));
+        FundHoldingServiceImpl service = service(LocalDateTime.of(2026, 6, 29, 11, 0));
+
+        List<FundHoldingVO> result;
+        try (MockedStatic<UserContext> userContext = Mockito.mockStatic(UserContext.class)) {
+            userContext.when(UserContext::getUserId).thenReturn(1L);
+            result = service.list(null, null);
+        }
+
+        assertThat(result).hasSize(1);
+        FundHoldingVO vo = result.get(0);
+        assertThat(vo.holdingAmount()).isEqualByComparingTo("1215.4200");
+        assertThat(vo.holdingProfit()).isEqualByComparingTo("555.4100");
+        assertThat(vo.holdingProfitRate()).isEqualByComparingTo("84.1518");
+    }
+
+    @Test
+    void recalculateShouldNotChangeOfficialNavOrAmountDuringIntradayEstimate() {
+        FundHolding holding = holding();
+        holding.setFundCode("021528");
+        holding.setFundName("Caitong Growth");
+        holding.setFundType("ACTIVE_EQUITY");
+        holding.setHoldingAmount(new BigDecimal("531.2500"));
+        holding.setHoldingShare(new BigDecimal("92.0443"));
+        holding.setHoldingCost(new BigDecimal("439.9900"));
+        holding.setLatestOfficialNav(new BigDecimal("5.7717"));
+        holding.setCurrentEstimateNav(new BigDecimal("5.7717"));
+        when(holdingMapper.selectOne(any())).thenReturn(holding);
+        when(holdingMapper.selectList(any())).thenReturn(List.of(holding));
+        when(fundQueryService.getHistoricalNav(any(), any(), any())).thenReturn(List.of(
+                navPoint(LocalDate.now().minusDays(1), "5.7717")
+        ));
+        when(fundQueryService.getIntradayEstimate("021528", false)).thenReturn(new com.lk.quantfund.datasource.model.FundEstimateDTO(
+                "021528",
+                "Caitong Growth",
+                new BigDecimal("5.4922"),
+                new BigDecimal("-5.1300"),
+                LocalDate.now(),
+                LocalDateTime.now(),
+                "TEST",
+                false,
+                "{}"
+        ));
+        when(valuationService.estimate(any(), any(), any(), any()))
+                .thenReturn(new FundValuationResult("PCB/CPO", new BigDecimal("-5.1300"), "TEST", "TEST", "TEST"));
+        FundHoldingServiceImpl service = service(LocalDateTime.of(2026, 6, 29, 13, 0));
+        ArgumentCaptor<FundHolding> holdingCaptor = ArgumentCaptor.forClass(FundHolding.class);
+
+        try (MockedStatic<UserContext> userContext = Mockito.mockStatic(UserContext.class)) {
+            userContext.when(UserContext::getUserId).thenReturn(1L);
+            service.recalculate(100L);
+        }
+
+        verify(holdingMapper).updateById(holdingCaptor.capture());
+        FundHolding saved = holdingCaptor.getValue();
+        assertThat(saved.getHoldingAmount()).isEqualByComparingTo("531.2500");
+        assertThat(saved.getLatestOfficialNav()).isEqualByComparingTo("5.7717");
+        assertThat(saved.getCurrentEstimateNav()).isEqualByComparingTo("5.4922");
+        assertThat(saved.getDailyProfit()).isLessThan(BigDecimal.ZERO);
     }
 
     private FundHoldingServiceImpl service() {
