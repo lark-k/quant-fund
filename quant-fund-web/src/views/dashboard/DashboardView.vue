@@ -44,10 +44,13 @@ let refreshTimer: number | undefined
 let initialOverviewPromise: Promise<unknown> | null = null
 let lastOfficialNavSyncAt = 0
 let lastEstimateRefreshAt = 0
+let lastOfficialNavAutoRefreshAt = 0
+let autoRefreshing = false
 
 const OFFICIAL_NAV_SYNC_COOLDOWN_MS = 6000
 const ESTIMATE_REFRESH_COOLDOWN_MS = 11000
 const AUTO_ESTIMATE_REFRESH_INTERVAL_MS = 15000
+const OFFICIAL_NAV_AUTO_REFRESH_INTERVAL_MS = 60000
 
 const trendRanges: Array<{ label: string; value: TrendRange }> = [
   { label: '今日', value: 'TODAY' },
@@ -334,6 +337,14 @@ function isAShareEstimateRefreshAllowed(status: MarketSessionStatus | null) {
   return minutes >= 9 * 60 + 30 && minutes <= 15 * 60
 }
 
+function isOfficialNavAutoRefreshWindow() {
+  const now = new Date()
+  const day = now.getDay()
+  if (day === 0 || day === 6) return false
+  const minutes = now.getHours() * 60 + now.getMinutes()
+  return minutes >= 15 * 60 + 30 && minutes <= 22 * 60 + 30
+}
+
 function aShareStatusText(status: MarketSessionStatus | null) {
   return aShareMarket(status)?.statusText || 'A股市场状态未同步'
 }
@@ -431,10 +442,23 @@ function isRepeatSubmitError(error: unknown) {
 }
 
 async function autoRefreshEstimate() {
-  if (refreshing.value || !overview.value?.topHoldings.length) return
+  if (refreshing.value || autoRefreshing || !overview.value?.topHoldings.length) return
   if (Date.now() - lastEstimateRefreshAt < ESTIMATE_REFRESH_COOLDOWN_MS) return
   const marketStatus = await loadMarketStatus()
-  if (!isAShareEstimateRefreshAllowed(marketStatus)) return
+  if (!isAShareEstimateRefreshAllowed(marketStatus)) {
+    if (!isOfficialNavAutoRefreshWindow()) return
+    if (Date.now() - lastOfficialNavAutoRefreshAt < OFFICIAL_NAV_AUTO_REFRESH_INTERVAL_MS) return
+    lastOfficialNavAutoRefreshAt = Date.now()
+    autoRefreshing = true
+    try {
+      await syncOfficialNavWhenAllowed()
+      await store.fetchOverview()
+      await loadReturnTrend()
+    } finally {
+      autoRefreshing = false
+    }
+    return
+  }
   lastEstimateRefreshAt = Date.now()
   refreshing.value = true
   try {
