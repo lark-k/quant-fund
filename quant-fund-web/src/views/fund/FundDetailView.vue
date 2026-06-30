@@ -138,11 +138,18 @@ const rankText = computed(() => {
 })
 let navRequestSeq = 0
 let detailRequestSeq = 0
+let skipNextRouteDetailLoad = false
 let navRefreshTimer: ReturnType<typeof window.setInterval> | null = null
 
 onMounted(loadDetail)
 onBeforeUnmount(stopNavRefreshTimer)
-watch(() => route.fullPath, loadDetail)
+watch(() => route.fullPath, () => {
+  if (skipNextRouteDetailLoad) {
+    skipNextRouteDetailLoad = false
+    return
+  }
+  void loadDetail()
+})
 watch(selectedIndexCode, () => loadSelectedIndexNav(false))
 watch(activeNavRange, () => {
   navHistoryPage.value = 1
@@ -340,6 +347,10 @@ async function loadDetail() {
     if (!matchedHolding && !queryCode) {
       matchedHolding = holdings[0]
     }
+    if (matchedHolding && !queryCode && !(Number.isFinite(queryHoldingId) && queryHoldingId > 0)) {
+      skipNextRouteDetailLoad = true
+      void router.replace({ path: '/fund-detail', query: { fundCode: matchedHolding.fundCode, holdingId: matchedHolding.id } })
+    }
     selectedHoldingId.value = matchedHolding?.id || 0
     hasMatchedHolding.value = Boolean(matchedHolding)
     const code = matchedHolding?.fundCode || queryCode || ''
@@ -360,7 +371,7 @@ async function loadDetail() {
       quiet(quantApi.peerRank(code)),
       quiet(quantApi.trades())
     ])
-    if (requestSeq !== detailRequestSeq || fundCode.value !== code) return
+    if (requestSeq !== detailRequestSeq) return
     infoLoadFailed.value = !infoResult
     const info = infoResult || {
       fundCode: code,
@@ -417,7 +428,9 @@ async function loadDetail() {
     prefetchIndexNavs(code)
     startNavRefreshTimer()
   } finally {
-    loading.value = false
+    if (requestSeq === detailRequestSeq) {
+      loading.value = false
+    }
   }
 }
 

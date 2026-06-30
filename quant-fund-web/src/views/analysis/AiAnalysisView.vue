@@ -20,12 +20,18 @@ const quantSignal = ref<QuantSignal | null>(null)
 const selectedHoldingId = ref<number>()
 const loading = ref(true)
 const generating = ref(false)
+const showAllHistoryReports = ref(false)
+const HISTORY_PREVIEW_LIMIT = 5
 
 const selectedHolding = computed(() => holdings.value.find((item) => item.id === selectedHoldingId.value))
 const filteredReports = computed(() => {
   if (!selectedHoldingId.value) return reports.value
   return reports.value.filter((item) => item.holdingId === selectedHoldingId.value)
 })
+const visibleHistoryReports = computed(() => {
+  return showAllHistoryReports.value ? filteredReports.value : filteredReports.value.slice(0, HISTORY_PREVIEW_LIMIT)
+})
+const historyHasMore = computed(() => filteredReports.value.length > HISTORY_PREVIEW_LIMIT)
 
 const selectedConclusion = computed(() => cleanAdvisoryText(selected.value?.finalConclusion || ''))
 const selectedDisclaimer = computed(() => selected.value?.disclaimer || DISCLAIMER)
@@ -273,6 +279,7 @@ function momentumCalculation(finalScore: number, metrics: Record<string, unknown
 }
 
 watch(selectedHoldingId, (holdingId) => {
+  showAllHistoryReports.value = false
   selected.value = preferredReport(holdingId)
   void loadQuantSignal(holdingId)
 })
@@ -447,13 +454,19 @@ async function loadQuantSignal(holdingId?: number) {
     <section class="panel">
       <div class="panel-header">
         <h2 class="panel-title">历史 AI 分析记录</h2>
-        <span class="item-meta">{{ filteredReports.length }} 条</span>
+        <div class="history-header-actions">
+          <span class="item-meta">{{ filteredReports.length }} 条</span>
+          <button v-if="historyHasMore" class="panel-link" type="button" @click="showAllHistoryReports = !showAllHistoryReports">
+            {{ showAllHistoryReports ? '收起' : `查看全部 ${filteredReports.length} 条` }}
+          </button>
+        </div>
       </div>
-      <div class="panel-body">
-        <table v-if="filteredReports.length" class="terminal-table ai-history-table">
+      <div class="panel-body ai-history-body">
+        <div v-if="filteredReports.length" :class="['ai-history-scroll', { expanded: showAllHistoryReports }]">
+        <table class="terminal-table ai-history-table">
           <thead><tr><th>时间</th><th>基金</th><th>动作</th><th>建议金额</th><th>风险</th><th>模型</th><th>摘要</th></tr></thead>
           <tbody>
-            <tr v-for="item in filteredReports" :key="item.id" @click="selectReport(item)">
+            <tr v-for="item in visibleHistoryReports" :key="item.id" :class="{ selected: selected?.id === item.id }" @click="selectReport(item)">
               <td>{{ formatDateTime(item.analysisTime) }}</td>
               <td>{{ item.fundCode }}</td>
               <td><ActionTag :action="item.action" :text="item.actionText" /></td>
@@ -464,6 +477,7 @@ async function loadQuantSignal(holdingId?: number) {
             </tr>
           </tbody>
         </table>
+        </div>
         <EmptyState v-else title="暂无历史分析" description="当前持仓还没有生成过 AI 分析。" />
       </div>
     </section>

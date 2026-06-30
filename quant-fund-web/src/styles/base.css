@@ -2893,6 +2893,40 @@ a {
   padding-top: 10px;
 }
 
+.history-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.ai-history-body {
+  overflow-x: auto;
+}
+
+.ai-history-scroll {
+  max-height: none;
+  overflow-x: auto;
+  overflow-y: visible;
+}
+
+.ai-history-scroll.expanded {
+  max-height: 420px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.ai-history-table tbody tr {
+  cursor: pointer;
+}
+
+.ai-history-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #101d24;
+}
+
 .ai-report-layout {
   display: grid;
   grid-template-columns: minmax(230px, 0.72fr) minmax(0, 1.18fr) minmax(320px, 1fr);
