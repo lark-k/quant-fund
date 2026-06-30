@@ -38,6 +38,7 @@ const activeIndexCode = ref<BenchmarkIndex>('000300')
 const refreshing = ref(false)
 const trendLoading = ref(false)
 const quantLoading = ref(false)
+const quantGenerating = ref(false)
 const showAllStrategySignals = ref(false)
 const profitAnalysis = ref<ProfitAnalysis>()
 const intradayTrendPoints = ref<TrendPoint[]>([])
@@ -47,12 +48,14 @@ let initialOverviewPromise: Promise<unknown> | null = null
 let lastOfficialNavSyncAt = 0
 let lastEstimateRefreshAt = 0
 let lastOfficialNavAutoRefreshAt = 0
+let lastQuantGenerateStartedAt = 0
 let autoRefreshing = false
 
 const OFFICIAL_NAV_SYNC_COOLDOWN_MS = 6000
 const ESTIMATE_REFRESH_COOLDOWN_MS = 11000
 const AUTO_ESTIMATE_REFRESH_INTERVAL_MS = 15000
 const OFFICIAL_NAV_AUTO_REFRESH_INTERVAL_MS = 60000
+const QUANT_GENERATE_REPEAT_WINDOW_MS = 20000
 
 const trendRanges: Array<{ label: string; value: TrendRange }> = [
   { label: '今日', value: 'TODAY' },
@@ -115,6 +118,8 @@ const quantBuySellCount = computed(() => quantSignals.value.filter((item) => ite
 const quantWatchCount = computed(() => quantSignals.value.filter((item) => item.action === 'WATCH' || item.action === 'HOLD').length)
 const visibleQuantSignals = computed(() => showAllStrategySignals.value ? quantSignals.value : quantSignals.value.slice(0, 5))
 const quantSignalCollapsed = computed(() => quantSignals.value.length > 5)
+const quantButtonBusy = computed(() => quantLoading.value || quantGenerating.value)
+const quantButtonText = computed(() => quantGenerating.value ? '生成中' : quantLoading.value ? '刷新中' : '生成')
 const strategySignalGroups = computed<StrategySignalGroup[]>(() => {
   const signals = overview.value?.latestStrategySignals || []
   const groups = new Map<string, StrategySignal[]>()
@@ -236,11 +241,22 @@ async function loadQuantSignals() {
 }
 
 async function analyzeQuantAccount() {
+  if (quantButtonBusy.value) {
+    ElMessage.info('今日量化建议正在生成，请稍候')
+    return
+  }
+  const repeatRemainingMs = quantGenerateRepeatRemainingMs()
+  if (repeatRemainingMs > 0) {
+    ElMessage.info(`生成过于频繁，请 ${Math.ceil(repeatRemainingMs / 1000)} 秒后再试`)
+    return
+  }
   const accountId = overview.value?.topHoldings[0]?.accountId
   if (!accountId) {
     ElMessage.warning('暂无可分析的持仓账户')
     return
   }
+  lastQuantGenerateStartedAt = Date.now()
+  quantGenerating.value = true
   quantLoading.value = true
   try {
     await quantApi.analyzeQuantAccount(accountId)
@@ -250,8 +266,15 @@ async function analyzeQuantAccount() {
       .sort((left, right) => Date.parse(right.signalTime) - Date.parse(left.signalTime))
     await store.fetchOverview()
     ElMessage.success('今日量化建议和 AI 解释已刷新')
+  } catch (error) {
+    if (isRepeatSubmitError(error)) {
+      ElMessage.info('今日量化建议正在生成，请稍候')
+      return
+    }
+    ElMessage.error(readableErrorMessage(error) || '生成今日量化建议失败，请稍后重试')
   } finally {
     quantLoading.value = false
+    quantGenerating.value = false
   }
 }
 
@@ -480,6 +503,19 @@ function isRepeatSubmitError(error: unknown) {
     && (error as { response?: { status?: number } }).response?.status === 409
 }
 
+function readableErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    return String((error as { message?: unknown }).message || '')
+  }
+  return ''
+}
+
+function quantGenerateRepeatRemainingMs() {
+  if (!lastQuantGenerateStartedAt) return 0
+  return Math.max(QUANT_GENERATE_REPEAT_WINDOW_MS - (Date.now() - lastQuantGenerateStartedAt), 0)
+}
+
 async function autoRefreshEstimate() {
   if (refreshing.value || autoRefreshing || !overview.value?.topHoldings.length) return
   if (Date.now() - lastEstimateRefreshAt < ESTIMATE_REFRESH_COOLDOWN_MS) return
@@ -675,7 +711,7 @@ function go(path: string) {
     <section class="panel strategy-panel">
       <div class="panel-header">
         <h2 class="panel-title">今日量化建议</h2>
-        <button class="panel-link" :disabled="quantLoading" @click="analyzeQuantAccount">{{ quantLoading ? '刷新中' : '生成' }}</button>
+        <button class="panel-link" :disabled="quantButtonBusy" @click="analyzeQuantAccount">{{ quantButtonText }}</button>
       </div>
       <div class="panel-body visual-panel-body">
         <div class="insight-stat-row compact">
