@@ -114,8 +114,8 @@ export const quantApi = {
   profitIntraday(params?: { indexCode?: string }): Promise<Array<{ time: string; portfolioReturn: number | null; indexReturn: number | null; dailyProfit: number | null }>> {
     return USE_MOCK ? Promise.resolve([]) : http.get('/analytics/profit-intraday', { params })
   },
-  calendar(): Promise<ProfitCalendar> {
-    return USE_MOCK ? mockApi.calendar() : http.get('/analytics/profit-calendar')
+  calendar(params?: { month?: string }): Promise<ProfitCalendar> {
+    return USE_MOCK ? mockApi.calendar() : http.get('/analytics/profit-calendar', { params })
   },
   trades(): Promise<TradeRecord[]> {
     return USE_MOCK ? mockApi.trades() : http.get('/trades')

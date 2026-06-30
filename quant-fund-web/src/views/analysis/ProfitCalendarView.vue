@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { quantApi } from '@/api/quant'
 import type { ProfitCalendar } from '@/types/domain'
@@ -12,15 +12,25 @@ import { metricTone, money, percent, signed, toneClass } from '@/utils/format'
 
 const data = ref<ProfitCalendar>()
 const loading = ref(true)
+const refreshing = ref(false)
+const selectedMonth = ref(currentMonth())
 type CalendarCell = ProfitCalendar['days'][number] & { blank: boolean; key: string }
 
-onMounted(async () => {
+onMounted(() => {
+  void loadCalendar()
+})
+
+async function loadCalendar(month = selectedMonth.value) {
+  if (!data.value) loading.value = true
+  refreshing.value = true
   try {
-    data.value = await quantApi.calendar()
+    data.value = await quantApi.calendar({ month })
+    selectedMonth.value = data.value.month
   } finally {
     loading.value = false
+    refreshing.value = false
   }
-})
+}
 
 const chart = computed(() => calendarBarOption(data.value?.days || []))
 const tradingDays = computed(() => data.value?.days.filter((day) => day.tradingDay) || [])
@@ -51,8 +61,53 @@ const calendarCells = computed(() => {
   ] satisfies CalendarCell[]
 })
 const todayText = new Date().toISOString().slice(0, 10)
+const currentMonthText = currentMonth()
+const displayMonth = computed(() => data.value?.month || selectedMonth.value)
+const canGoNext = computed(() => selectedMonth.value < currentMonthText)
 const profitRows = computed(() => (data.value?.profitTop5 || []).filter((item) => item.holdingProfit > 0))
 const lossRows = computed(() => (data.value?.lossTop5 || []).filter((item) => item.holdingProfit < 0))
+
+function currentMonth() {
+  const now = new Date()
+  return formatMonth(now)
+}
+
+function formatMonth(date: Date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  return `${year}-${month}`
+}
+
+function monthDate(month: string) {
+  const [year, monthIndex] = month.split('-').map(Number)
+  return new Date(year, (monthIndex || 1) - 1, 1)
+}
+
+function monthLabel(month: string) {
+  return month ? `${month.slice(0, 4)}年${month.slice(5, 7)}月` : '--'
+}
+
+function shiftMonth(offset: number) {
+  const date = monthDate(selectedMonth.value)
+  date.setMonth(date.getMonth() + offset)
+  const nextMonth = formatMonth(date)
+  if (nextMonth > currentMonthText) return
+  selectedMonth.value = nextMonth
+  void loadCalendar(nextMonth)
+}
+
+function goCurrentMonth() {
+  if (selectedMonth.value === currentMonthText) return
+  selectedMonth.value = currentMonthText
+  void loadCalendar(currentMonthText)
+}
+
+function onMonthInput(event: Event) {
+  const value = (event.target as HTMLInputElement).value
+  if (!value) return
+  selectedMonth.value = value
+  void loadCalendar(value)
+}
 
 function dayStatusText(day: ProfitCalendar['days'][number]) {
   if (!day.tradingDay) return day.profitStatusText || day.tradingDayLabel
@@ -71,22 +126,30 @@ function dayStatusText(day: ProfitCalendar['days'][number]) {
       <MetricTile label="亏损天数" :value="`${lossDays} 天`" sub-label="风险复盘" tone="fall" />
       <MetricTile label="最佳单日" :value="bestDay ? signed(bestDay.dailyProfit) : '--'" :delta="bestDay ? bestDay.date : ''" :tone="metricTone(bestDay?.dailyProfit || 0)" />
       <MetricTile label="最弱单日" :value="worstDay ? signed(worstDay.dailyProfit) : '--'" :delta="worstDay ? worstDay.date : ''" :tone="metricTone(worstDay?.dailyProfit || 0)" />
-      <MetricTile label="日历月份" :value="data.month" sub-label="红涨绿跌" tone="info" />
+      <MetricTile label="日历月份" :value="monthLabel(displayMonth)" sub-label="红涨绿跌" tone="info" />
     </div>
 
     <section class="panel">
       <div class="panel-header">
-        <h2 class="panel-title">盈亏日历 · {{ data.month }}</h2>
+        <h2 class="panel-title">盈亏日历 · {{ monthLabel(displayMonth) }}</h2>
         <span class="item-meta">每日收益金额 / 每日收益率 / 累计收益；休市日不参与统计</span>
       </div>
       <div class="panel-body">
         <div class="calendar-toolbar">
-          <div class="segmented compact">
-            <button class="active">日</button>
-            <button disabled>月</button>
-            <button disabled>年</button>
+          <div class="calendar-month-controls">
+            <button class="ghost-button" type="button" :disabled="refreshing" @click="shiftMonth(-1)">上一月</button>
+            <input
+              class="calendar-month-input"
+              type="month"
+              :value="selectedMonth"
+              :max="currentMonthText"
+              :disabled="refreshing"
+              @change="onMonthInput"
+            >
+            <button class="ghost-button" type="button" :disabled="refreshing || !canGoNext" @click="shiftMonth(1)">下一月</button>
+            <button class="ghost-button" type="button" :disabled="refreshing || selectedMonth === currentMonthText" @click="goCurrentMonth">本月</button>
           </div>
-          <strong>{{ data.month.replace('-', '年') }}月</strong>
+          <strong>{{ monthLabel(displayMonth) }}<span v-if="refreshing"> 同步中...</span></strong>
         </div>
         <div class="calendar-weekdays">
           <span v-for="label in weekdayLabels" :key="label">{{ label }}</span>

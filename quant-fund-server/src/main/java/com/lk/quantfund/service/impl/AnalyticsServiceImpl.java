@@ -135,6 +135,10 @@ public class AnalyticsServiceImpl implements AnalyticsService {
         BigDecimal weekProfit = periodProfit(userId, today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY)), today, todayProfit);
         BigDecimal monthProfit = periodProfit(userId, today.withDayOfMonth(1), today, todayProfit);
         BigDecimal yearProfit = periodProfit(userId, today.withDayOfYear(1), today, todayProfit);
+        BigDecimal totalProfit = currentHoldings.isEmpty()
+                ? scale(summary.currentProfit())
+                : currentTotalProfit(currentHoldings, intradayDisplayWindow);
+        BigDecimal totalProfitRate = rate(totalProfit, summary.totalInvestAmount());
         return new ProfitAnalysisVO(
                 actualStart,
                 actualEnd,
@@ -142,7 +146,7 @@ public class AnalyticsServiceImpl implements AnalyticsService {
                 weekProfit,
                 monthProfit,
                 yearProfit,
-                scale(summary.currentProfit()),
+                totalProfit,
                 selectedProfit,
                 selectedRangeProfitRate,
                 List.of(
@@ -150,7 +154,7 @@ public class AnalyticsServiceImpl implements AnalyticsService {
                         new ProfitPeriodStatVO("THIS_WEEK", weekProfit, rate(weekProfit, summary.totalAsset())),
                         new ProfitPeriodStatVO("THIS_MONTH", monthProfit, rate(monthProfit, summary.totalAsset())),
                         new ProfitPeriodStatVO("THIS_YEAR", yearProfit, rate(yearProfit, summary.totalAsset())),
-                        new ProfitPeriodStatVO("ALL", scale(summary.currentProfit()), scale(summary.currentProfitRate()))
+                        new ProfitPeriodStatVO("ALL", totalProfit, totalProfitRate)
                 ),
                 trend,
                 profitTop5(userId),
@@ -342,6 +346,20 @@ public class AnalyticsServiceImpl implements AnalyticsService {
                 .toList());
     }
 
+    private BigDecimal currentTotalProfit(List<FundHolding> holdings, boolean intradayDisplayWindow) {
+        Set<String> todayEstimateFundCodes = todayEstimateFundCodes(holdings, today());
+        return sum(holdings.stream()
+                .map(holding -> {
+                    FundNavDaily officialNav = latestOfficialNav(holding.getFundCode());
+                    boolean intradayFresh = intradayDataFreshToday(holding, todayEstimateFundCodes);
+                    boolean intradayAllowed = intradayDisplayWindow && intradayFresh;
+                    boolean officialUpdated = officialNavUpdated(holding, officialNav);
+                    BigDecimal dailyProfit = currentDailyProfit(holding, intradayDisplayWindow, todayEstimateFundCodes);
+                    return effectiveHoldingProfit(holding, dailyProfit, !officialUpdated && intradayAllowed);
+                })
+                .toList());
+    }
+
     private BigDecimal currentDailyProfit(FundHolding holding, boolean intradayDisplayWindow, Set<String> todayEstimateFundCodes) {
         FundNavDaily officialNav = latestOfficialNav(holding.getFundCode());
         if (officialNavUpdated(holding, officialNav)) {
@@ -384,6 +402,13 @@ public class AnalyticsServiceImpl implements AnalyticsService {
 
     private BigDecimal effectiveHoldingAmount(FundHolding holding) {
         return scale(holding.getHoldingAmount());
+    }
+
+    private BigDecimal effectiveHoldingProfit(FundHolding holding, BigDecimal dailyProfit, boolean includeDailyProfit) {
+        BigDecimal profitBaseAmount = includeDailyProfit
+                ? effectiveHoldingAmount(holding).add(scale(dailyProfit))
+                : effectiveHoldingAmount(holding);
+        return scale(profitBaseAmount.subtract(scale(holding.getHoldingCost())));
     }
 
     private BigDecimal amountChangeByRate(BigDecimal amount, BigDecimal rate) {

@@ -98,6 +98,43 @@ class AnalyticsServiceImplTest {
     }
 
     @Test
+    void profitAnalysisTotalProfitShouldFollowDashboardDisplayProfit() {
+        AnalyticsServiceImpl service = service(LocalDate.of(2026, 7, 1), LocalDateTime.of(2026, 7, 1, 3, 33));
+        FundHolding holding = holding("86.5471");
+        holding.setHoldingAmount(new BigDecimal("4526.2352"));
+        holding.setHoldingCost(new BigDecimal("4036.0200"));
+        holding.setHoldingProfit(new BigDecimal("490.2152"));
+        when(holdingSnapshotMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
+        when(fundHoldingMapper.selectList(any(LambdaQueryWrapper.class)))
+                .thenReturn(List.of(holding), List.of(), List.of());
+        when(portfolioAccountService.summary()).thenReturn(new PortfolioSummaryVO(
+                new BigDecimal("4526.2352"),
+                new BigDecimal("4036.0200"),
+                new BigDecimal("576.7623"),
+                new BigDecimal("14.2904"),
+                new BigDecimal("86.5471"),
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                1,
+                List.of()
+        ));
+
+        try (MockedStatic<UserContext> userContext = Mockito.mockStatic(UserContext.class)) {
+            userContext.when(UserContext::getUserId).thenReturn(1L);
+            var analysis = service.profitAnalysis(LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 1));
+
+            assertThat(analysis.totalProfit()).isEqualByComparingTo("490.2152");
+            assertThat(analysis.periodStats()).filteredOn(period -> period.period().equals("ALL"))
+                    .singleElement()
+                    .satisfies(period -> {
+                        assertThat(period.profit()).isEqualByComparingTo("490.2152");
+                        assertThat(period.profitRate()).isEqualByComparingTo("12.1460");
+                    });
+        }
+    }
+
+    @Test
     void profitCalendarShouldNotCountCurrentEstimateOnNonTradingDay() {
         AnalyticsServiceImpl service = service(LocalDate.of(2026, 6, 27));
         FundHolding holding = holding("100.0000");
@@ -486,6 +523,7 @@ class AnalyticsServiceImplTest {
         holding.setFundName("沪深300ETF");
         holding.setFundType("INDEX");
         holding.setHoldingAmount(new BigDecimal("10000.0000"));
+        holding.setHoldingCost(new BigDecimal("9500.0000"));
         holding.setHoldingProfit(new BigDecimal("500.0000"));
         holding.setHoldingProfitRate(new BigDecimal("5.0000"));
         holding.setDailyProfit(new BigDecimal(dailyProfit));
