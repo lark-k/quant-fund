@@ -10,6 +10,7 @@ public record QuantAnalyzeRequest(
         QuantHoldingContextDTO holding,
         List<QuantNavPointDTO> navSeries,
         List<QuantTradeDTO> tradeRecords,
+        QuantStrategyParamsDTO strategyParams,
         QuantMarketContextDTO market
 ) {
 }

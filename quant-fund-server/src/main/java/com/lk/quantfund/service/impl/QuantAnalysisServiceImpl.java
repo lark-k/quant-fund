@@ -15,6 +15,7 @@ import com.lk.quantfund.dto.quant.QuantMarketContextDTO;
 import com.lk.quantfund.dto.quant.QuantNavPointDTO;
 import com.lk.quantfund.dto.quant.QuantRiskProfileDTO;
 import com.lk.quantfund.dto.quant.QuantScoreDTO;
+import com.lk.quantfund.dto.quant.QuantStrategyParamsDTO;
 import com.lk.quantfund.dto.quant.QuantTradeDTO;
 import com.lk.quantfund.entity.FundHolding;
 import com.lk.quantfund.entity.FundNavDaily;
@@ -270,6 +271,7 @@ public class QuantAnalysisServiceImpl implements QuantAnalysisService {
                 ),
                 navSeries(holding.getFundCode()),
                 tradeRecords(userId, holding.getId()),
+                defaultStrategyParams(),
                 new QuantMarketContextDTO(
                         tradingCalendarService.isTradingDay(now.toLocalDate()),
                         tradingCalendarService.isIntradayEstimateWindow(now),
@@ -318,7 +320,8 @@ public class QuantAnalysisServiceImpl implements QuantAnalysisService {
                                                  FundHolding holding,
                                                  RiskProfile riskProfile) {
         BigDecimal positionRate = positionRate(account, holding);
-        BigDecimal maxSingle = valueOrDefault(riskProfile.getMaxSingleFundPositionRate(), new BigDecimal("25.0000"));
+        QuantStrategyParamsDTO strategyParams = defaultStrategyParams();
+        BigDecimal maxSingle = strategyParams.maxSinglePositionRate();
         BigDecimal profitRate = valueOrZero(holding.getHoldingProfitRate());
         String action = "HOLD";
         String actionText = "建议持有观察";
@@ -367,6 +370,23 @@ public class QuantAnalysisServiceImpl implements QuantAnalysisService {
                 "fallback-v1.0.0",
                 request.market().deadline() == null ? null : request.market().deadline().toString(),
                 SystemConstants.DISCLAIMER
+        );
+    }
+
+    private QuantStrategyParamsDTO defaultStrategyParams() {
+        QuantFundProperties.QuantEngine quantEngine = properties.getQuantEngine();
+        return new QuantStrategyParamsDTO(
+                quantEngine.getBuyThreshold(),
+                quantEngine.getSellThreshold(),
+                quantEngine.getMaxSinglePositionRate(),
+                quantEngine.getBuyStepRatio(),
+                quantEngine.getSellStepRatio(),
+                quantEngine.getTakeProfitRate(),
+                quantEngine.getStopLossRate(),
+                quantEngine.getMinNavSamples(),
+                quantEngine.getWarmupDays(),
+                quantEngine.getTrendHoldReturn20d(),
+                quantEngine.getTrendHoldMa20Deviation()
         );
     }
 

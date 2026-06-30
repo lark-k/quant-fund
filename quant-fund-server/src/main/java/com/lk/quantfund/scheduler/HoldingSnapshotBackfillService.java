@@ -107,9 +107,11 @@ public class HoldingSnapshotBackfillService {
                 .last("LIMIT 1"));
         if (snapshot == null) {
             snapshot = holdingSnapshotMapper.selectByHoldingAndDateIncludingDeleted(holding.getId(), snapshotDate);
-            restoreSnapshotIfDeleted(snapshot);
         }
         if (snapshot != null) {
+            return;
+        }
+        if (holding.getUpdateTime() != null && holding.getUpdateTime().toLocalDate().isAfter(snapshotDate)) {
             return;
         }
         snapshot = new HoldingSnapshot();
@@ -128,15 +130,7 @@ public class HoldingSnapshotBackfillService {
         try {
             holdingSnapshotMapper.insert(snapshot);
         } catch (DuplicateKeyException exception) {
-            restoreSnapshotIfDeleted(holdingSnapshotMapper.selectByHoldingAndDateIncludingDeleted(
-                    holding.getId(), snapshotDate));
-        }
-    }
-
-    private void restoreSnapshotIfDeleted(HoldingSnapshot snapshot) {
-        if (snapshot != null && Integer.valueOf(1).equals(snapshot.getDeleted())) {
-            holdingSnapshotMapper.restoreById(snapshot.getId());
-            snapshot.setDeleted(0);
+            // Another process created or deleted the historical snapshot first; never revive deleted history here.
         }
     }
 }

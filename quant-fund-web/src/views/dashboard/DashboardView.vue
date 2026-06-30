@@ -350,13 +350,13 @@ function displaySuggestionFund(item: { fundCode: string; fundName?: string }) {
 
 function aiExecutionText(item: AiAnalysisReport) {
   if (item.action === 'SELL') {
-    return `减仓 ${actionPercent(item.action, item.suggestRatio)} · 约 ${money(item.suggestAmount)} 元`
+    return `减仓 · 持仓${actionPercent(item.action, item.suggestRatio)} · 约 ${money(item.suggestAmount)} 元`
   }
   if (item.action === 'BUY') {
-    return `买入 ${actionPercent(item.action, item.suggestRatio)} · 约 ${money(item.suggestAmount)} 元`
+    return `买入 · 账户${actionPercent(item.action, item.suggestRatio)} · 约 ${money(item.suggestAmount)} 元`
   }
   if (item.action === 'CONVERT') {
-    return `转换 ${actionPercent(item.action, item.suggestRatio)} · 约 ${money(item.suggestAmount)} 元`
+    return `转换 · 持仓${actionPercent(item.action, item.suggestRatio)} · 约 ${money(item.suggestAmount)} 元`
   }
   return item.action === 'HOLD' ? '持有不动 · 继续跟踪' : '暂不操作 · 继续观察'
 }

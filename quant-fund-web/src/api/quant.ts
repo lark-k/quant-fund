@@ -3,6 +3,9 @@ import { mockApi } from './mock'
 import type {
   AiAnalysisReport,
   AiRuntimeConfig,
+  BacktestBatchResponse,
+  BacktestNavRefreshResponse,
+  BacktestRunRequest,
   ClearHoldingRequest,
   DashboardOverview,
   DataSourceConfig,
@@ -95,6 +98,12 @@ export const quantApi = {
   },
   analyzeQuantAccount(accountId: number): Promise<QuantSignal[]> {
     return USE_MOCK ? mockApi.analyzeQuantAccount(accountId) : http.post(`/quant/accounts/${accountId}/analyze`, undefined, { timeout: 90000, suppressErrorMessage: true })
+  },
+  runBacktest(request: BacktestRunRequest): Promise<BacktestBatchResponse> {
+    return http.post('/backtests/run', request, { timeout: 360000 })
+  },
+  refreshBacktestNavCache(request: BacktestRunRequest): Promise<BacktestNavRefreshResponse> {
+    return http.post('/backtests/nav-cache/refresh', request, { timeout: 360000 })
   },
   aiHistory(): Promise<AiAnalysisReport[]> {
     return USE_MOCK ? mockApi.aiHistory() : http.get('/ai-analysis/history')

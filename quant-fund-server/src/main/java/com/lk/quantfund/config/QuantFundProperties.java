@@ -2,6 +2,7 @@ package com.lk.quantfund.config;
 
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
+import java.math.BigDecimal;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
@@ -251,7 +252,7 @@ public class QuantFundProperties {
         @Min(1000)
         private int backtestTimeoutMs = 300000;
         @NotBlank
-        private String modelVersion = "rule-v1.0.0";
+        private String modelVersion = "rule-v1.19.0";
         private boolean fallbackToJavaRules = true;
         @NotBlank
         private String decisionDeadline = "15:00:00";
@@ -261,6 +262,17 @@ public class QuantFundProperties {
         private int maxBacktestFunds = 1000;
         @Min(1)
         private int maxParamGrid = 100;
+        private BigDecimal buyThreshold = new BigDecimal("55.0000");
+        private BigDecimal sellThreshold = new BigDecimal("12.0000");
+        private BigDecimal maxSinglePositionRate = new BigDecimal("45.0000");
+        private BigDecimal buyStepRatio = new BigDecimal("15.0000");
+        private BigDecimal sellStepRatio = new BigDecimal("15.0000");
+        private BigDecimal takeProfitRate = new BigDecimal("300.0000");
+        private BigDecimal stopLossRate = new BigDecimal("-18.0000");
+        private int minNavSamples = 20;
+        private int warmupDays = 90;
+        private BigDecimal trendHoldReturn20d = new BigDecimal("2.0000");
+        private BigDecimal trendHoldMa20Deviation = new BigDecimal("-6.0000");
 
         public boolean isEnabled() {
             return enabled;
@@ -348,6 +360,94 @@ public class QuantFundProperties {
 
         public void setMaxParamGrid(int maxParamGrid) {
             this.maxParamGrid = maxParamGrid;
+        }
+
+        public BigDecimal getBuyThreshold() {
+            return buyThreshold;
+        }
+
+        public void setBuyThreshold(BigDecimal buyThreshold) {
+            this.buyThreshold = buyThreshold;
+        }
+
+        public BigDecimal getSellThreshold() {
+            return sellThreshold;
+        }
+
+        public void setSellThreshold(BigDecimal sellThreshold) {
+            this.sellThreshold = sellThreshold;
+        }
+
+        public BigDecimal getMaxSinglePositionRate() {
+            return maxSinglePositionRate;
+        }
+
+        public void setMaxSinglePositionRate(BigDecimal maxSinglePositionRate) {
+            this.maxSinglePositionRate = maxSinglePositionRate;
+        }
+
+        public BigDecimal getBuyStepRatio() {
+            return buyStepRatio;
+        }
+
+        public void setBuyStepRatio(BigDecimal buyStepRatio) {
+            this.buyStepRatio = buyStepRatio;
+        }
+
+        public BigDecimal getSellStepRatio() {
+            return sellStepRatio;
+        }
+
+        public void setSellStepRatio(BigDecimal sellStepRatio) {
+            this.sellStepRatio = sellStepRatio;
+        }
+
+        public BigDecimal getTakeProfitRate() {
+            return takeProfitRate;
+        }
+
+        public void setTakeProfitRate(BigDecimal takeProfitRate) {
+            this.takeProfitRate = takeProfitRate;
+        }
+
+        public BigDecimal getStopLossRate() {
+            return stopLossRate;
+        }
+
+        public void setStopLossRate(BigDecimal stopLossRate) {
+            this.stopLossRate = stopLossRate;
+        }
+
+        public int getMinNavSamples() {
+            return minNavSamples;
+        }
+
+        public void setMinNavSamples(int minNavSamples) {
+            this.minNavSamples = minNavSamples;
+        }
+
+        public int getWarmupDays() {
+            return warmupDays;
+        }
+
+        public void setWarmupDays(int warmupDays) {
+            this.warmupDays = warmupDays;
+        }
+
+        public BigDecimal getTrendHoldReturn20d() {
+            return trendHoldReturn20d;
+        }
+
+        public void setTrendHoldReturn20d(BigDecimal trendHoldReturn20d) {
+            this.trendHoldReturn20d = trendHoldReturn20d;
+        }
+
+        public BigDecimal getTrendHoldMa20Deviation() {
+            return trendHoldMa20Deviation;
+        }
+
+        public void setTrendHoldMa20Deviation(BigDecimal trendHoldMa20Deviation) {
+            this.trendHoldMa20Deviation = trendHoldMa20Deviation;
         }
     }
 

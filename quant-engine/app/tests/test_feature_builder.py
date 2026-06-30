@@ -13,7 +13,7 @@ def test_feature_builder_calculates_returns_ma_and_position_ratios():
     assert features["navSampleSize"] == 80
     assert features["return20d"] > 0
     assert features["ma20"] > 0
-    assert features["positionToSingleLimit"] == 0.48
+    assert features["positionToSingleLimit"] == 0.2667
     assert features["equityPositionToLimit"] == 0.6429
 
 

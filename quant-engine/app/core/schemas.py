@@ -100,6 +100,20 @@ class MarketContext(ApiModel):
         return value
 
 
+class BacktestStrategyParams(ApiModel):
+    buyThreshold: float = 55
+    sellThreshold: float = 12
+    maxSinglePositionRate: float = 45
+    buyStepRatio: float = 15
+    sellStepRatio: float = 15
+    takeProfitRate: float = 300
+    stopLossRate: float = -18
+    minNavSamples: int = 20
+    warmupDays: int = 90
+    trendHoldReturn20d: float = 2
+    trendHoldMa20Deviation: float = -6
+
+
 class QuantAnalyzeRequest(ApiModel):
     requestId: str
     userId: int | None = None
@@ -108,6 +122,7 @@ class QuantAnalyzeRequest(ApiModel):
     holding: HoldingSnapshot
     navSeries: list[NavPoint] = Field(default_factory=list)
     tradeRecords: list[TradeRecord] = Field(default_factory=list)
+    strategyParams: BacktestStrategyParams = Field(default_factory=BacktestStrategyParams)
     market: MarketContext = Field(default_factory=MarketContext)
 
 
@@ -151,3 +166,162 @@ class QuantBatchAnalyzeResponse(ApiModel):
     successCount: int
     failedCount: int
     errors: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class BacktestOptions(ApiModel):
+    workers: int = 6
+    saveEquityCurve: bool = True
+    saveTrades: bool = True
+
+
+class BacktestFund(ApiModel):
+    fundCode: str
+    fundName: str = ""
+    fundType: str = "UNKNOWN"
+    navSeries: list[NavPoint] = Field(default_factory=list)
+
+
+class BacktestRunRequest(ApiModel):
+    fundCode: str
+    fundName: str = ""
+    fundType: str = "UNKNOWN"
+    startDate: str
+    endDate: str
+    initialCash: float = 10000
+    feeRate: float = 0.0015
+    navSeries: list[NavPoint] = Field(default_factory=list)
+    strategyParams: BacktestStrategyParams = Field(default_factory=BacktestStrategyParams)
+
+
+class BacktestBatchRunRequest(ApiModel):
+    taskName: str = "rule-backtest"
+    strategyName: str = "QuantRuleEngine"
+    startDate: str
+    endDate: str
+    initialCash: float = 10000
+    feeRate: float = 0.0015
+    funds: list[BacktestFund] = Field(default_factory=list)
+    strategyParams: BacktestStrategyParams = Field(default_factory=BacktestStrategyParams)
+    options: BacktestOptions = Field(default_factory=BacktestOptions)
+
+
+class BacktestTrade(ApiModel):
+    date: str
+    action: Literal["BUY", "SELL"]
+    amount: float
+    share: float
+    nav: float
+    fee: float
+    score: float
+    reason: str
+    tradeRatio: float = 0
+    positionRateBefore: float = 0
+    positionRateAfter: float = 0
+    return5d: float = 0
+    return20d: float = 0
+    return60d: float = 0
+    ma20Deviation: float = 0
+    maxDrawdown60d: float = 0
+    trendScore: float = 0
+    opportunityScore: float = 0
+    riskScore: float = 0
+
+
+class BacktestEquityPoint(ApiModel):
+    date: str
+    totalAsset: float
+    cash: float
+    positionValue: float
+    positionRate: float
+    nav: float
+    signalScore: float
+    action: str
+
+
+class BacktestResult(ApiModel):
+    strategyName: str
+    modelVersion: str
+    fundCode: str
+    fundName: str = ""
+    fundType: str = "UNKNOWN"
+    startDate: str
+    endDate: str
+    initialCash: float
+    finalAsset: float
+    benchmarkFinalAsset: float
+    positionBenchmarkFinalAsset: float
+    totalReturnRate: float
+    annualReturnRate: float
+    benchmarkReturnRate: float
+    positionBenchmarkReturnRate: float
+    excessReturnRate: float
+    positionExcessReturnRate: float
+    maxDrawdownRate: float
+    benchmarkMaxDrawdownRate: float
+    positionBenchmarkMaxDrawdownRate: float
+    positionBenchmarkRate: float
+    winRate: float
+    sharpeRatio: float | None = None
+    calmarRatio: float | None = None
+    tradeCount: int
+    turnoverRate: float
+    navSampleSize: int
+    dataCoverageRate: float = 0
+    passed: bool
+    diagnosis: str
+    equityCurve: list[BacktestEquityPoint] = Field(default_factory=list)
+    trades: list[BacktestTrade] = Field(default_factory=list)
+
+
+class BacktestSummary(ApiModel):
+    avgAnnualReturnRate: float = 0
+    medianAnnualReturnRate: float = 0
+    p10AnnualReturnRate: float = 0
+    avgMaxDrawdownRate: float = 0
+    medianMaxDrawdownRate: float = 0
+    worstMaxDrawdownRate: float = 0
+    winFundRate: float = 0
+    outperformBuyHoldRate: float = 0
+    outperformPositionBenchmarkRate: float = 0
+    avgPositionExcessReturnRate: float = 0
+    avgTradeCount: float = 0
+    avgSharpeRatio: float = 0
+    avgCalmarRatio: float = 0
+    passRate: float = 0
+    diagnosis: str = "NO_DATA"
+
+
+class BacktestBatchRunResponse(ApiModel):
+    taskId: str
+    taskName: str
+    status: Literal["COMPLETED", "FAILED"]
+    strategyName: str
+    modelVersion: str
+    fundCount: int
+    successCount: int
+    failedCount: int
+    summary: BacktestSummary
+    results: list[BacktestResult] = Field(default_factory=list)
+    errors: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class BacktestGridRunRequest(BacktestBatchRunRequest):
+    paramGrid: dict[str, list[float]] = Field(default_factory=dict)
+
+
+class BacktestGridResult(ApiModel):
+    rank: int
+    annualReturnRate: float
+    maxDrawdownRate: float
+    calmarRatio: float
+    outperformBuyHoldRate: float
+    passRate: float
+    params: dict[str, float]
+
+
+class BacktestGridRunResponse(ApiModel):
+    taskId: str
+    status: Literal["COMPLETED", "FAILED"]
+    combinationCount: int
+    bestParams: dict[str, float]
+    topResults: list[BacktestGridResult]

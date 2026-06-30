@@ -147,6 +147,52 @@ class FundHoldingServiceImplTest {
     }
 
     @Test
+    void syncOfficialNavDoesNotMoveExistingNavDateSnapshotForDelayedFund() {
+        FundHolding holding = holding();
+        PortfolioAccount account = account();
+        TradingCalendarService tradingCalendarService = mock(TradingCalendarService.class);
+        LocalDate navDate = LocalDate.now().minusDays(1);
+        LocalDate effectiveDate = LocalDate.now();
+        HoldingSnapshot existingNavDateSnapshot = new HoldingSnapshot();
+        existingNavDateSnapshot.setId(201L);
+        existingNavDateSnapshot.setHoldingId(holding.getId());
+        existingNavDateSnapshot.setSnapshotDate(navDate);
+        existingNavDateSnapshot.setDailyProfit(new BigDecimal("-82.0300"));
+        when(holdingMapper.selectList(any())).thenReturn(List.of(holding), List.of());
+        when(fundQueryService.getHistoricalNav(any(), any(), any())).thenReturn(List.of(
+                navPoint(navDate.minusDays(1), "1.0000"),
+                navPoint(navDate, "0.9500")
+        ));
+        when(accountMapper.selectById(10L)).thenReturn(account);
+        when(snapshotMapper.selectOne(any())).thenReturn(null, existingNavDateSnapshot);
+        when(tradingCalendarService.nextTradingDay(navDate)).thenReturn(effectiveDate);
+        FundHoldingServiceImpl service = new FundHoldingServiceImpl(
+                holdingMapper,
+                accountMapper,
+                mock(AiAnalysisReportMapper.class),
+                portfolioAccountService,
+                strategyService,
+                fundQueryService,
+                valuationService,
+                tradingCalendarService,
+                snapshotMapper,
+                backfillService,
+                tradeRecordMapper
+        );
+        ArgumentCaptor<HoldingSnapshot> snapshotCaptor = ArgumentCaptor.forClass(HoldingSnapshot.class);
+
+        try (MockedStatic<UserContext> userContext = Mockito.mockStatic(UserContext.class)) {
+            userContext.when(UserContext::getUserId).thenReturn(1L);
+            service.syncOfficialNav();
+        }
+
+        verify(snapshotMapper).insert(snapshotCaptor.capture());
+        assertThat(snapshotCaptor.getValue().getSnapshotDate()).isEqualTo(effectiveDate);
+        verify(snapshotMapper, never()).updateById(any(HoldingSnapshot.class));
+        verify(snapshotMapper, never()).deleteById(201L);
+    }
+
+    @Test
     void recalculateShouldRejectMissingAmountAndShareWithReadableMessage() {
         FundHolding holding = holding();
         holding.setHoldingAmount(BigDecimal.ZERO);

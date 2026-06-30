@@ -832,17 +832,11 @@ public class FundHoldingServiceImpl implements FundHoldingService {
             snapshot = holdingSnapshotMapper.selectByHoldingAndDateIncludingDeleted(holding.getId(), snapshotDate);
             restoreSnapshotIfDeleted(snapshot);
         }
-        HoldingSnapshot legacyDelayedSnapshot = legacyDelayedSnapshot(holding, officialNav.navDate(), snapshotDate);
         boolean insert = snapshot == null;
         if (insert) {
-            snapshot = legacyDelayedSnapshot == null ? new HoldingSnapshot() : legacyDelayedSnapshot;
-            insert = legacyDelayedSnapshot == null;
-            if (insert) {
-                snapshot.setCreateTime(now);
-                snapshot.setDeleted(0);
-            }
-        } else if (legacyDelayedSnapshot != null && legacyDelayedSnapshot.getId() != null) {
-            holdingSnapshotMapper.deleteById(legacyDelayedSnapshot.getId());
+            snapshot = new HoldingSnapshot();
+            snapshot.setCreateTime(now);
+            snapshot.setDeleted(0);
         }
         if (!insert && historicalSnapshotDate(snapshotDate)) {
             return;
@@ -885,13 +879,6 @@ public class FundHoldingServiceImpl implements FundHoldingService {
                 .eq(HoldingSnapshot::getHoldingId, holdingId)
                 .eq(HoldingSnapshot::getSnapshotDate, snapshotDate)
                 .last("LIMIT 1"));
-    }
-
-    private HoldingSnapshot legacyDelayedSnapshot(FundHolding holding, LocalDate navDate, LocalDate snapshotDate) {
-        if (!delayedOfficialNavFund(holding) || navDate == null || navDate.equals(snapshotDate)) {
-            return null;
-        }
-        return findSnapshot(holding.getId(), navDate);
     }
 
     private LocalDate officialNavEffectiveDate(FundHolding holding, LocalDate navDate) {

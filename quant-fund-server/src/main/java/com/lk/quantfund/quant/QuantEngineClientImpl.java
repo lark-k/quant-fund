@@ -1,6 +1,8 @@
 package com.lk.quantfund.quant;
 
 import com.lk.quantfund.config.QuantFundProperties;
+import com.lk.quantfund.dto.backtest.QuantBacktestPayloads.BatchResponse;
+import com.lk.quantfund.dto.backtest.QuantBacktestPayloads.EngineBatchRequest;
 import com.lk.quantfund.dto.quant.QuantAnalyzeBatchRequest;
 import com.lk.quantfund.dto.quant.QuantAnalyzeBatchResponse;
 import com.lk.quantfund.dto.quant.QuantAnalyzeRequest;
@@ -59,6 +61,17 @@ public class QuantEngineClientImpl implements QuantEngineClient {
                 Duration.ofMillis(properties.getQuantEngine().getBatchTimeoutMs())
         );
         return response == null || response.results() == null ? List.of() : response.results();
+    }
+
+    @Override
+    public BatchResponse runBacktestBatch(EngineBatchRequest request) {
+        return post(
+                "quant_backtest_batch",
+                "/api/v1/backtest/run-batch",
+                request,
+                BatchResponse.class,
+                Duration.ofMillis(properties.getQuantEngine().getBacktestTimeoutMs())
+        );
     }
 
     @Override

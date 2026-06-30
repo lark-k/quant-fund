@@ -5,6 +5,7 @@ import {
   Bell,
   Calendar,
   DataAnalysis,
+  DataLine,
   Document,
   Fold,
   Grid,
@@ -39,6 +40,7 @@ const navItems = [
   { to: '/ai-analysis', label: '智能分析', icon: DataAnalysis },
   { to: '/profit-analysis', label: '收益分析', icon: TrendCharts },
   { to: '/profit-calendar', label: '收益日历', icon: Calendar },
+  { to: '/backtest-validation', label: '回测验证', icon: DataLine },
   { to: '/trades', label: '交易流水', icon: Operation },
   { to: '/strategy-config', label: '策略配置', icon: Histogram },
   { to: '/system-config', label: '系统配置', icon: Setting }
@@ -48,6 +50,7 @@ const mobileNavItems = [
   { to: '/dashboard', label: '首页', icon: Grid },
   { to: '/holdings', label: '持仓', icon: Money },
   { to: '/ai-analysis', label: '智能', icon: DataAnalysis },
+  { to: '/backtest-validation', label: '回测', icon: DataLine },
   { to: '/trades', label: '交易', icon: Operation },
   { to: '/profile', label: '我的', icon: UserFilled }
 ]

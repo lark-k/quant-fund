@@ -145,6 +145,77 @@ Batch mode is the required integration path for account-level analysis and
 backtest-style bulk evaluation. Java should not call the single-analysis API in
 a per-fund loop for large batches.
 
+### Rule Backtest
+
+```http
+POST /api/v1/backtest/run
+POST /api/v1/backtest/run-batch
+POST /api/v1/backtest/run-grid
+```
+
+Batch request shape:
+
+```json
+{
+  "taskName": "rule-v1-current-holdings",
+  "strategyName": "QuantRuleEngine",
+  "startDate": "2025-06-30",
+  "endDate": "2026-06-30",
+  "initialCash": 10000,
+  "feeRate": 0.0015,
+  "funds": [
+    {
+      "fundCode": "025833",
+      "fundName": "Example Index Fund",
+      "fundType": "INDEX",
+      "navSeries": [
+        {"date": "2025-06-30", "nav": 1.0, "dailyGrowthRate": 0.0}
+      ]
+    }
+  ],
+  "strategyParams": {
+    "buyThreshold": 55,
+    "sellThreshold": 12,
+    "maxSinglePositionRate": 45,
+    "buyStepRatio": 15,
+    "sellStepRatio": 15,
+    "takeProfitRate": 300,
+    "stopLossRate": -18,
+    "warmupDays": 90,
+    "trendHoldReturn20d": 2,
+    "trendHoldMa20Deviation": -6
+  },
+  "options": {
+    "workers": 6,
+    "saveEquityCurve": true,
+    "saveTrades": true
+  }
+}
+```
+
+Backtest uses only supplied historical NAV data. It does not request East
+Money, Tiantian Fund, or any external market data source. Use
+`QUANT_ENGINE_BACKTEST_WORKERS=6` as the default local setting for the target
+Y9000P machine.
+
+The response includes two benchmark views:
+
+- `benchmarkReturnRate`: full-position buy-and-hold from the first backtest day.
+- `positionBenchmarkReturnRate`: buy-and-hold using the same position cap as
+  `maxSinglePositionRate`, with remaining cash left idle. This is the fairer
+  view for account-level risk-control parameters.
+
+`warmupDays` controls how many cached NAV calendar days are supplied before
+the requested start date for indicator preheating. Return, benchmark, drawdown,
+equity curve, and pass/fail metrics still start from the requested start date.
+When `totalScore` falls below `sellThreshold`, the engine keeps holding if the
+20-day return is above `trendHoldReturn20d` and the 20-day moving-average
+deviation is not below `trendHoldMa20Deviation`. The same two parameters also
+participate in the strong-trend lock, together with 60-day return, 60-day
+drawdown, and extreme-risk checks. The current recommended defaults favor a
+slightly stricter normal buy threshold while letting strong-trend funds build
+positions faster.
+
 ## Rule Constraints
 
 - The service only generates suggestions. It never places trades.
@@ -156,11 +227,9 @@ a per-fund loop for large batches.
 - Large language models may explain returned results later, but must not
   override the deterministic action returned by this engine.
 
-## Known Phase 1 Limits
+## Known Limits
 
-- Backtest APIs are intentionally not implemented in this first round.
 - LightGBM/XGBoost and deep learning are intentionally not enabled.
-- Historical data must be supplied by Java or local cache in later phases; this
-  service does not call East Money, Tiantian Fund, or any external market data
-  source.
+- Historical data must be supplied by Java or local cache; this service does
+  not call East Money, Tiantian Fund, or any external market data source.
 - Confidence is a rule-model confidence score, not an accuracy guarantee.

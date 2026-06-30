@@ -193,6 +193,154 @@ export interface QuantEngineHealth {
   enabled: boolean
 }
 
+export type BacktestRunRequest = {
+  accountId?: number
+  fundCodes?: string[]
+  startDate: string
+  endDate: string
+  initialCash: number
+  feeRate: number
+  strategyParams: {
+    buyThreshold: number
+    sellThreshold: number
+    maxSinglePositionRate: number
+    buyStepRatio: number
+    sellStepRatio: number
+    takeProfitRate: number
+    stopLossRate: number
+    minNavSamples: number
+    warmupDays: number
+    trendHoldReturn20d: number
+    trendHoldMa20Deviation: number
+  }
+  options: {
+    workers: number
+    saveEquityCurve: boolean
+    saveTrades: boolean
+  }
+}
+
+export type BacktestEquityPoint = {
+  date: string
+  totalAsset: number
+  cash: number
+  positionValue: number
+  positionRate: number
+  nav: number
+  signalScore: number
+  action: string
+}
+
+export type BacktestTrade = {
+  date: string
+  action: 'BUY' | 'SELL'
+  amount: number
+  share: number
+  nav: number
+  fee: number
+  score: number
+  reason: string
+  tradeRatio: number
+  positionRateBefore: number
+  positionRateAfter: number
+  return5d: number
+  return20d: number
+  return60d: number
+  ma20Deviation: number
+  maxDrawdown60d: number
+  trendScore: number
+  opportunityScore: number
+  riskScore: number
+}
+
+export type BacktestResult = {
+  strategyName: string
+  modelVersion: string
+  fundCode: string
+  fundName: string
+  fundType: string
+  startDate: string
+  endDate: string
+  initialCash: number
+  finalAsset: number
+  benchmarkFinalAsset: number
+  positionBenchmarkFinalAsset: number
+  totalReturnRate: number
+  annualReturnRate: number
+  benchmarkReturnRate: number
+  positionBenchmarkReturnRate: number
+  excessReturnRate: number
+  positionExcessReturnRate: number
+  maxDrawdownRate: number
+  benchmarkMaxDrawdownRate: number
+  positionBenchmarkMaxDrawdownRate: number
+  positionBenchmarkRate: number
+  winRate: number
+  sharpeRatio: number | null
+  calmarRatio: number | null
+    tradeCount: number
+    turnoverRate: number
+    navSampleSize: number
+    dataCoverageRate: number
+    passed: boolean
+    diagnosis: string
+    equityCurve: BacktestEquityPoint[]
+    trades: BacktestTrade[]
+}
+
+export type BacktestNavRefreshItem = {
+  fundCode: string
+  fundName: string
+  requestedStartDate: string
+  requestedEndDate: string
+  navCount: number
+  firstNavDate: string | null
+  lastNavDate: string | null
+  status: string
+  message: string
+}
+
+export type BacktestNavRefreshResponse = {
+  fundCount: number
+  successCount: number
+  failedCount: number
+  requestedStartDate: string
+  requestedEndDate: string
+  results: BacktestNavRefreshItem[]
+}
+
+export type BacktestSummary = {
+  avgAnnualReturnRate: number
+  medianAnnualReturnRate: number
+  p10AnnualReturnRate: number
+  avgMaxDrawdownRate: number
+  medianMaxDrawdownRate: number
+  worstMaxDrawdownRate: number
+  winFundRate: number
+  outperformBuyHoldRate: number
+  outperformPositionBenchmarkRate: number
+  avgPositionExcessReturnRate: number
+  avgTradeCount: number
+  avgSharpeRatio: number
+  avgCalmarRatio: number
+  passRate: number
+  diagnosis: string
+}
+
+export type BacktestBatchResponse = {
+  taskId: string
+  taskName: string
+  status: string
+  strategyName: string
+  modelVersion: string
+  fundCount: number
+  successCount: number
+  failedCount: number
+  summary: BacktestSummary
+  results: BacktestResult[]
+  errors: Array<Record<string, unknown>>
+}
+
 export interface DashboardRiskAlert {
   id: string
   sourceType: string

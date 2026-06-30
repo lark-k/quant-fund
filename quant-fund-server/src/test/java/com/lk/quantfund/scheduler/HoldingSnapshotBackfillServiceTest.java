@@ -79,6 +79,54 @@ class HoldingSnapshotBackfillServiceTest {
     }
 
     @Test
+    void ensureSnapshotDoesNotRestoreDeletedHistoricalSnapshot() {
+        QuantFundProperties properties = new QuantFundProperties();
+        TradingCalendarService calendarService = new TradingCalendarService(properties);
+        FundHoldingMapper holdingMapper = mock(FundHoldingMapper.class);
+        PortfolioAccountMapper accountMapper = mock(PortfolioAccountMapper.class);
+        HoldingSnapshotMapper snapshotMapper = mock(HoldingSnapshotMapper.class);
+        HoldingSnapshotBackfillService service = new HoldingSnapshotBackfillService(
+                holdingMapper, accountMapper, snapshotMapper, calendarService, properties);
+        LocalDate snapshotDate = LocalDate.now().minusDays(1);
+        HoldingSnapshot deletedSnapshot = new HoldingSnapshot();
+        deletedSnapshot.setId(88L);
+        deletedSnapshot.setDeleted(1);
+        when(holdingMapper.selectList(any())).thenReturn(List.of(holding(LocalDate.of(2026, 6, 1))));
+        when(accountMapper.selectById(10L)).thenReturn(account());
+        when(snapshotMapper.selectOne(any())).thenReturn(null);
+        when(snapshotMapper.selectByHoldingAndDateIncludingDeleted(100L, snapshotDate)).thenReturn(deletedSnapshot);
+
+        service.ensureSnapshot(1L, snapshotDate);
+
+        verify(snapshotMapper, never()).restoreById(88L);
+        verify(snapshotMapper, never()).insert(any(HoldingSnapshot.class));
+        verify(snapshotMapper, never()).updateById(any(HoldingSnapshot.class));
+    }
+
+    @Test
+    void ensureSnapshotDoesNotBackfillFromHoldingUpdatedAfterSnapshotDate() {
+        QuantFundProperties properties = new QuantFundProperties();
+        TradingCalendarService calendarService = new TradingCalendarService(properties);
+        FundHoldingMapper holdingMapper = mock(FundHoldingMapper.class);
+        PortfolioAccountMapper accountMapper = mock(PortfolioAccountMapper.class);
+        HoldingSnapshotMapper snapshotMapper = mock(HoldingSnapshotMapper.class);
+        HoldingSnapshotBackfillService service = new HoldingSnapshotBackfillService(
+                holdingMapper, accountMapper, snapshotMapper, calendarService, properties);
+        LocalDate snapshotDate = LocalDate.now().minusDays(1);
+        FundHolding holding = holding(LocalDate.of(2026, 6, 1));
+        holding.setUpdateTime(snapshotDate.plusDays(1).atTime(22, 50));
+        when(holdingMapper.selectList(any())).thenReturn(List.of(holding));
+        when(accountMapper.selectById(10L)).thenReturn(account());
+        when(snapshotMapper.selectOne(any())).thenReturn(null);
+        when(snapshotMapper.selectByHoldingAndDateIncludingDeleted(100L, snapshotDate)).thenReturn(null);
+
+        service.ensureSnapshot(1L, snapshotDate);
+
+        verify(snapshotMapper, never()).insert(any(HoldingSnapshot.class));
+        verify(snapshotMapper, never()).updateById(any(HoldingSnapshot.class));
+    }
+
+    @Test
     void ensureSnapshotCopiesHoldingAndAccountValues() {
         QuantFundProperties properties = new QuantFundProperties();
         TradingCalendarService calendarService = new TradingCalendarService(properties);

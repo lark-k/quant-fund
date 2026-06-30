@@ -438,10 +438,6 @@ public class ScheduledFundTaskService {
     }
 
     private void upsertSnapshot(HoldingSnapshot snapshot) {
-        upsertSnapshot(snapshot, null);
-    }
-
-    private void upsertSnapshot(HoldingSnapshot snapshot, HoldingSnapshot legacyDelayedSnapshot) {
         HoldingSnapshot existing = holdingSnapshotMapper.selectOne(new LambdaQueryWrapper<HoldingSnapshot>()
                 .eq(HoldingSnapshot::getHoldingId, snapshot.getHoldingId())
                 .eq(HoldingSnapshot::getSnapshotDate, snapshot.getSnapshotDate())
@@ -449,26 +445,14 @@ public class ScheduledFundTaskService {
         if (existing == null) {
             existing = holdingSnapshotMapper.selectByHoldingAndDateIncludingDeleted(
                     snapshot.getHoldingId(), snapshot.getSnapshotDate());
-            restoreSnapshotIfDeleted(existing);
         }
         if (existing == null) {
-            if (legacyDelayedSnapshot != null) {
-                snapshot.setId(legacyDelayedSnapshot.getId());
-                snapshot.setCreateTime(legacyDelayedSnapshot.getCreateTime());
-                snapshot.setDeleted(legacyDelayedSnapshot.getDeleted());
-                holdingSnapshotMapper.updateById(snapshot);
-                return;
-            }
             try {
                 holdingSnapshotMapper.insert(snapshot);
             } catch (DuplicateKeyException exception) {
-                restoreSnapshotIfDeleted(holdingSnapshotMapper.selectByHoldingAndDateIncludingDeleted(
-                        snapshot.getHoldingId(), snapshot.getSnapshotDate()));
+                // A concurrent sync created or deleted the row first; deleted historical snapshots stay deleted.
             }
             return;
-        }
-        if (legacyDelayedSnapshot != null && legacyDelayedSnapshot.getId() != null) {
-            holdingSnapshotMapper.deleteById(legacyDelayedSnapshot.getId());
         }
         if (historicalSnapshotDate(snapshot.getSnapshotDate())) {
             return;
@@ -477,13 +461,6 @@ public class ScheduledFundTaskService {
         snapshot.setCreateTime(existing.getCreateTime());
         snapshot.setDeleted(existing.getDeleted());
         holdingSnapshotMapper.updateById(snapshot);
-    }
-
-    private void restoreSnapshotIfDeleted(HoldingSnapshot snapshot) {
-        if (snapshot != null && Integer.valueOf(1).equals(snapshot.getDeleted())) {
-            holdingSnapshotMapper.restoreById(snapshot.getId());
-            snapshot.setDeleted(0);
-        }
     }
 
     private boolean historicalSnapshotDate(LocalDate snapshotDate) {

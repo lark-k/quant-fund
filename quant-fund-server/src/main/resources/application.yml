@@ -77,12 +77,23 @@ quantfund:
     timeout-ms: ${QUANT_ENGINE_TIMEOUT_MS:8000}
     batch-timeout-ms: ${QUANT_ENGINE_BATCH_TIMEOUT_MS:60000}
     backtest-timeout-ms: ${QUANT_ENGINE_BACKTEST_TIMEOUT_MS:300000}
-    model-version: ${QUANT_ENGINE_MODEL_VERSION:rule-v1.1.0}
+    model-version: ${QUANT_ENGINE_MODEL_VERSION:rule-v1.19.0}
     fallback-to-java-rules: ${QUANT_ENGINE_FALLBACK_TO_JAVA_RULES:true}
     decision-deadline: ${QUANT_ENGINE_DECISION_DEADLINE:15:00:00}
     max-batch-holdings: ${QUANT_ENGINE_MAX_BATCH_HOLDINGS:100}
     max-backtest-funds: ${QUANT_ENGINE_MAX_BACKTEST_FUNDS:1000}
     max-param-grid: ${QUANT_ENGINE_MAX_PARAM_GRID:100}
+    buy-threshold: ${QUANT_ENGINE_BUY_THRESHOLD:55}
+    sell-threshold: ${QUANT_ENGINE_SELL_THRESHOLD:12}
+    max-single-position-rate: ${QUANT_ENGINE_MAX_SINGLE_POSITION_RATE:45}
+    buy-step-ratio: ${QUANT_ENGINE_BUY_STEP_RATIO:15}
+    sell-step-ratio: ${QUANT_ENGINE_SELL_STEP_RATIO:15}
+    take-profit-rate: ${QUANT_ENGINE_TAKE_PROFIT_RATE:300}
+    stop-loss-rate: ${QUANT_ENGINE_STOP_LOSS_RATE:-18}
+    min-nav-samples: ${QUANT_ENGINE_MIN_NAV_SAMPLES:20}
+    warmup-days: ${QUANT_ENGINE_WARMUP_DAYS:90}
+    trend-hold-return20d: ${QUANT_ENGINE_TREND_HOLD_RETURN20D:2}
+    trend-hold-ma20-deviation: ${QUANT_ENGINE_TREND_HOLD_MA20_DEVIATION:-6}
   scheduler:
     enabled: ${QUANTFUND_SCHEDULER_ENABLED:true}
     holidays: ${QUANTFUND_TRADING_HOLIDAYS:2026-01-01,2026-02-16,2026-02-17,2026-02-18,2026-02-19,2026-02-20,2026-04-06,2026-05-01,2026-05-04,2026-05-05,2026-06-19,2026-09-25,2026-10-01,2026-10-02,2026-10-05,2026-10-06,2026-10-07}

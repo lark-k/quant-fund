@@ -10,7 +10,7 @@ def test_rule_model_returns_complete_signal_shape():
 
     assert response.fundCode == "025833"
     assert response.action in {"BUY", "SELL", "HOLD", "WATCH"}
-    assert response.modelVersion == "rule-v1.1.0"
+    assert response.modelVersion == "rule-v1.19.0"
     assert response.score.totalScore >= 0
     assert "return20d" in response.metrics
     assert response.reasons
@@ -26,11 +26,11 @@ def test_rule_model_enforces_no_buy_after_1457_even_when_scores_are_high():
     assert any("14:57" in reason for reason in response.reasons)
 
 
-def test_rule_model_keeps_qdii_from_intraday_buy():
+def test_rule_model_allows_qdii_intraday_buy():
     holding = HoldingSnapshot(fundCode="968000", fundName="QDII Fund", fundType="QDII", positionRate=5)
     request = make_request(holding=holding)
 
     response = RuleQuantModel(Settings()).analyze(request)
 
-    assert response.action != "BUY"
-    assert any("QDII" in reason for reason in response.reasons)
+    assert response.action == "BUY"
+    assert not any("QDII" in reason for reason in response.reasons)
