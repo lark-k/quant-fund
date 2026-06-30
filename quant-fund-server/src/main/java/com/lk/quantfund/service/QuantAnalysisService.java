@@ -13,6 +13,8 @@ public interface QuantAnalysisService {
 
     List<QuantSignalVO> analyzeAccount(Long accountId);
 
+    List<QuantSignalVO> analyzeAccountForUser(Long userId, Long accountId);
+
     List<QuantSignalVO> latestSignals(Long accountId, Long holdingId, String fundCode, StrategyAction action);
 
     QuantEngineHealthVO health();

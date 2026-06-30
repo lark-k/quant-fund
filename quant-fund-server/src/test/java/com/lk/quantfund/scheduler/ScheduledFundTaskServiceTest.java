@@ -19,8 +19,10 @@ import com.lk.quantfund.mapper.PortfolioAccountMapper;
 import com.lk.quantfund.service.AiAnalysisService;
 import com.lk.quantfund.service.FundQueryService;
 import com.lk.quantfund.service.PortfolioAccountService;
+import com.lk.quantfund.service.QuantAnalysisService;
 import com.lk.quantfund.service.StrategyService;
 import com.lk.quantfund.service.valuation.FundValuationService;
+import com.lk.quantfund.vo.quant.QuantSignalVO;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -29,6 +31,41 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 class ScheduledFundTaskServiceTest {
+
+    @Test
+    void generateQuantSignalsAnalyzesEnabledAccountsInBatch() {
+        QuantFundProperties properties = new QuantFundProperties();
+        FundQueryService fundQueryService = mock(FundQueryService.class);
+        PortfolioAccountMapper accountMapper = mock(PortfolioAccountMapper.class);
+        QuantAnalysisService quantAnalysisService = mock(QuantAnalysisService.class);
+        PortfolioAccount account = account();
+        account.setUserId(1L);
+        account.setStatus("ENABLED");
+        when(accountMapper.selectList(any())).thenReturn(List.of(account));
+        when(quantAnalysisService.analyzeAccountForUser(1L, 10L)).thenReturn(List.of(
+                mock(QuantSignalVO.class),
+                mock(QuantSignalVO.class)
+        ));
+        ScheduledFundTaskService service = new ScheduledFundTaskService(
+                properties,
+                fundQueryService,
+                mock(AiAnalysisService.class),
+                mock(StrategyService.class),
+                quantAnalysisService,
+                mock(PortfolioAccountService.class),
+                mock(FundHoldingMapper.class),
+                accountMapper,
+                mock(HoldingSnapshotMapper.class),
+                mock(FundValuationService.class),
+                new TradingCalendarService(properties)
+        );
+
+        SchedulerTaskResult result = service.generateQuantSignals();
+
+        assertThat(result.getSuccessCount()).isEqualTo(2);
+        assertThat(result.getFailureCount()).isZero();
+        verify(quantAnalysisService).analyzeAccountForUser(1L, 10L);
+    }
 
     @Test
     void refreshIntradayEstimatesSkipsOutsideTradingWindowWithoutWritingHoldings() {
@@ -42,6 +79,7 @@ class ScheduledFundTaskServiceTest {
                 fundQueryService,
                 mock(AiAnalysisService.class),
                 mock(StrategyService.class),
+                mock(QuantAnalysisService.class),
                 portfolioAccountService,
                 fundHoldingMapper,
                 mock(PortfolioAccountMapper.class),
@@ -84,6 +122,7 @@ class ScheduledFundTaskServiceTest {
                 fundQueryService,
                 mock(AiAnalysisService.class),
                 mock(StrategyService.class),
+                mock(QuantAnalysisService.class),
                 portfolioAccountService,
                 fundHoldingMapper,
                 accountMapper,
@@ -136,6 +175,7 @@ class ScheduledFundTaskServiceTest {
                 fundQueryService,
                 mock(AiAnalysisService.class),
                 mock(StrategyService.class),
+                mock(QuantAnalysisService.class),
                 portfolioAccountService,
                 fundHoldingMapper,
                 accountMapper,
@@ -182,6 +222,7 @@ class ScheduledFundTaskServiceTest {
                 fundQueryService,
                 mock(AiAnalysisService.class),
                 mock(StrategyService.class),
+                mock(QuantAnalysisService.class),
                 portfolioAccountService,
                 fundHoldingMapper,
                 accountMapper,
@@ -223,6 +264,7 @@ class ScheduledFundTaskServiceTest {
                 fundQueryService,
                 mock(AiAnalysisService.class),
                 mock(StrategyService.class),
+                mock(QuantAnalysisService.class),
                 portfolioAccountService,
                 fundHoldingMapper,
                 accountMapper,
@@ -267,6 +309,7 @@ class ScheduledFundTaskServiceTest {
                 fundQueryService,
                 mock(AiAnalysisService.class),
                 mock(StrategyService.class),
+                mock(QuantAnalysisService.class),
                 portfolioAccountService,
                 fundHoldingMapper,
                 accountMapper,
@@ -313,6 +356,7 @@ class ScheduledFundTaskServiceTest {
                 fundQueryService,
                 mock(AiAnalysisService.class),
                 mock(StrategyService.class),
+                mock(QuantAnalysisService.class),
                 portfolioAccountService,
                 fundHoldingMapper,
                 mock(PortfolioAccountMapper.class),
@@ -362,6 +406,7 @@ class ScheduledFundTaskServiceTest {
                 fundQueryService,
                 mock(AiAnalysisService.class),
                 mock(StrategyService.class),
+                mock(QuantAnalysisService.class),
                 portfolioAccountService,
                 fundHoldingMapper,
                 mock(PortfolioAccountMapper.class),

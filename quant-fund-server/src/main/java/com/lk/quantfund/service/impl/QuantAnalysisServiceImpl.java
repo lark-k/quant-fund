@@ -127,7 +127,12 @@ public class QuantAnalysisServiceImpl implements QuantAnalysisService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public List<QuantSignalVO> analyzeAccount(Long accountId) {
-        Long userId = UserContext.getUserId();
+        return analyzeAccountForUser(UserContext.getUserId(), accountId);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public List<QuantSignalVO> analyzeAccountForUser(Long userId, Long accountId) {
         PortfolioAccount account = loadOwnedAccount(userId, accountId);
         RiskProfile riskProfile = loadOrCreateRiskProfile(userId);
         List<FundHolding> holdings = fundHoldingMapper.selectList(new LambdaQueryWrapper<FundHolding>()

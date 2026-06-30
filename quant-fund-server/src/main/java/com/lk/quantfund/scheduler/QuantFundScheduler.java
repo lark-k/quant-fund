@@ -60,7 +60,16 @@ public class QuantFundScheduler {
         runTradingTask("REFRESH_AFTERNOON_INTRADAY_ESTIMATES", scheduledFundTaskService::refreshIntradayEstimates);
     }
 
-    @Scheduled(cron = "0 30,45,55 14 ? * MON-FRI", zone = ZONE)
+    @Scheduled(cron = "0 45 9 ? * MON-FRI", zone = ZONE)
+    @Scheduled(cron = "0 30 10 ? * MON-FRI", zone = ZONE)
+    @Scheduled(cron = "0 20 11 ? * MON-FRI", zone = ZONE)
+    @Scheduled(cron = "0 30 13 ? * MON-FRI", zone = ZONE)
+    @Scheduled(cron = "0 30,50,55 14 ? * MON-FRI", zone = ZONE)
+    public void generateQuantSignals() {
+        runTradingTask("GENERATE_QUANT_SIGNALS", scheduledFundTaskService::generateQuantSignals);
+    }
+
+    @Scheduled(cron = "0 50,55 14 ? * MON-FRI", zone = ZONE)
     public void analyzeFocusHoldings() {
         runTradingTask("AI_FOCUS_HOLDING_ANALYSIS", scheduledFundTaskService::analyzeFocusHoldings);
     }

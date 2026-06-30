@@ -7,12 +7,14 @@ import com.lk.quantfund.datasource.model.FundNavPointDTO;
 import com.lk.quantfund.entity.FundHolding;
 import com.lk.quantfund.entity.HoldingSnapshot;
 import com.lk.quantfund.entity.PortfolioAccount;
+import com.lk.quantfund.enums.AccountStatus;
 import com.lk.quantfund.mapper.FundHoldingMapper;
 import com.lk.quantfund.mapper.HoldingSnapshotMapper;
 import com.lk.quantfund.mapper.PortfolioAccountMapper;
 import com.lk.quantfund.service.AiAnalysisService;
 import com.lk.quantfund.service.FundQueryService;
 import com.lk.quantfund.service.PortfolioAccountService;
+import com.lk.quantfund.service.QuantAnalysisService;
 import com.lk.quantfund.service.StrategyService;
 import com.lk.quantfund.service.analytics.OfficialNavTiming;
 import com.lk.quantfund.service.valuation.FundValuationResult;
@@ -44,6 +46,7 @@ public class ScheduledFundTaskService {
     private final FundQueryService fundQueryService;
     private final AiAnalysisService aiAnalysisService;
     private final StrategyService strategyService;
+    private final QuantAnalysisService quantAnalysisService;
     private final PortfolioAccountService portfolioAccountService;
     private final FundHoldingMapper fundHoldingMapper;
     private final PortfolioAccountMapper portfolioAccountMapper;
@@ -55,6 +58,7 @@ public class ScheduledFundTaskService {
                                     FundQueryService fundQueryService,
                                     AiAnalysisService aiAnalysisService,
                                     StrategyService strategyService,
+                                    QuantAnalysisService quantAnalysisService,
                                     PortfolioAccountService portfolioAccountService,
                                     FundHoldingMapper fundHoldingMapper,
                                     PortfolioAccountMapper portfolioAccountMapper,
@@ -65,6 +69,7 @@ public class ScheduledFundTaskService {
         this.fundQueryService = fundQueryService;
         this.aiAnalysisService = aiAnalysisService;
         this.strategyService = strategyService;
+        this.quantAnalysisService = quantAnalysisService;
         this.portfolioAccountService = portfolioAccountService;
         this.fundHoldingMapper = fundHoldingMapper;
         this.portfolioAccountMapper = portfolioAccountMapper;
@@ -137,6 +142,25 @@ public class ScheduledFundTaskService {
                 log.warn("Scheduled official nav sync failed for {}: {}", entry.getKey(), exception.getMessage());
             } finally {
                 randomDelay();
+            }
+        }
+        return result;
+    }
+
+    public SchedulerTaskResult generateQuantSignals() {
+        SchedulerTaskResult result = new SchedulerTaskResult();
+        List<PortfolioAccount> accounts = portfolioAccountMapper.selectList(new LambdaQueryWrapper<PortfolioAccount>()
+                .eq(PortfolioAccount::getStatus, AccountStatus.ENABLED.name())
+                .orderByDesc(PortfolioAccount::getUpdateTime));
+        for (PortfolioAccount account : accounts) {
+            try {
+                int signalCount = quantAnalysisService.analyzeAccountForUser(account.getUserId(), account.getId()).size();
+                for (int index = 0; index < signalCount; index++) {
+                    result.success();
+                }
+            } catch (RuntimeException exception) {
+                result.failure(account.getId() + ": " + exception.getMessage());
+                log.warn("Scheduled quant signal generation failed for account {}: {}", account.getId(), exception.getMessage());
             }
         }
         return result;
