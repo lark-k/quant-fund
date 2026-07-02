@@ -231,8 +231,7 @@ LightGBM helper with two outputs:
   probability is converted into a capped score adjustment, and its
   `expectedReturn` is exposed for AI explanation and backtest diagnostics.
 - The ML helper does not place trades, does not call external fund data
-  sources, and does not bypass rule blockers such as 14:57, QDII, or position
-  limits.
+  sources, and does not bypass rule blockers such as position limits.
 
 Training expects a local CSV that was built from cached/exported historical
 features. It must contain the stable feature columns in `app/ml/features.py`,
@@ -303,7 +302,6 @@ The backtest page export uses the default label rule:
 ## Rule Constraints
 
 - The service only generates suggestions. It never places trades.
-- `BUY` is blocked at and after 14:57.
 - `BUY` is blocked when single-fund or total equity position reaches the risk
   profile limit.
 - QDII/overseas funds are blocked from generating same-day `BUY` suggestions

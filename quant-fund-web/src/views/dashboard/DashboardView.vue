@@ -370,7 +370,7 @@ function aiExecutionText(item: AiAnalysisReport) {
     return `减仓 · 持仓${actionPercent(item.action, item.suggestRatio)} · 约 ${money(item.suggestAmount)} 元`
   }
   if (item.action === 'BUY') {
-    return `买入 · 账户${actionPercent(item.action, item.suggestRatio)} · 约 ${money(item.suggestAmount)} 元`
+    return `买入 · 持仓${actionPercent(item.action, item.suggestRatio)} · 约 ${money(item.suggestAmount)} 元`
   }
   if (item.action === 'CONVERT') {
     return `转换 · 持仓${actionPercent(item.action, item.suggestRatio)} · 约 ${money(item.suggestAmount)} 元`
@@ -378,19 +378,16 @@ function aiExecutionText(item: AiAnalysisReport) {
   return item.action === 'HOLD' ? '持有不动 · 继续跟踪' : '暂不操作 · 继续观察'
 }
 
-function quantMlReturnRangeText(signal: QuantSignal) {
+function quantMlReturnRangeSegments(signal: QuantSignal) {
   const metrics = parseSignalMetrics(signal.metricsJson)
-  if (!metrics.mlAvailable && !metrics.mlReturnModelAvailable) return '--'
+  if (!metrics.mlAvailable && !metrics.mlReturnModelAvailable) return []
   const lower = numberMetric(metrics.mlExpectedReturnLower)
   const upper = numberMetric(metrics.mlExpectedReturnUpper)
-  if (lower === null || upper === null) return '--'
-  return `${percent(lower, 2)} ~ ${percent(upper, 2)}`
-}
-
-function quantMlReturnTone(signal: QuantSignal) {
-  const metrics = parseSignalMetrics(signal.metricsJson)
-  const expectedReturn = numberMetric(metrics.mlExpectedReturn)
-  return expectedReturn === null ? 'text-muted' : toneClass(expectedReturn)
+  if (lower === null || upper === null) return []
+  return [
+    { text: percent(lower, 2), className: toneClass(lower) },
+    { text: percent(upper, 2), className: toneClass(upper) }
+  ]
 }
 
 function parseSignalMetrics(value?: string | null) {
@@ -780,8 +777,12 @@ function go(path: string) {
                 <td class="visual-name-cell">{{ displaySignalFund(signal) }}</td>
                 <td><ActionTag :action="signal.action" :text="signal.actionText" /></td>
                 <td>{{ signal.totalScore.toFixed(1) }}</td>
-                <td class="ml-return-cell" :class="quantMlReturnTone(signal)" title="LGBM 仅作规则辅助参考，不覆盖量化动作">
-                  {{ quantMlReturnRangeText(signal) }}
+                <td class="ml-return-cell" title="LGBM 仅作规则辅助参考，不覆盖量化动作">
+                  <template v-for="(segment, index) in quantMlReturnRangeSegments(signal)" :key="`${signal.id}-${index}`">
+                    <span :class="segment.className">{{ segment.text }}</span>
+                    <span v-if="index === 0" class="ml-return-separator"> ~ </span>
+                  </template>
+                  <span v-if="!quantMlReturnRangeSegments(signal).length" class="text-muted">--</span>
                 </td>
                 <td><span :class="['risk-pill', riskCellClass(signal.riskLevel)]">{{ displayRiskLevel(signal.riskLevel) }}</span></td>
                 <td>{{ percentUnsigned(signal.confidence * 100, 0) }}</td>
@@ -842,6 +843,11 @@ function go(path: string) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.ml-return-separator {
+  color: var(--muted);
+  font-weight: 600;
 }
 
 @media (max-width: 900px) {

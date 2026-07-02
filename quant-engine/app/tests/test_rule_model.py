@@ -17,17 +17,23 @@ def test_rule_model_returns_complete_signal_shape():
     assert response.risks
 
 
-def test_rule_model_enforces_no_buy_after_1457_even_when_scores_are_high():
+def test_rule_model_allows_buy_after_1457_when_scores_are_high():
     request = make_request(market=MarketContext(tradingDay=True, trading=True, now="2026-06-28 14:58:00"))
 
     response = RuleQuantModel(Settings()).analyze(request)
 
-    assert response.action != "BUY"
-    assert any("14:57" in reason for reason in response.reasons)
+    assert response.action == "BUY"
+    assert not any("14:57" in reason for reason in response.reasons)
 
 
 def test_rule_model_allows_qdii_intraday_buy():
-    holding = HoldingSnapshot(fundCode="968000", fundName="QDII Fund", fundType="QDII", positionRate=5)
+    holding = HoldingSnapshot(
+        fundCode="968000",
+        fundName="QDII Fund",
+        fundType="QDII",
+        holdingAmount=1200,
+        positionRate=5,
+    )
     request = make_request(holding=holding)
 
     response = RuleQuantModel(Settings()).analyze(request)

@@ -36,7 +36,7 @@ public class BuyDipRule implements QuantStrategyRule {
         BigDecimal ratio = drawdown.compareTo(new BigDecimal("15.0000")) >= 0
                 ? new BigDecimal("8.0000")
                 : drawdown.compareTo(new BigDecimal("10.0000")) >= 0 ? new BigDecimal("5.0000") : new BigDecimal("3.0000");
-        BigDecimal base = context.account().getTotalAsset() == null ? context.holding().getHoldingAmount() : context.account().getTotalAsset();
+        BigDecimal base = context.holding().getHoldingAmount() == null ? BigDecimal.ZERO : context.holding().getHoldingAmount();
         BigDecimal amount = base.multiply(ratio).divide(new BigDecimal("100.0000"), 4, RoundingMode.HALF_UP);
         return List.of(new StrategySignalDraft(
                 SignalType.ADD_POSITION,
@@ -50,4 +50,3 @@ public class BuyDipRule implements QuantStrategyRule {
         ));
     }
 }
-

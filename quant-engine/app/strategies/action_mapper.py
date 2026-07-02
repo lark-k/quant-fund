@@ -222,9 +222,9 @@ def _sell_ratio_by_market(score: ScoreBreakdown, features: dict, request: QuantA
 
 
 def _suggest_amount(request: QuantAnalyzeRequest, ratio: float) -> float:
-    if ratio <= 0 or request.account.totalAsset <= 0:
+    if ratio <= 0 or request.holding.holdingAmount <= 0:
         return 0.0
-    amount = request.account.totalAsset * ratio / 100
+    amount = request.holding.holdingAmount * ratio / 100
     if amount < 100:
         return 0.0
     return round(amount, 2)

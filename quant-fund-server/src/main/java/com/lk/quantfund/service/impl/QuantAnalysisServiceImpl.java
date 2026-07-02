@@ -422,7 +422,7 @@ public class QuantAnalysisServiceImpl implements QuantAnalysisService {
         signal.setAction(response.action());
         signal.setActionText(response.actionText());
         BigDecimal suggestRatio = scale(response.suggestRatio());
-        signal.setSuggestAmount(normalizeSuggestAmount(response.action(), response.suggestAmount(), suggestRatio, account, holding));
+        signal.setSuggestAmount(normalizeSuggestAmount(response.action(), response.suggestAmount(), suggestRatio, holding));
         signal.setSuggestRatio(suggestRatio);
         signal.setRiskLevel(firstText(response.riskLevel(), RiskLevel.MEDIUM.name()));
         signal.setConfidence(scale(response.confidence()));
@@ -664,7 +664,6 @@ public class QuantAnalysisServiceImpl implements QuantAnalysisService {
     private BigDecimal normalizeSuggestAmount(String action,
                                               BigDecimal suggestAmount,
                                               BigDecimal suggestRatio,
-                                              PortfolioAccount account,
                                               FundHolding holding) {
         BigDecimal amount = scale(suggestAmount);
         if (amount.compareTo(BigDecimal.ZERO) > 0 || suggestRatio.compareTo(BigDecimal.ZERO) <= 0) {
@@ -676,7 +675,7 @@ public class QuantAnalysisServiceImpl implements QuantAnalysisService {
                     .divide(new BigDecimal("100.0000"), 4, RoundingMode.HALF_UP);
         }
         if ("BUY".equals(action)) {
-            return valueOrZero(account.getTotalAsset())
+            return valueOrZero(holding.getHoldingAmount())
                     .multiply(suggestRatio)
                     .divide(new BigDecimal("100.0000"), 4, RoundingMode.HALF_UP);
         }

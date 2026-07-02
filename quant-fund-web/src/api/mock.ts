@@ -230,7 +230,7 @@ function toQuantSignal(holding: FundHolding, index = 0): QuantSignal {
     fundName: holding.fundName,
     action,
     actionText: action === 'BUY' ? '建议小额加仓' : action === 'WATCH' ? '建议重点观察' : '建议持有观察',
-    suggestAmount: action === 'BUY' ? portfolios[0].totalAsset * suggestRatio / 100 : 0,
+    suggestAmount: action === 'BUY' ? holding.holdingAmount * suggestRatio / 100 : 0,
     suggestRatio,
     riskLevel: weakRisk ? 'MEDIUM' : strongOpportunity ? 'HIGH' : 'LOW',
     confidence: action === 'BUY' ? 0.78 : 0.62,

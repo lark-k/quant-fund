@@ -53,7 +53,7 @@ def test_equity_fund_can_buy_with_good_trend_even_when_risk_score_is_low():
     action, amount, ratio, blockers = map_action(request, buy_score(), features)
 
     assert action == "BUY"
-    assert amount == 3000
+    assert amount == 360
     assert ratio == 30
     assert blockers == []
 
@@ -78,17 +78,16 @@ def test_low_risk_score_alone_does_not_force_sell_when_trend_is_strong():
     assert blockers == []
 
 
-def test_1457_or_later_blocks_buy():
+def test_1457_or_later_does_not_block_buy():
     request = make_request(market=MarketContext(tradingDay=True, trading=True, now="2026-06-28 14:57:00"))
     features = build_features(request)
 
     action, amount, ratio, blockers = map_action(request, high_score(), features)
 
-    assert action == "WATCH"
-    assert amount == 0
-    assert ratio == 0
-    assert len(blockers) == 1
-    assert "BUY" in blockers[0]
+    assert action == "BUY"
+    assert amount > 0
+    assert ratio == 30
+    assert blockers == []
 
 
 def test_position_over_limit_does_not_buy():
@@ -165,7 +164,7 @@ def test_strong_trend_lock_allows_buy_instead_of_profit_giveback_sell_when_room_
     action, amount, ratio, blockers = map_action(request, score, features)
 
     assert action == "BUY"
-    assert amount == 3000
+    assert amount == 360
     assert ratio == 30
     assert blockers == []
 
@@ -293,7 +292,7 @@ def test_midterm_trend_continuation_can_buy_on_orderly_pullback():
     action, amount, ratio, blockers = map_action(request, score, features)
 
     assert action == "BUY"
-    assert amount == 2000
+    assert amount == 1200
     assert ratio == 20
     assert blockers == []
 
@@ -393,7 +392,13 @@ def test_equity_position_over_limit_does_not_force_sell_or_block_buy():
 
 
 def test_qdii_intraday_can_generate_buy_signal():
-    holding = HoldingSnapshot(fundCode="968000", fundType="QDII", positionRate=8, currentEstimateGrowthRate=1.2)
+    holding = HoldingSnapshot(
+        fundCode="968000",
+        fundType="QDII",
+        holdingAmount=1200,
+        positionRate=8,
+        currentEstimateGrowthRate=1.2,
+    )
     request = make_request(holding=holding)
     features = build_features(request)
 
@@ -401,7 +406,7 @@ def test_qdii_intraday_can_generate_buy_signal():
 
     assert features["isQdiiOrOverseas"] is True
     assert action == "BUY"
-    assert amount == 3000
+    assert amount == 360
     assert ratio == 30
     assert blockers == []
 
