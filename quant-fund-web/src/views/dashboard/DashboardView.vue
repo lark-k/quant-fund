@@ -120,6 +120,23 @@ const visibleQuantSignals = computed(() => showAllStrategySignals.value ? quantS
 const quantSignalCollapsed = computed(() => quantSignals.value.length > 5)
 const quantButtonBusy = computed(() => quantLoading.value || quantGenerating.value)
 const quantButtonText = computed(() => quantGenerating.value ? '生成中' : quantLoading.value ? '刷新中' : '生成')
+const dashboardMlForecast = computed(() => {
+  const predictions = quantSignals.value
+    .map((signal) => parseSignalMetrics(signal.metricsJson))
+    .filter((metrics) => metrics.mlAvailable)
+    .map((metrics) => ({
+      expectedReturn: numberMetric(metrics.mlExpectedReturn),
+      horizonDays: numberMetric(metrics.mlReturnHorizonDays) || 20
+    }))
+    .filter((item): item is { expectedReturn: number; horizonDays: number } => item.expectedReturn !== null)
+  if (!predictions.length) return undefined
+  const avgReturn = predictions.reduce((sum, item) => sum + item.expectedReturn, 0) / predictions.length
+  const horizonDays = Math.round(predictions[0].horizonDays || 20)
+  return {
+    text: `未来${horizonDays}个净值样本预计收益：${percent(avgReturn, 2)}`,
+    subText: `${predictions.length} 只基金均值`
+  }
+})
 const strategySignalGroups = computed<StrategySignalGroup[]>(() => {
   const signals = overview.value?.latestStrategySignals || []
   const groups = new Map<string, StrategySignal[]>()
@@ -360,6 +377,36 @@ function aiExecutionText(item: AiAnalysisReport) {
   }
   return item.action === 'HOLD' ? '持有不动 · 继续跟踪' : '暂不操作 · 继续观察'
 }
+
+function quantMlReturnRangeText(signal: QuantSignal) {
+  const metrics = parseSignalMetrics(signal.metricsJson)
+  if (!metrics.mlAvailable && !metrics.mlReturnModelAvailable) return '--'
+  const lower = numberMetric(metrics.mlExpectedReturnLower)
+  const upper = numberMetric(metrics.mlExpectedReturnUpper)
+  if (lower === null || upper === null) return '--'
+  return `${percent(lower, 2)} ~ ${percent(upper, 2)}`
+}
+
+function quantMlReturnTone(signal: QuantSignal) {
+  const metrics = parseSignalMetrics(signal.metricsJson)
+  const expectedReturn = numberMetric(metrics.mlExpectedReturn)
+  return expectedReturn === null ? 'text-muted' : toneClass(expectedReturn)
+}
+
+function parseSignalMetrics(value?: string | null) {
+  if (!value) return {} as Record<string, unknown>
+  try {
+    return JSON.parse(value) as Record<string, unknown>
+  } catch {
+    return {} as Record<string, unknown>
+  }
+}
+
+function numberMetric(value: unknown) {
+  const numberValue = Number(value)
+  return Number.isFinite(numberValue) ? numberValue : null
+}
+
 function updatedBadgeText(date?: string | null) {
   if (!date) return '已更新'
   const today = new Date().toISOString().slice(0, 10)
@@ -678,6 +725,10 @@ function go(path: string) {
     <section class="panel ai-panel">
       <div class="panel-header">
         <h2 class="panel-title">AI 今日建议</h2>
+        <div v-if="dashboardMlForecast" class="ml-forecast-pill">
+          <span>{{ dashboardMlForecast.text }}</span>
+          <small>{{ dashboardMlForecast.subText }}</small>
+        </div>
         <button class="panel-link" @click="go('/ai-analysis')">更多 ›</button>
       </div>
       <div class="panel-body visual-panel-body">
@@ -722,13 +773,16 @@ function go(path: string) {
         <div v-if="visibleQuantSignals.length" class="visual-table-wrap">
           <table class="visual-table signal-table">
             <thead>
-              <tr><th>基金</th><th>动作</th><th>总分</th><th>风险</th><th>置信</th><th>时间</th></tr>
+              <tr><th>基金</th><th>动作</th><th>总分</th><th class="ml-return-head">未来20个净值样本预计收益</th><th>风险</th><th>置信</th><th>时间</th></tr>
             </thead>
             <tbody>
               <tr v-for="signal in visibleQuantSignals" :key="signal.id">
                 <td class="visual-name-cell">{{ displaySignalFund(signal) }}</td>
                 <td><ActionTag :action="signal.action" :text="signal.actionText" /></td>
                 <td>{{ signal.totalScore.toFixed(1) }}</td>
+                <td class="ml-return-cell" :class="quantMlReturnTone(signal)" title="LGBM 仅作规则辅助参考，不覆盖量化动作">
+                  {{ quantMlReturnRangeText(signal) }}
+                </td>
                 <td><span :class="['risk-pill', riskCellClass(signal.riskLevel)]">{{ displayRiskLevel(signal.riskLevel) }}</span></td>
                 <td>{{ percentUnsigned(signal.confidence * 100, 0) }}</td>
                 <td>{{ signal.signalTime.slice(11, 16) }}</td>
@@ -747,3 +801,55 @@ function go(path: string) {
     </div>
   </div>
 </template>
+
+<style scoped>
+.ml-forecast-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  max-width: min(58%, 520px);
+  padding: 6px 12px;
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  border-radius: 6px;
+  background: rgba(59, 130, 246, 0.10);
+  color: #dbeafe;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.ml-forecast-pill span,
+.ml-forecast-pill small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ml-forecast-pill small {
+  flex: 0 0 auto;
+  color: #93c5fd;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ml-return-head {
+  min-width: 0;
+}
+
+.ml-return-cell {
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .ml-forecast-pill {
+    order: 3;
+    width: 100%;
+    max-width: none;
+    justify-content: space-between;
+  }
+}
+</style>

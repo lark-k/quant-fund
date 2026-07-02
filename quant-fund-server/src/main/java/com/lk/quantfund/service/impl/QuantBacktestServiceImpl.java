@@ -15,6 +15,9 @@ import com.lk.quantfund.dto.backtest.QuantBacktestPayloads.Options;
 import com.lk.quantfund.dto.backtest.QuantBacktestPayloads.Result;
 import com.lk.quantfund.dto.backtest.QuantBacktestPayloads.RunRequest;
 import com.lk.quantfund.dto.backtest.QuantBacktestPayloads.StrategyParams;
+import com.lk.quantfund.dto.backtest.QuantBacktestPayloads.TrainingLabelConfig;
+import com.lk.quantfund.dto.backtest.QuantBacktestPayloads.TrainingSampleExportRequest;
+import com.lk.quantfund.dto.backtest.QuantBacktestPayloads.TrainingSampleExportResponse;
 import com.lk.quantfund.dto.quant.QuantNavPointDTO;
 import com.lk.quantfund.entity.FundHolding;
 import com.lk.quantfund.entity.FundNavDaily;
@@ -50,6 +53,11 @@ public class QuantBacktestServiceImpl implements QuantBacktestService {
 
     private static final BigDecimal DEFAULT_INITIAL_CASH = new BigDecimal("10000.0000");
     private static final BigDecimal DEFAULT_FEE_RATE = new BigDecimal("0.0015");
+    private static final TrainingLabelConfig DEFAULT_TRAINING_LABEL_CONFIG = new TrainingLabelConfig(
+            20,
+            new BigDecimal("2.0000"),
+            new BigDecimal("-8.0000")
+    );
 
     private final QuantEngineClient quantEngineClient;
     private final QuantFundProperties properties;
@@ -155,6 +163,51 @@ public class QuantBacktestServiceImpl implements QuantBacktestService {
                 requestedEndDate,
                 results
         );
+    }
+
+    @Override
+    public TrainingSampleExportResponse exportTrainingSamples(RunRequest request) {
+        if (!properties.getQuantEngine().isEnabled()) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "quant engine is disabled");
+        }
+        if (request.startDate().isAfter(request.endDate())) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "startDate must be before endDate");
+        }
+        Long userId = UserContext.getUserId();
+        List<FundHolding> holdings = loadHoldings(userId, request);
+        if (holdings.isEmpty()) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "no owned holdings available for ML sample export");
+        }
+        List<String> fundCodes = resolveFundCodes(request, holdings);
+        if (fundCodes.size() > properties.getQuantEngine().getMaxBacktestFunds()) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "fund count exceeds max backtest funds");
+        }
+
+        Map<String, FundHolding> metadata = holdings.stream()
+                .filter(item -> fundCodes.contains(item.getFundCode()))
+                .collect(Collectors.toMap(FundHolding::getFundCode, Function.identity(), (left, right) -> left, LinkedHashMap::new));
+        StrategyParams strategyParams = defaultParams(request.strategyParams());
+        Map<String, List<QuantNavPointDTO>> navByFund = loadNavSeries(fundCodes, request, strategyParams);
+        List<EngineFund> funds = fundCodes.stream()
+                .map(code -> toEngineFund(code, metadata.get(code), navByFund.getOrDefault(code, List.of())))
+                .toList();
+        TrainingSampleExportRequest engineRequest = new TrainingSampleExportRequest(
+                "ml-training-samples-" + LocalDateTime.now(),
+                "QuantRuleEngine",
+                request.startDate(),
+                request.endDate(),
+                defaultDecimal(request.initialCash(), DEFAULT_INITIAL_CASH),
+                defaultDecimal(request.feeRate(), DEFAULT_FEE_RATE),
+                funds,
+                strategyParams,
+                defaultOptions(request.options()),
+                DEFAULT_TRAINING_LABEL_CONFIG
+        );
+        TrainingSampleExportResponse response = quantEngineClient.exportTrainingSamples(engineRequest);
+        if (response == null || !StringUtils.hasText(response.csvContent())) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "ML training sample export returned empty content");
+        }
+        return response;
     }
 
     private NavRefreshItem refreshOneFundNav(String fundCode, FundHolding holding, LocalDate requestedStartDate, LocalDate requestedEndDate) {
@@ -272,7 +325,8 @@ public class QuantBacktestServiceImpl implements QuantBacktestService {
         return new Options(
                 workers,
                 options == null || options.saveEquityCurve() == null || options.saveEquityCurve(),
-                options == null || options.saveTrades() == null || options.saveTrades()
+                options == null || options.saveTrades() == null || options.saveTrades(),
+                options != null && Boolean.TRUE.equals(options.enableMl())
         );
     }
 

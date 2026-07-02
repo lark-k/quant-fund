@@ -216,6 +216,90 @@ drawdown, and extreme-risk checks. The current recommended defaults favor a
 slightly stricter normal buy threshold while letting strong-trend funds build
 positions faster.
 
+## Phase 6 Optional LightGBM Helper
+
+The rule engine remains the primary decision engine. Phase 6 adds an optional
+LightGBM helper with two outputs:
+
+- a binary probability model for capped rule-score adjustment;
+- a regression model that predicts the forward return over the training
+  horizon, currently the next 20 NAV samples by default.
+
+- By default `QUANT_ENGINE_ML_ENABLED=false`, so production behavior stays pure
+  `rule-v1.19.0`.
+- When enabled, the active model in `models/registry.json` is loaded once. Its
+  probability is converted into a capped score adjustment, and its
+  `expectedReturn` is exposed for AI explanation and backtest diagnostics.
+- The ML helper does not place trades, does not call external fund data
+  sources, and does not bypass rule blockers such as 14:57, QDII, or position
+  limits.
+
+Training expects a local CSV that was built from cached/exported historical
+features. It must contain the stable feature columns in `app/ml/features.py`,
+a binary label column defaulting to `label`, and a forward-return column
+defaulting to `forwardReturn`.
+
+```powershell
+cd quant-engine
+python train_lgbm.py --input .\data\training_samples.csv --model-dir .\models --model-version lgbm-v1.1.0 --n-jobs 8
+```
+
+Predict with the active model:
+
+```powershell
+cd quant-engine
+python predict.py --features .\data\sample_features.json --model-dir .\models
+```
+
+Enable the helper for API inference after a model is trained and registered:
+
+```powershell
+$env:QUANT_ENGINE_ML_ENABLED="true"
+$env:QUANT_ENGINE_ML_MODEL_DIR="models"
+$env:QUANT_ENGINE_ML_SCORE_ADJUSTMENT_CAP="5"
+uvicorn app.main:app --host 127.0.0.1 --port 8091
+```
+
+VSCode one-click flow:
+
+1. In the web backtest page, click `拉取净值` for the selected range first.
+2. Click `导出样本` to download a CSV generated from local cached NAV data.
+3. Save or move the CSV under `quant-engine/data/training_samples.csv`.
+4. Run task `ml: train lightgbm`, enter the training CSV path when prompted.
+   The default is `data/training_samples.csv` under `quant-engine`.
+5. Choose debug configuration `Quant Engine: FastAPI + ML (8091)`.
+6. Start debugging. This sets `QUANT_ENGINE_ML_ENABLED=true` and loads the
+   active model from `quant-engine/models`.
+7. Use task `ml: inspect models` or call `GET /api/v1/ml/models` to confirm
+   the active model.
+
+Useful endpoints:
+
+- `GET /api/v1/ml/models`: inspect registered models.
+- `POST /api/v1/ml/predict`: run a feature-dict prediction smoke test.
+
+Training CSV minimum columns:
+
+- All feature columns listed in `app/ml/features.py`, such as `return20d`,
+  `return60d`, `ma20Deviation`, `maxDrawdown60d`, `positionToSingleLimit`,
+  `navSampleSize`, `holdingProfitRate`, and `holdingDays`.
+- A binary `label` column: `1` means the sample later performed well enough to
+  favor holding/buying, `0` means it did not.
+- A numeric `forwardReturn` column: the realized future return percentage used
+  to train the LightGBM return regressor.
+- Optional `horizonDays` column. If omitted, the trainer records the default
+  prediction horizon as 20 NAV samples.
+- Optional `date` column. If present, training sorts by date before splitting
+  train/validation data, which reduces look-ahead leakage.
+
+The backtest page export uses the default label rule:
+
+- Horizon: future 20 NAV samples.
+- Positive label: future return is at least `2%`.
+- Risk filter: future max drawdown is no worse than `-8%`.
+- The final horizon rows are skipped, so labels do not look beyond available
+  local data.
+
 ## Rule Constraints
 
 - The service only generates suggestions. It never places trades.
@@ -229,7 +313,8 @@ positions faster.
 
 ## Known Limits
 
-- LightGBM/XGBoost and deep learning are intentionally not enabled.
+- LightGBM is optional and disabled by default; XGBoost and deep learning are
+  not enabled.
 - Historical data must be supplied by Java or local cache; this service does
   not call East Money, Tiantian Fund, or any external market data source.
 - Confidence is a rule-model confidence score, not an accuracy guarantee.

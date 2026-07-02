@@ -217,6 +217,7 @@ export type BacktestRunRequest = {
     workers: number
     saveEquityCurve: boolean
     saveTrades: boolean
+    enableMl?: boolean
   }
 }
 
@@ -278,14 +279,28 @@ export type BacktestResult = {
   winRate: number
   sharpeRatio: number | null
   calmarRatio: number | null
-    tradeCount: number
-    turnoverRate: number
-    navSampleSize: number
-    dataCoverageRate: number
-    passed: boolean
-    diagnosis: string
-    equityCurve: BacktestEquityPoint[]
-    trades: BacktestTrade[]
+  tradeCount: number
+  turnoverRate: number
+  navSampleSize: number
+  dataCoverageRate: number
+  mlApplied?: boolean
+  mlAppliedDays?: number
+  mlScoreAdjustmentAvg?: number
+  mlScoreAdjustmentAbsAvg?: number
+  mlScoreAdjustmentMaxAbs?: number
+  mlExpectedReturnAvg?: number
+  mlExpectedReturnPositiveDays?: number
+  mlExpectedReturnPositiveDayRate?: number
+  mlProbabilityAvg?: number
+  mlBullishDays?: number
+  mlBullishDayRate?: number
+  mlSignalStrengthAvg?: number
+  mlConfidenceScoreAvg?: number
+  mlConfidenceMediumHighDayRate?: number
+  passed: boolean
+  diagnosis: string
+  equityCurve: BacktestEquityPoint[]
+  trades: BacktestTrade[]
 }
 
 export type BacktestNavRefreshItem = {
@@ -324,6 +339,18 @@ export type BacktestSummary = {
   avgSharpeRatio: number
   avgCalmarRatio: number
   passRate: number
+  mlAppliedFundRate?: number
+  avgMlScoreAdjustmentAbs?: number
+  maxMlScoreAdjustmentAbs?: number
+  avgMlExpectedReturn?: number
+  avgMlExpectedReturnPositiveDays?: number
+  avgMlExpectedReturnPositiveDayRate?: number
+  avgMlProbability?: number
+  avgMlBullishDays?: number
+  avgMlBullishDayRate?: number
+  avgMlSignalStrength?: number
+  avgMlConfidenceScore?: number
+  avgMlConfidenceMediumHighDayRate?: number
   diagnosis: string
 }
 

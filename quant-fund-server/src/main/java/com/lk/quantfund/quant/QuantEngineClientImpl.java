@@ -3,6 +3,8 @@ package com.lk.quantfund.quant;
 import com.lk.quantfund.config.QuantFundProperties;
 import com.lk.quantfund.dto.backtest.QuantBacktestPayloads.BatchResponse;
 import com.lk.quantfund.dto.backtest.QuantBacktestPayloads.EngineBatchRequest;
+import com.lk.quantfund.dto.backtest.QuantBacktestPayloads.TrainingSampleExportRequest;
+import com.lk.quantfund.dto.backtest.QuantBacktestPayloads.TrainingSampleExportResponse;
 import com.lk.quantfund.dto.quant.QuantAnalyzeBatchRequest;
 import com.lk.quantfund.dto.quant.QuantAnalyzeBatchResponse;
 import com.lk.quantfund.dto.quant.QuantAnalyzeRequest;
@@ -70,6 +72,17 @@ public class QuantEngineClientImpl implements QuantEngineClient {
                 "/api/v1/backtest/run-batch",
                 request,
                 BatchResponse.class,
+                Duration.ofMillis(properties.getQuantEngine().getBacktestTimeoutMs())
+        );
+    }
+
+    @Override
+    public TrainingSampleExportResponse exportTrainingSamples(TrainingSampleExportRequest request) {
+        return post(
+                "ml_training_samples_export",
+                "/api/v1/ml/training-samples/export",
+                request,
+                TrainingSampleExportResponse.class,
                 Duration.ofMillis(properties.getQuantEngine().getBacktestTimeoutMs())
         );
     }

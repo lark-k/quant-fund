@@ -30,6 +30,17 @@ def calculate_scores(features: dict, risk_profile: RiskProfile) -> ScoreBreakdow
     )
 
 
+def adjust_total_score(score: ScoreBreakdown, adjustment: float) -> ScoreBreakdown:
+    return ScoreBreakdown(
+        totalScore=round(clamp(score.totalScore + adjustment), 2),
+        trendScore=score.trendScore,
+        opportunityScore=score.opportunityScore,
+        riskScore=score.riskScore,
+        positionScore=score.positionScore,
+        momentumScore=score.momentumScore,
+    )
+
+
 def _trend_score(features: dict) -> float:
     score = 50
     score += float(features.get("return5d", 0)) * 1.2

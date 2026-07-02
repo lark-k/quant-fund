@@ -1189,7 +1189,7 @@ a {
 
 .signal-table th:nth-child(1),
 .signal-table td:nth-child(1) {
-  width: 27%;
+  width: 26%;
 }
 
 .signal-table {
@@ -1208,16 +1208,27 @@ a {
 
 .signal-table th:nth-child(3),
 .signal-table td:nth-child(3) {
-  width: 30%;
+  width: 7%;
 }
 
 .signal-table th:nth-child(4),
-.signal-table td:nth-child(4),
+.signal-table td:nth-child(4) {
+  width: 22%;
+}
+
 .signal-table th:nth-child(5),
-.signal-table td:nth-child(5),
+.signal-table td:nth-child(5) {
+  width: 10%;
+}
+
 .signal-table th:nth-child(6),
 .signal-table td:nth-child(6) {
-  width: 10%;
+  width: 8%;
+}
+
+.signal-table th:nth-child(7),
+.signal-table td:nth-child(7) {
+  width: 7%;
 }
 
 .signal-table .action-tag {

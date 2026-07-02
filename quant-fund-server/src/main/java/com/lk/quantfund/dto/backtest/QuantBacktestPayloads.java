@@ -45,7 +45,8 @@ public final class QuantBacktestPayloads {
     public record Options(
             @Min(1) Integer workers,
             Boolean saveEquityCurve,
-            Boolean saveTrades
+            Boolean saveTrades,
+            Boolean enableMl
     ) {
     }
 
@@ -67,6 +68,39 @@ public final class QuantBacktestPayloads {
             List<EngineFund> funds,
             StrategyParams strategyParams,
             Options options
+    ) {
+    }
+
+    public record TrainingLabelConfig(
+            Integer horizonDays,
+            BigDecimal minForwardReturn,
+            BigDecimal maxForwardDrawdown
+    ) {
+    }
+
+    public record TrainingSampleExportRequest(
+            String taskName,
+            String strategyName,
+            LocalDate startDate,
+            LocalDate endDate,
+            BigDecimal initialCash,
+            BigDecimal feeRate,
+            List<EngineFund> funds,
+            StrategyParams strategyParams,
+            Options options,
+            TrainingLabelConfig labelConfig
+    ) {
+    }
+
+    public record TrainingSampleExportResponse(
+            String fileName,
+            Integer rowCount,
+            Integer fundCount,
+            Integer positiveCount,
+            Integer negativeCount,
+            List<String> featureColumns,
+            TrainingLabelConfig labelConfig,
+            String csvContent
     ) {
     }
 
@@ -134,6 +168,20 @@ public final class QuantBacktestPayloads {
             BigDecimal turnoverRate,
             Integer navSampleSize,
             BigDecimal dataCoverageRate,
+            Boolean mlApplied,
+            Integer mlAppliedDays,
+            BigDecimal mlScoreAdjustmentAvg,
+            BigDecimal mlScoreAdjustmentAbsAvg,
+            BigDecimal mlScoreAdjustmentMaxAbs,
+            BigDecimal mlExpectedReturnAvg,
+            Integer mlExpectedReturnPositiveDays,
+            BigDecimal mlExpectedReturnPositiveDayRate,
+            BigDecimal mlProbabilityAvg,
+            Integer mlBullishDays,
+            BigDecimal mlBullishDayRate,
+            BigDecimal mlSignalStrengthAvg,
+            BigDecimal mlConfidenceScoreAvg,
+            BigDecimal mlConfidenceMediumHighDayRate,
             Boolean passed,
             String diagnosis,
             List<EquityPoint> equityCurve,
@@ -156,6 +204,18 @@ public final class QuantBacktestPayloads {
             BigDecimal avgSharpeRatio,
             BigDecimal avgCalmarRatio,
             BigDecimal passRate,
+            BigDecimal mlAppliedFundRate,
+            BigDecimal avgMlScoreAdjustmentAbs,
+            BigDecimal maxMlScoreAdjustmentAbs,
+            BigDecimal avgMlExpectedReturn,
+            BigDecimal avgMlExpectedReturnPositiveDays,
+            BigDecimal avgMlExpectedReturnPositiveDayRate,
+            BigDecimal avgMlProbability,
+            BigDecimal avgMlBullishDays,
+            BigDecimal avgMlBullishDayRate,
+            BigDecimal avgMlSignalStrength,
+            BigDecimal avgMlConfidenceScore,
+            BigDecimal avgMlConfidenceMediumHighDayRate,
             String diagnosis
     ) {
     }

@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     host: str = "127.0.0.1"
     port: int = 8091
-    rule_model_version: str = "rule-v1.19.0"
+    rule_model_version: str = "rule-v1.21.0"
     default_deadline: str = "15:00:00"
     log_level: str = "INFO"
     workers: int = 1
@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     cache_dir: str = ".cache"
     enable_parquet_cache: bool = True
     lgbm_n_jobs: int = 8
+    ml_enabled: bool = False
+    ml_model_dir: str = "models"
+    ml_model_id: str | None = None
+    ml_score_adjustment_cap: float = 5.0
 
 
 @lru_cache

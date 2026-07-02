@@ -3,8 +3,9 @@ from __future__ import annotations
 from app.core.config import Settings
 from app.core.schemas import QuantAnalyzeRequest, QuantSignalResponse
 from app.features.feature_builder import build_features
+from app.ml.predict import get_ml_predictor
 from app.strategies.action_mapper import ACTION_TEXT, map_action
-from app.strategies.scoring import calculate_scores
+from app.strategies.scoring import adjust_total_score, calculate_scores
 
 
 class RuleQuantModel:
@@ -14,6 +15,31 @@ class RuleQuantModel:
     def analyze(self, request: QuantAnalyzeRequest) -> QuantSignalResponse:
         features = build_features(request)
         score = calculate_scores(features, request.riskProfile)
+        ml_prediction = get_ml_predictor(self.settings).predict(features)
+        features["mlEnabled"] = ml_prediction.enabled
+        features["mlAvailable"] = ml_prediction.available
+        features["mlProbability"] = ml_prediction.probability
+        features["mlExpectedReturn"] = ml_prediction.expectedReturn
+        features["mlExpectedReturnLower"] = ml_prediction.expectedReturnLower
+        features["mlExpectedReturnUpper"] = ml_prediction.expectedReturnUpper
+        features["mlReturnHorizonDays"] = ml_prediction.returnHorizonDays
+        features["mlReturnModelAvailable"] = ml_prediction.returnModelAvailable
+        features["mlScoreAdjustment"] = ml_prediction.scoreAdjustment
+        features["mlRawScoreAdjustment"] = ml_prediction.rawScoreAdjustment
+        features["mlQualityWeight"] = ml_prediction.qualityWeight
+        features["mlModelQualityLevel"] = ml_prediction.modelQualityLevel
+        features["mlSignalStrength"] = ml_prediction.signalStrength
+        features["mlConfidenceScore"] = ml_prediction.confidenceScore
+        features["mlConfidenceLevel"] = ml_prediction.confidenceLevel
+        features["mlDirection"] = ml_prediction.direction
+        features["mlDirectionText"] = ml_prediction.directionText
+        features["mlValidationAuc"] = ml_prediction.validationAuc
+        features["mlValidationReturnMae"] = ml_prediction.validationReturnMae
+        features["mlValidationReturnRmse"] = ml_prediction.validationReturnRmse
+        features["mlModelId"] = ml_prediction.modelId
+        features["mlModelVersion"] = ml_prediction.modelVersion
+        if ml_prediction.available and ml_prediction.scoreAdjustment:
+            score = adjust_total_score(score, ml_prediction.scoreAdjustment)
         action, suggest_amount, suggest_ratio, blockers = map_action(request, score, features)
         reasons = self._build_reasons(request, features, score, blockers)
         risks = self._build_risks(request, features, blockers)
@@ -56,6 +82,28 @@ class RuleQuantModel:
         ]
         if blockers:
             reasons.extend(blockers)
+        if features.get("mlAvailable"):
+            expected_return = features.get("mlExpectedReturn")
+            horizon_days = features.get("mlReturnHorizonDays")
+            reasons.append(
+                "ML 仅作规则辅助调分："
+                f"本次调分 {float(features.get('mlScoreAdjustment') or 0):.2f}，"
+                f"偏强概率 {float(features.get('mlProbability') or 0):.2%}，"
+                f"信号强度 {float(features.get('mlSignalStrength') or 0):.2%}，"
+                f"本次可信度 {features.get('mlConfidenceLevel')}"
+            )
+            if expected_return is not None:
+                lower = features.get("mlExpectedReturnLower")
+                upper = features.get("mlExpectedReturnUpper")
+                band = ""
+                if lower is not None and upper is not None:
+                    band = f"，参考区间 {float(lower):.2f}% 至 {float(upper):.2f}%"
+                reasons.append(
+                    "LGBM 方向判断 "
+                    f"{features.get('mlDirectionText')}，预测收益仅作参考 {float(expected_return):.2f}%"
+                    + (f"，周期 {int(horizon_days)} 个净值样本" if horizon_days else "")
+                    + band
+                )
         if int(features.get("navSampleSize", 0)) < 20:
             reasons.append("历史净值样本不足 20 条，模型置信度已下调")
         return reasons

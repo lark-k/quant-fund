@@ -15,7 +15,7 @@ def test_health_api_returns_up():
     assert response.json() == {
         "status": "UP",
         "service": "quant-engine",
-        "modelVersion": "rule-v1.19.0",
+        "modelVersion": "rule-v1.21.0",
     }
 
 
@@ -65,3 +65,52 @@ def test_analyze_api_accepts_null_trade_numbers():
 
     assert response.status_code == 200
     assert response.json()["requestId"] == "qf-test-1001"
+
+
+def test_ml_models_api_returns_registry_state():
+    response = client.get("/api/v1/ml/models")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["enabled"] is False
+    assert isinstance(body["models"], list)
+
+
+def test_ml_predict_api_is_safe_when_disabled():
+    response = client.post(
+        "/api/v1/ml/predict",
+        json={"requestId": "ml-test", "features": {"return20d": 2.5}},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["requestId"] == "ml-test"
+    assert body["enabled"] is False
+    assert body["available"] is False
+
+
+def test_ml_training_sample_export_api_returns_csv_payload():
+    nav_series = [point.model_dump(mode="json") for point in make_request().navSeries]
+    response = client.post(
+        "/api/v1/ml/training-samples/export",
+        json={
+            "taskName": "ml-samples",
+            "strategyName": "QuantRuleEngine",
+            "startDate": "2026-03-20",
+            "endDate": "2026-05-10",
+            "funds": [
+                {
+                    "fundCode": "025833",
+                    "fundName": "Example Index Fund",
+                    "fundType": "INDEX",
+                    "navSeries": nav_series,
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["rowCount"] > 0
+    assert body["fileName"].endswith(".csv")
+    assert "return20d" in body["csvContent"]

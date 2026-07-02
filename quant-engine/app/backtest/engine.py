@@ -24,6 +24,7 @@ from app.core.schemas import (
 )
 from app.features.nav_features import build_nav_frame
 from app.features.risk_features import _annualized_volatility
+from app.ml.predict import MlSignalPredictor
 from app.strategies.scoring import clamp
 
 
@@ -32,13 +33,13 @@ WEAK_TREND_CONFIRM_DAYS = 5
 POSITION_BENCHMARK_TOLERANCE = 0.5
 
 
-def run_single_backtest(request: BacktestRunRequest, settings: Settings) -> BacktestResult:
+def run_single_backtest(request: BacktestRunRequest, settings: Settings, enable_ml: bool = False) -> BacktestResult:
     params = request.strategyParams
     frame = _prepare_frame(request.navSeries, request.startDate, request.endDate, params.warmupDays)
     if len(frame) < max(2, params.minNavSamples):
         return _empty_result(request, settings, len(frame), "历史净值样本不足，无法进行有效回测")
 
-    frame = _attach_signal_columns(frame, params)
+    frame = _attach_signal_columns(frame, params, settings, enable_ml)
     start = pd.to_datetime(request.startDate)
     trade_frame = frame[frame["date"] >= start].copy().reset_index(drop=True)
     if len(trade_frame) < 2:
@@ -240,10 +241,11 @@ def run_single_backtest(request: BacktestRunRequest, settings: Settings) -> Back
     win_rate = win_sell_count / sell_count * 100 if sell_count else 0.0
     turnover = trade_amount_sum / request.initialCash * 100 if request.initialCash > 0 else 0.0
     passed = _is_passed(annual, drawdown, position_benchmark_return, total_return, trade_count, trade_frame, data_coverage)
+    ml_stats = _ml_stats(trade_frame)
 
     return BacktestResult(
         strategyName="QuantRuleEngine",
-        modelVersion=settings.rule_model_version,
+        modelVersion=_model_version(settings, enable_ml),
         fundCode=request.fundCode,
         fundName=request.fundName,
         fundType=request.fundType,
@@ -270,6 +272,20 @@ def run_single_backtest(request: BacktestRunRequest, settings: Settings) -> Back
         turnoverRate=round(turnover, 4),
         navSampleSize=len(trade_frame),
         dataCoverageRate=round(data_coverage, 4),
+        mlApplied=ml_stats["applied"],
+        mlAppliedDays=ml_stats["applied_days"],
+        mlScoreAdjustmentAvg=ml_stats["avg"],
+        mlScoreAdjustmentAbsAvg=ml_stats["abs_avg"],
+        mlScoreAdjustmentMaxAbs=ml_stats["max_abs"],
+        mlExpectedReturnAvg=ml_stats["expected_return_avg"],
+        mlExpectedReturnPositiveDays=ml_stats["expected_return_positive_days"],
+        mlExpectedReturnPositiveDayRate=ml_stats["expected_return_positive_rate"],
+        mlProbabilityAvg=ml_stats["probability_avg"],
+        mlBullishDays=ml_stats["bullish_days"],
+        mlBullishDayRate=ml_stats["bullish_day_rate"],
+        mlSignalStrengthAvg=ml_stats["signal_strength_avg"],
+        mlConfidenceScoreAvg=ml_stats["confidence_score_avg"],
+        mlConfidenceMediumHighDayRate=ml_stats["confidence_medium_high_rate"],
         passed=passed,
         diagnosis=_diagnosis(
             passed,
@@ -306,6 +322,7 @@ def run_batch_backtest(request: BacktestBatchRunRequest, settings: Settings) -> 
                 strategyParams=request.strategyParams,
             ),
             settings,
+            bool(request.options.enableMl),
         )
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -328,7 +345,7 @@ def run_batch_backtest(request: BacktestBatchRunRequest, settings: Settings) -> 
         taskName=request.taskName,
         status="COMPLETED" if not errors or results else "FAILED",
         strategyName=request.strategyName,
-        modelVersion=settings.rule_model_version,
+        modelVersion=_model_version(settings, bool(request.options.enableMl)),
         fundCount=len(request.funds),
         successCount=len(results),
         failedCount=len(errors),
@@ -383,6 +400,18 @@ def summarize_results(results: list[BacktestResult]) -> BacktestSummary:
     outperform = [item for item in results if item.excessReturnRate > 0]
     outperform_position = [item for item in results if item.positionExcessReturnRate >= -POSITION_BENCHMARK_TOLERANCE]
     passed = [item for item in results if item.passed]
+    ml_applied = [item for item in results if item.mlApplied]
+    ml_abs_avg = [item.mlScoreAdjustmentAbsAvg for item in results if item.mlScoreAdjustmentAbsAvg > 0]
+    ml_max_abs = [item.mlScoreAdjustmentMaxAbs for item in results if item.mlScoreAdjustmentMaxAbs > 0]
+    ml_expected_return = [item.mlExpectedReturnAvg for item in results if item.mlApplied]
+    ml_positive_return_days = [item.mlExpectedReturnPositiveDays for item in results if item.mlApplied]
+    ml_positive_return_rate = [item.mlExpectedReturnPositiveDayRate for item in results if item.mlApplied]
+    ml_probability = [item.mlProbabilityAvg for item in results if item.mlApplied]
+    ml_bullish_days = [item.mlBullishDays for item in results if item.mlApplied]
+    ml_bullish_rate = [item.mlBullishDayRate for item in results if item.mlApplied]
+    ml_signal_strength = [item.mlSignalStrengthAvg for item in results if item.mlApplied]
+    ml_confidence_score = [item.mlConfidenceScoreAvg for item in results if item.mlApplied]
+    ml_confidence_rate = [item.mlConfidenceMediumHighDayRate for item in results if item.mlApplied]
     summary = BacktestSummary(
         avgAnnualReturnRate=round(float(np.mean(annual)), 4),
         medianAnnualReturnRate=round(float(np.median(annual)), 4),
@@ -398,6 +427,18 @@ def summarize_results(results: list[BacktestResult]) -> BacktestSummary:
         avgSharpeRatio=round(float(np.mean(sharpe)), 4) if sharpe else 0,
         avgCalmarRatio=round(float(np.mean(calmar)), 4) if calmar else 0,
         passRate=round(len(passed) / len(results) * 100, 4),
+        mlAppliedFundRate=round(len(ml_applied) / len(results) * 100, 4),
+        avgMlScoreAdjustmentAbs=round(float(np.mean(ml_abs_avg)), 4) if ml_abs_avg else 0,
+        maxMlScoreAdjustmentAbs=round(float(np.max(ml_max_abs)), 4) if ml_max_abs else 0,
+        avgMlExpectedReturn=round(float(np.mean(ml_expected_return)), 4) if ml_expected_return else 0,
+        avgMlExpectedReturnPositiveDays=round(float(np.mean(ml_positive_return_days)), 1) if ml_positive_return_days else 0,
+        avgMlExpectedReturnPositiveDayRate=round(float(np.mean(ml_positive_return_rate)), 4) if ml_positive_return_rate else 0,
+        avgMlProbability=round(float(np.mean(ml_probability)), 4) if ml_probability else 0,
+        avgMlBullishDays=round(float(np.mean(ml_bullish_days)), 1) if ml_bullish_days else 0,
+        avgMlBullishDayRate=round(float(np.mean(ml_bullish_rate)), 4) if ml_bullish_rate else 0,
+        avgMlSignalStrength=round(float(np.mean(ml_signal_strength)), 4) if ml_signal_strength else 0,
+        avgMlConfidenceScore=round(float(np.mean(ml_confidence_score)), 4) if ml_confidence_score else 0,
+        avgMlConfidenceMediumHighDayRate=round(float(np.mean(ml_confidence_rate)), 4) if ml_confidence_rate else 0,
     )
     summary.diagnosis = _summary_diagnosis(summary)
     return summary
@@ -415,7 +456,12 @@ def _prepare_frame(nav_series, start_date: str, end_date: str, warmup_days: int 
     return frame
 
 
-def _attach_signal_columns(frame: pd.DataFrame, params: BacktestStrategyParams) -> pd.DataFrame:
+def _attach_signal_columns(
+    frame: pd.DataFrame,
+    params: BacktestStrategyParams,
+    settings: Settings | None = None,
+    enable_ml: bool = False,
+) -> pd.DataFrame:
     nav = frame["nav"].astype(float)
     returns = nav.pct_change()
     out = frame.copy()
@@ -426,9 +472,23 @@ def _attach_signal_columns(frame: pd.DataFrame, params: BacktestStrategyParams) 
     ma20 = nav.rolling(20, min_periods=2).mean()
     out["ma20Deviation"] = ((nav / ma20 - 1) * 100).replace([np.inf, -np.inf], 0).fillna(0)
     out["volatility20d"] = returns.rolling(20, min_periods=2).apply(_annualized_volatility, raw=False).fillna(0)
+    out["trendSlope20d"] = nav.rolling(20, min_periods=2).apply(_trend_slope, raw=True).fillna(0)
+    rolling_max_20 = nav.rolling(20, min_periods=2).max()
+    out["maxDrawdown20d"] = ((nav / rolling_max_20 - 1) * 100).fillna(0)
     rolling_max_60 = nav.rolling(60, min_periods=2).max()
     out["maxDrawdown60d"] = ((nav / rolling_max_60 - 1) * 100).fillna(0)
     out["lossDayRatio20d"] = returns.rolling(20, min_periods=2).apply(lambda value: (value < 0).mean() * 100, raw=False).fillna(0)
+    daily = returns.fillna(0) * 100
+    out["consecutiveUpDays"] = _consecutive_streak(daily, positive=True)
+    out["consecutiveDownDays"] = _consecutive_streak(daily, positive=False)
+    out["positionToSingleLimit"] = 0.0
+    out["profitBuffer"] = np.maximum(out["return20d"], 0)
+    out["lossPressure"] = np.maximum(-out["return20d"], 0)
+    out["themeRate"] = 0.0
+    out["estimateGrowthRate"] = 0.0
+    out["navSampleSize"] = out["sampleIndex"]
+    out["holdingProfitRate"] = out["return20d"]
+    out["holdingDays"] = out["sampleIndex"]
     out["trendScore"] = out.apply(_trend_score, axis=1)
     out["opportunityScore"] = out.apply(_opportunity_score, axis=1)
     out["riskScore"] = out.apply(_risk_score, axis=1)
@@ -441,8 +501,162 @@ def _attach_signal_columns(frame: pd.DataFrame, params: BacktestStrategyParams) 
         + out["positionScore"] * 0.15
         + out["momentumScore"] * 0.10
     ).clip(0, 100)
+    if enable_ml and settings is not None:
+        out = _apply_ml_score_adjustment(out, settings)
     out.loc[out.index < params.minNavSamples, "totalScore"] = 50.0
     return out
+
+
+def _apply_ml_score_adjustment(out: pd.DataFrame, settings: Settings) -> pd.DataFrame:
+    predictor = MlSignalPredictor(
+        settings.ml_model_dir,
+        settings.ml_model_id,
+        enabled=True,
+        score_adjustment_cap=settings.ml_score_adjustment_cap,
+    )
+    probabilities: list[float | None] = []
+    adjustments: list[float] = []
+    expected_returns: list[float | None] = []
+    directions: list[str | None] = []
+    signal_strengths: list[float | None] = []
+    confidence_scores: list[float | None] = []
+    confidence_levels: list[str | None] = []
+    for row in out.to_dict(orient="records"):
+        prediction = predictor.predict(row)
+        probabilities.append(prediction.probability)
+        adjustments.append(prediction.scoreAdjustment if prediction.available else 0.0)
+        expected_returns.append(prediction.expectedReturn if prediction.returnModelAvailable else None)
+        directions.append(prediction.direction if prediction.available else None)
+        signal_strengths.append(prediction.signalStrength if prediction.available else None)
+        confidence_scores.append(prediction.confidenceScore if prediction.available else None)
+        confidence_levels.append(prediction.confidenceLevel if prediction.available else None)
+    out["mlProbability"] = probabilities
+    out["mlScoreAdjustment"] = adjustments
+    out["mlExpectedReturn"] = expected_returns
+    out["mlDirection"] = directions
+    out["mlSignalStrength"] = signal_strengths
+    out["mlConfidenceScore"] = confidence_scores
+    out["mlConfidenceLevel"] = confidence_levels
+    out["totalScore"] = (out["totalScore"] + out["mlScoreAdjustment"]).clip(0, 100)
+    return out
+
+
+def _ml_stats(frame: pd.DataFrame) -> dict[str, float | int | bool]:
+    if "mlScoreAdjustment" not in frame.columns:
+        return _empty_ml_stats()
+    values = frame["mlScoreAdjustment"].astype(float).replace([np.inf, -np.inf], 0).fillna(0)
+    abs_values = values.abs()
+    applied_days = int((abs_values > 1e-9).sum())
+    if applied_days == 0:
+        return _empty_ml_stats()
+    active_values = values[abs_values > 1e-9]
+    active_abs = abs_values[abs_values > 1e-9]
+    expected_return = frame.get("mlExpectedReturn")
+    probability = frame.get("mlProbability")
+    direction = frame.get("mlDirection")
+    signal_strength = frame.get("mlSignalStrength")
+    confidence_score = frame.get("mlConfidenceScore")
+    confidence = frame.get("mlConfidenceLevel")
+    expected_return_avg = 0.0
+    expected_return_positive_days = 0
+    expected_return_positive_rate = 0.0
+    probability_avg = 0.0
+    bullish_days = 0
+    bullish_day_rate = 0.0
+    signal_strength_avg = 0.0
+    confidence_score_avg = 0.0
+    confidence_medium_high_rate = 0.0
+    if expected_return is not None:
+        return_values = expected_return.astype(float).replace([np.inf, -np.inf], np.nan).dropna()
+        if len(return_values) > 0:
+            expected_return_positive_days = int((return_values > 0).sum())
+            expected_return_avg = round(float(return_values.mean()), 4)
+            expected_return_positive_rate = round(float((return_values > 0).mean() * 100), 4)
+    if probability is not None:
+        probability_values = probability.astype(float).replace([np.inf, -np.inf], np.nan).dropna()
+        if len(probability_values) > 0:
+            probability_avg = round(float(probability_values.mean() * 100), 4)
+    if direction is not None:
+        direction_values = direction.dropna()
+        if len(direction_values) > 0:
+            bullish_days = int((direction_values == "BULLISH").sum())
+            bullish_day_rate = round(float((direction_values == "BULLISH").mean() * 100), 4)
+    if signal_strength is not None:
+        signal_strength_values = signal_strength.astype(float).replace([np.inf, -np.inf], np.nan).dropna()
+        if len(signal_strength_values) > 0:
+            signal_strength_avg = round(float(signal_strength_values.mean() * 100), 4)
+    if confidence_score is not None:
+        confidence_score_values = confidence_score.astype(float).replace([np.inf, -np.inf], np.nan).dropna()
+        if len(confidence_score_values) > 0:
+            confidence_score_avg = round(float(confidence_score_values.mean() * 100), 4)
+    if confidence is not None:
+        confidence_values = confidence.dropna()
+        if len(confidence_values) > 0:
+            confidence_medium_high_rate = round(float(confidence_values.isin(["MEDIUM", "HIGH"]).mean() * 100), 4)
+    return {
+        "applied": True,
+        "applied_days": applied_days,
+        "avg": round(float(active_values.mean()), 4),
+        "abs_avg": round(float(active_abs.mean()), 4),
+        "max_abs": round(float(active_abs.max()), 4),
+        "expected_return_avg": expected_return_avg,
+        "expected_return_positive_days": expected_return_positive_days,
+        "expected_return_positive_rate": expected_return_positive_rate,
+        "probability_avg": probability_avg,
+        "bullish_days": bullish_days,
+        "bullish_day_rate": bullish_day_rate,
+        "signal_strength_avg": signal_strength_avg,
+        "confidence_score_avg": confidence_score_avg,
+        "confidence_medium_high_rate": confidence_medium_high_rate,
+    }
+
+
+def _empty_ml_stats() -> dict[str, float | int | bool]:
+    return {
+        "applied": False,
+        "applied_days": 0,
+        "avg": 0.0,
+        "abs_avg": 0.0,
+        "max_abs": 0.0,
+        "expected_return_avg": 0.0,
+        "expected_return_positive_days": 0,
+        "expected_return_positive_rate": 0.0,
+        "probability_avg": 0.0,
+        "bullish_days": 0,
+        "bullish_day_rate": 0.0,
+        "signal_strength_avg": 0.0,
+        "confidence_score_avg": 0.0,
+        "confidence_medium_high_rate": 0.0,
+    }
+
+
+def _trend_slope(values: np.ndarray) -> float:
+    mean = float(np.mean(values))
+    if len(values) < 2 or mean == 0:
+        return 0.0
+    x = np.arange(len(values), dtype=float)
+    return float(np.polyfit(x, values, 1)[0]) / mean * 100
+
+
+def _consecutive_streak(values: pd.Series, positive: bool) -> pd.Series:
+    mask = values.gt(0) if positive else values.lt(0)
+    groups = (~mask).cumsum()
+    streak = mask.groupby(groups).cumcount() + 1
+    return streak.where(mask, 0)
+
+
+def _model_version(settings: Settings, enable_ml: bool) -> str:
+    if not enable_ml:
+        return settings.rule_model_version
+    predictor = MlSignalPredictor(
+        settings.ml_model_dir,
+        settings.ml_model_id,
+        enabled=True,
+        score_adjustment_cap=settings.ml_score_adjustment_cap,
+    )
+    if predictor.metadata is None:
+        return f"{settings.rule_model_version}+ml-unavailable"
+    return f"{settings.rule_model_version}+{predictor.metadata.modelVersion}"
 
 
 def _should_hold_trend(row, params: BacktestStrategyParams) -> bool:

@@ -172,6 +172,7 @@ class BacktestOptions(ApiModel):
     workers: int = 6
     saveEquityCurve: bool = True
     saveTrades: bool = True
+    enableMl: bool = False
 
 
 class BacktestFund(ApiModel):
@@ -267,6 +268,20 @@ class BacktestResult(ApiModel):
     turnoverRate: float
     navSampleSize: int
     dataCoverageRate: float = 0
+    mlApplied: bool = False
+    mlAppliedDays: int = 0
+    mlScoreAdjustmentAvg: float = 0
+    mlScoreAdjustmentAbsAvg: float = 0
+    mlScoreAdjustmentMaxAbs: float = 0
+    mlExpectedReturnAvg: float = 0
+    mlExpectedReturnPositiveDays: int = 0
+    mlExpectedReturnPositiveDayRate: float = 0
+    mlProbabilityAvg: float = 0
+    mlBullishDays: int = 0
+    mlBullishDayRate: float = 0
+    mlSignalStrengthAvg: float = 0
+    mlConfidenceScoreAvg: float = 0
+    mlConfidenceMediumHighDayRate: float = 0
     passed: bool
     diagnosis: str
     equityCurve: list[BacktestEquityPoint] = Field(default_factory=list)
@@ -288,6 +303,18 @@ class BacktestSummary(ApiModel):
     avgSharpeRatio: float = 0
     avgCalmarRatio: float = 0
     passRate: float = 0
+    mlAppliedFundRate: float = 0
+    avgMlScoreAdjustmentAbs: float = 0
+    maxMlScoreAdjustmentAbs: float = 0
+    avgMlExpectedReturn: float = 0
+    avgMlExpectedReturnPositiveDays: float = 0
+    avgMlExpectedReturnPositiveDayRate: float = 0
+    avgMlProbability: float = 0
+    avgMlBullishDays: float = 0
+    avgMlBullishDayRate: float = 0
+    avgMlSignalStrength: float = 0
+    avgMlConfidenceScore: float = 0
+    avgMlConfidenceMediumHighDayRate: float = 0
     diagnosis: str = "NO_DATA"
 
 
@@ -325,3 +352,24 @@ class BacktestGridRunResponse(ApiModel):
     combinationCount: int
     bestParams: dict[str, float]
     topResults: list[BacktestGridResult]
+
+
+class MlTrainingLabelConfig(ApiModel):
+    horizonDays: int = 20
+    minForwardReturn: float = 2
+    maxForwardDrawdown: float = -8
+
+
+class MlTrainingSampleExportRequest(BacktestBatchRunRequest):
+    labelConfig: MlTrainingLabelConfig = Field(default_factory=MlTrainingLabelConfig)
+
+
+class MlTrainingSampleExportResponse(ApiModel):
+    fileName: str
+    rowCount: int
+    fundCount: int
+    positiveCount: int
+    negativeCount: int
+    featureColumns: list[str]
+    labelConfig: MlTrainingLabelConfig
+    csvContent: str

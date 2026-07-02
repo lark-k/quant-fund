@@ -10,7 +10,7 @@ def test_rule_model_returns_complete_signal_shape():
 
     assert response.fundCode == "025833"
     assert response.action in {"BUY", "SELL", "HOLD", "WATCH"}
-    assert response.modelVersion == "rule-v1.19.0"
+    assert response.modelVersion == "rule-v1.21.0"
     assert response.score.totalScore >= 0
     assert "return20d" in response.metrics
     assert response.reasons

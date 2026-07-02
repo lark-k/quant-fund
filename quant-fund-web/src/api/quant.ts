@@ -105,6 +105,9 @@ export const quantApi = {
   refreshBacktestNavCache(request: BacktestRunRequest): Promise<BacktestNavRefreshResponse> {
     return http.post('/backtests/nav-cache/refresh', request, { timeout: 360000 })
   },
+  exportMlTrainingSamples(request: BacktestRunRequest): Promise<Blob> {
+    return http.post('/backtests/ml-training-samples/export', request, { timeout: 360000, responseType: 'blob' })
+  },
   aiHistory(): Promise<AiAnalysisReport[]> {
     return USE_MOCK ? mockApi.aiHistory() : http.get('/ai-analysis/history')
   },

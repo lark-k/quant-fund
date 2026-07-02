@@ -35,6 +35,30 @@ const historyHasMore = computed(() => filteredReports.value.length > HISTORY_PRE
 
 const selectedConclusion = computed(() => cleanAdvisoryText(selected.value?.finalConclusion || ''))
 const selectedDisclaimer = computed(() => selected.value?.disclaimer || DISCLAIMER)
+const mlBusinessInfo = computed(() => {
+  const metrics = parseMetrics(quantSignal.value?.metricsJson)
+  if (!metrics.mlAvailable) return undefined
+  const probability = metricNumber(metrics.mlProbability)
+  const expectedReturn = metricNumber(metrics.mlExpectedReturn)
+  const lower = metricNumber(metrics.mlExpectedReturnLower)
+  const upper = metricNumber(metrics.mlExpectedReturnUpper)
+  const adjustment = metricNumber(metrics.mlScoreAdjustment)
+  const confidenceScore = metricNumber(metrics.mlConfidenceScore)
+  const signalStrength = metricNumber(metrics.mlSignalStrength)
+  const qualityWeight = metricNumber(metrics.mlQualityWeight)
+  return {
+    direction: String(metrics.mlDirectionText || '中性'),
+    confidence: levelText(String(metrics.mlConfidenceLevel || 'LOW')),
+    modelQuality: levelText(String(metrics.mlModelQualityLevel || 'LOW')),
+    probabilityText: probability === null ? '--' : percentUnsigned(probability * 100, 0),
+    confidenceScoreText: confidenceScore === null ? '--' : percentUnsigned(confidenceScore * 100, 0),
+    signalStrengthText: signalStrength === null ? '--' : percentUnsigned(signalStrength * 100, 0),
+    qualityWeightText: qualityWeight === null ? '--' : percentUnsigned(qualityWeight * 100, 0),
+    expectedText: expectedReturn === null ? '--' : percent(expectedReturn, 2),
+    bandText: lower === null || upper === null ? '收益区间不足' : `${percent(lower, 2)} 至 ${percent(upper, 2)}`,
+    adjustmentText: adjustment === null ? '--' : adjustment.toFixed(2)
+  }
+})
 const quantMetricItems = computed(() => {
   const signal = quantSignal.value
   const metrics = parseMetrics(signal?.metricsJson)
@@ -199,6 +223,13 @@ function term(label: string, description: string) {
 function metricNumber(value: unknown) {
   const numberValue = Number(value)
   return Number.isFinite(numberValue) ? numberValue : null
+}
+
+function levelText(value: string) {
+  if (value === 'HIGH') return '高'
+  if (value === 'MEDIUM') return '中'
+  if (value === 'LOW') return '低'
+  return value || '--'
 }
 
 function percentValue(value: unknown) {
@@ -370,6 +401,9 @@ async function loadQuantSignal(holdingId?: number) {
           <MetricTile label="建议比例" :value="actionPercent(selected.action, selected.suggestRatio)" sub-label="由用户自行确认" tone="warning" />
           <MetricTile label="信心分" :value="percentUnsigned(selected.confidence * 100, 0)" sub-label="模型置信度" tone="info" />
           <MetricTile label="风险等级" :value="selected.riskLevel" sub-label="LOW / MEDIUM / HIGH" tone="fall" />
+          <MetricTile v-if="mlBusinessInfo" label="ML方向" :value="mlBusinessInfo.direction" :delta="`偏强概率 ${mlBusinessInfo.probabilityText}`" tone="info" />
+          <MetricTile v-if="mlBusinessInfo" label="本次可信度" :value="mlBusinessInfo.confidenceScoreText" :sub-label="`模型质量 ${mlBusinessInfo.modelQuality} · 权重 ${mlBusinessInfo.qualityWeightText}`" :delta="`信号强度 ${mlBusinessInfo.signalStrengthText}`" tone="info" />
+          <MetricTile v-if="mlBusinessInfo" label="预测收益区间" :value="mlBusinessInfo.expectedText" :delta="mlBusinessInfo.bandText" tone="warning" />
           <MetricTile label="持仓金额" :value="selectedHolding ? money(selectedHolding.holdingAmount) : '--'" />
           <MetricTile label="当日收益" :value="selectedHolding ? signed(selectedHolding.dailyProfit) : '--'" :class="selectedHolding ? toneClass(selectedHolding.dailyProfit) : ''" />
         </div>

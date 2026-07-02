@@ -14,8 +14,10 @@ import { metricTone, money, percent, percentUnsigned, toneClass } from '@/utils/
 const loadingAccounts = ref(true)
 const running = ref(false)
 const refreshingNav = ref(false)
+const exportingSamples = ref(false)
 const accounts = ref<PortfolioAccount[]>([])
 const response = ref<BacktestBatchResponse>()
+const mlResponse = ref<BacktestBatchResponse>()
 const selectedFundCode = ref('')
 
 const form = reactive({
@@ -35,7 +37,8 @@ const form = reactive({
   warmupDays: 90,
   trendHoldReturn20d: 2,
   trendHoldMa20Deviation: -6,
-  workers: 6
+  workers: 6,
+  compareMl: false
 })
 
 onMounted(async () => {
@@ -49,6 +52,29 @@ onMounted(async () => {
 
 const results = computed(() => response.value?.results || [])
 const summary = computed(() => response.value?.summary)
+const mlSummary = computed(() => mlResponse.value?.summary)
+const mlComparison = computed(() => {
+  if (!summary.value || !mlSummary.value) return undefined
+  return {
+    annualReturnDelta: mlSummary.value.avgAnnualReturnRate - summary.value.avgAnnualReturnRate,
+    drawdownDelta: mlSummary.value.avgMaxDrawdownRate - summary.value.avgMaxDrawdownRate,
+    passRateDelta: mlSummary.value.passRate - summary.value.passRate,
+    tradeCountDelta: mlSummary.value.avgTradeCount - summary.value.avgTradeCount,
+    outperformDelta: mlSummary.value.outperformPositionBenchmarkRate - summary.value.outperformPositionBenchmarkRate,
+    mlAppliedFundRate: mlSummary.value.mlAppliedFundRate || 0,
+    avgMlScoreAdjustmentAbs: mlSummary.value.avgMlScoreAdjustmentAbs || 0,
+    maxMlScoreAdjustmentAbs: mlSummary.value.maxMlScoreAdjustmentAbs || 0,
+    avgMlExpectedReturn: mlSummary.value.avgMlExpectedReturn || 0,
+    avgMlExpectedReturnPositiveDays: mlSummary.value.avgMlExpectedReturnPositiveDays || 0,
+    avgMlExpectedReturnPositiveDayRate: mlSummary.value.avgMlExpectedReturnPositiveDayRate || 0,
+    avgMlProbability: mlSummary.value.avgMlProbability || 0,
+    avgMlBullishDays: mlSummary.value.avgMlBullishDays || 0,
+    avgMlBullishDayRate: mlSummary.value.avgMlBullishDayRate || 0,
+    avgMlSignalStrength: mlSummary.value.avgMlSignalStrength || 0,
+    avgMlConfidenceScore: mlSummary.value.avgMlConfidenceScore || 0,
+    avgMlConfidenceMediumHighDayRate: mlSummary.value.avgMlConfidenceMediumHighDayRate || 0
+  }
+})
 const selectedResult = computed(() => {
   if (!results.value.length) return undefined
   return results.value.find((item) => item.fundCode === selectedFundCode.value) || results.value[0]
@@ -99,7 +125,11 @@ async function runBacktest() {
   if (!validateBacktestRange()) return
   running.value = true
   try {
-    response.value = await quantApi.runBacktest(buildBacktestRequest())
+    mlResponse.value = undefined
+    response.value = await quantApi.runBacktest(buildBacktestRequest(false))
+    if (form.compareMl) {
+      mlResponse.value = await quantApi.runBacktest(buildBacktestRequest(true))
+    }
     selectedFundCode.value = response.value.results[0]?.fundCode || ''
     ElMessage.success('回测完成')
   } finally {
@@ -112,7 +142,7 @@ async function refreshNavCache() {
   if (!validateBacktestRange()) return
   refreshingNav.value = true
   try {
-    const result = await quantApi.refreshBacktestNavCache(buildBacktestRequest())
+    const result = await quantApi.refreshBacktestNavCache(buildBacktestRequest(false))
     if (result.failedCount > 0) {
       ElMessage.warning(`历史净值拉取完成：成功 ${result.successCount} 只，失败/空数据 ${result.failedCount} 只`)
     } else {
@@ -120,6 +150,27 @@ async function refreshNavCache() {
     }
   } finally {
     refreshingNav.value = false
+  }
+}
+
+async function exportMlTrainingSamples() {
+  if (exportingSamples.value) return
+  if (!validateBacktestRange()) return
+  exportingSamples.value = true
+  try {
+    const blob = await quantApi.exportMlTrainingSamples(buildBacktestRequest(false))
+    const fileName = `quantfund_ml_training_${form.startDate}_${form.endDate}.csv`
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = fileName
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.URL.revokeObjectURL(url)
+    ElMessage.success('ML训练样本已导出')
+  } finally {
+    exportingSamples.value = false
   }
 }
 
@@ -131,7 +182,7 @@ function validateBacktestRange() {
   return true
 }
 
-function buildBacktestRequest(): BacktestRunRequest {
+function buildBacktestRequest(enableMl = false): BacktestRunRequest {
   return {
     accountId: form.accountId,
     startDate: form.startDate,
@@ -154,7 +205,8 @@ function buildBacktestRequest(): BacktestRunRequest {
     options: {
       workers: form.workers,
       saveEquityCurve: true,
-      saveTrades: true
+      saveTrades: true,
+      enableMl
     }
   }
 }
@@ -208,7 +260,11 @@ function reasonText(reason: string) {
             <el-icon :class="{ spinning: refreshingNav }"><component :is="refreshingNav ? Refresh : Download" /></el-icon>
             <span>{{ refreshingNav ? '拉取中' : '拉取净值' }}</span>
           </button>
-          <button class="primary-button" type="button" :disabled="running || refreshingNav" @click="runBacktest">
+          <button class="ghost-button" type="button" :disabled="exportingSamples || refreshingNav || running" @click="exportMlTrainingSamples">
+            <el-icon :class="{ spinning: exportingSamples }"><component :is="exportingSamples ? Refresh : Download" /></el-icon>
+            <span>{{ exportingSamples ? '导出中' : '导出样本' }}</span>
+          </button>
+          <button class="primary-button" type="button" :disabled="running || refreshingNav || exportingSamples" @click="runBacktest">
             <el-icon :class="{ spinning: running }"><component :is="running ? Refresh : VideoPlay" /></el-icon>
             <span>{{ running ? '回测中' : '运行回测' }}</span>
           </button>
@@ -237,6 +293,7 @@ function reasonText(reason: string) {
         <label><span>持有20日收益</span><input v-model.number="form.trendHoldReturn20d" type="number" step="1"></label>
         <label><span>持有均线偏离</span><input v-model.number="form.trendHoldMa20Deviation" type="number" step="1"></label>
         <label><span>Workers</span><input v-model.number="form.workers" type="number" min="1" max="12"></label>
+        <label class="toggle-row"><span>ML辅助对比</span><input v-model="form.compareMl" type="checkbox"></label>
       </div>
     </section>
 
@@ -255,6 +312,26 @@ function reasonText(reason: string) {
         <MetricTile label="平均交易次数" :value="nullableRatio(summary?.avgTradeCount, 1)" delta="每年建议不超过 12" :tone="metricTone(12 - (summary?.avgTradeCount || 0))" />
         <MetricTile label="样本基金" :value="`${response.successCount}/${response.fundCount}`" :delta="response.failedCount ? `失败 ${response.failedCount}` : response.modelVersion" tone="info" />
       </div>
+
+      <section v-if="mlComparison && mlResponse" class="panel">
+        <div class="panel-header">
+          <h2 class="panel-title">ML辅助 A/B 对比</h2>
+          <span class="item-meta">{{ mlResponse.modelVersion }}</span>
+        </div>
+        <div class="metric-row compact-metrics">
+          <MetricTile label="年化差异" :value="percent(mlComparison.annualReturnDelta, 2)" :delta="`ML ${percent(mlSummary?.avgAnnualReturnRate || 0, 2)} / 规则 ${percent(summary?.avgAnnualReturnRate || 0, 2)}`" :tone="metricTone(mlComparison.annualReturnDelta)" />
+          <MetricTile label="通过率差异" :value="percentUnsigned(mlComparison.passRateDelta, 1)" :delta="`ML ${percentUnsigned(mlSummary?.passRate || 0, 1)}`" :tone="metricTone(mlComparison.passRateDelta)" />
+          <MetricTile label="同仓跑赢差异" :value="percentUnsigned(mlComparison.outperformDelta, 1)" :delta="`ML ${percentUnsigned(mlSummary?.outperformPositionBenchmarkRate || 0, 1)}`" :tone="metricTone(mlComparison.outperformDelta)" />
+          <MetricTile label="回撤差异" :value="percent(mlComparison.drawdownDelta, 2)" :delta="mlComparison.drawdownDelta <= 0 ? '回撤改善' : '回撤变大'" :tone="mlComparison.drawdownDelta <= 0 ? 'rise' : 'fall'" />
+          <MetricTile label="交易次数差异" :value="nullableRatio(mlComparison.tradeCountDelta, 1)" :delta="mlComparison.tradeCountDelta <= 0 ? '频率下降' : '频率上升'" :tone="mlComparison.tradeCountDelta <= 0 ? 'rise' : 'warning'" />
+          <MetricTile label="偏强概率" :value="percentUnsigned(mlComparison.avgMlProbability, 1)" :delta="`样本偏强占比 ${percentUnsigned(mlComparison.avgMlBullishDayRate, 1)}`" :tone="metricTone(mlComparison.avgMlProbability - 50)" />
+          <MetricTile label="预测收益参考" :value="percent(mlComparison.avgMlExpectedReturn, 2)" delta="未来20个净值样本参考" :tone="metricTone(mlComparison.avgMlExpectedReturn)" />
+          <MetricTile label="平均参考权重" :value="percentUnsigned(mlComparison.avgMlConfidenceScore, 1)" :delta="`中高可信覆盖 ${percentUnsigned(mlComparison.avgMlConfidenceMediumHighDayRate, 1)}`" tone="info" />
+          <MetricTile label="信号强度" :value="percentUnsigned(mlComparison.avgMlSignalStrength, 1)" delta="越高越偏离 50%" tone="info" />
+          <MetricTile label="ML生效基金" :value="percentUnsigned(mlComparison.mlAppliedFundRate, 1)" :delta="`最大调分 ${nullableRatio(mlComparison.maxMlScoreAdjustmentAbs, 2)}`" tone="info" />
+          <MetricTile label="平均调分" :value="nullableRatio(mlComparison.avgMlScoreAdjustmentAbs, 2)" delta="仅表示参与强度" tone="info" />
+        </div>
+      </section>
 
       <section class="panel">
         <div class="panel-header">

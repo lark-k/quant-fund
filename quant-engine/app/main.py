@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from app.api.backtest import router as backtest_router
 from app.api.health import router as health_router
 from app.api.inference import router as inference_router
+from app.api.ml import router as ml_router
 
 
 app = FastAPI(
@@ -14,3 +15,4 @@ app = FastAPI(
 app.include_router(health_router)
 app.include_router(inference_router)
 app.include_router(backtest_router)
+app.include_router(ml_router)

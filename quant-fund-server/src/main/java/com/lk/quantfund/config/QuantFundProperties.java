@@ -252,7 +252,7 @@ public class QuantFundProperties {
         @Min(1000)
         private int backtestTimeoutMs = 300000;
         @NotBlank
-        private String modelVersion = "rule-v1.19.0";
+        private String modelVersion = "rule-v1.21.0";
         private boolean fallbackToJavaRules = true;
         @NotBlank
         private String decisionDeadline = "15:00:00";
