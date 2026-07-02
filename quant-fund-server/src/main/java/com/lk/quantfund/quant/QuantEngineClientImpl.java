@@ -138,9 +138,11 @@ public class QuantEngineClientImpl implements QuantEngineClient {
     }
 
     private WebClient client() {
-        return webClientBuilder
+        int responseMaxBytes = properties.getQuantEngine().getResponseMaxInMemoryMb() * 1024 * 1024;
+        return webClientBuilder.clone()
                 .baseUrl(properties.getQuantEngine().getBaseUrl())
                 .defaultHeader("User-Agent", "QuantFund/0.1.0")
+                .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(responseMaxBytes))
                 .build();
     }
 

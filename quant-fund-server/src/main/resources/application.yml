@@ -77,6 +77,7 @@ quantfund:
     timeout-ms: ${QUANT_ENGINE_TIMEOUT_MS:8000}
     batch-timeout-ms: ${QUANT_ENGINE_BATCH_TIMEOUT_MS:60000}
     backtest-timeout-ms: ${QUANT_ENGINE_BACKTEST_TIMEOUT_MS:300000}
+    response-max-in-memory-mb: ${QUANT_ENGINE_RESPONSE_MAX_IN_MEMORY_MB:16}
     model-version: ${QUANT_ENGINE_MODEL_VERSION:rule-v1.21.0}
     fallback-to-java-rules: ${QUANT_ENGINE_FALLBACK_TO_JAVA_RULES:true}
     decision-deadline: ${QUANT_ENGINE_DECISION_DEADLINE:15:00:00}

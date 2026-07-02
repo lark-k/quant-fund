@@ -251,6 +251,8 @@ public class QuantFundProperties {
         private int batchTimeoutMs = 60000;
         @Min(1000)
         private int backtestTimeoutMs = 300000;
+        @Min(1)
+        private int responseMaxInMemoryMb = 16;
         @NotBlank
         private String modelVersion = "rule-v1.21.0";
         private boolean fallbackToJavaRules = true;
@@ -312,6 +314,14 @@ public class QuantFundProperties {
 
         public void setBacktestTimeoutMs(int backtestTimeoutMs) {
             this.backtestTimeoutMs = backtestTimeoutMs;
+        }
+
+        public int getResponseMaxInMemoryMb() {
+            return responseMaxInMemoryMb;
+        }
+
+        public void setResponseMaxInMemoryMb(int responseMaxInMemoryMb) {
+            this.responseMaxInMemoryMb = responseMaxInMemoryMb;
         }
 
         public String getModelVersion() {
