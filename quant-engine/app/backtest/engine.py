@@ -24,6 +24,7 @@ from app.core.schemas import (
 )
 from app.features.nav_features import build_nav_frame
 from app.features.risk_features import _annualized_volatility
+from app.ml.features import fund_profile_features
 from app.ml.predict import MlSignalPredictor
 from app.strategies.fund_profile import (
     FundProfile,
@@ -51,7 +52,7 @@ def run_single_backtest(request: BacktestRunRequest, settings: Settings, enable_
     if len(frame) < max(2, params.minNavSamples):
         return _empty_result(request, settings, len(frame), "历史净值样本不足，无法进行有效回测")
 
-    frame = _attach_signal_columns(frame, params, settings, enable_ml)
+    frame = _attach_signal_columns(frame, params, settings, enable_ml, request.fundCode, request.fundName, request.fundType)
     start = pd.to_datetime(request.startDate)
     trade_frame = frame[frame["date"] >= start].copy().reset_index(drop=True)
     if len(trade_frame) < 2:
@@ -543,6 +544,9 @@ def _attach_signal_columns(
     params: BacktestStrategyParams,
     settings: Settings | None = None,
     enable_ml: bool = False,
+    fund_code: str | None = None,
+    fund_name: str | None = None,
+    fund_type: str | None = None,
 ) -> pd.DataFrame:
     nav = frame["nav"].astype(float)
     returns = nav.pct_change()
@@ -551,14 +555,22 @@ def _attach_signal_columns(
     out["return5d"] = (nav / nav.shift(5) - 1).fillna(0) * 100
     out["return20d"] = (nav / nav.shift(20) - 1).fillna(0) * 100
     out["return60d"] = (nav / nav.shift(60) - 1).fillna(0) * 100
+    out["return120d"] = (nav / nav.shift(120) - 1).fillna(0) * 100
     ma20 = nav.rolling(20, min_periods=2).mean()
+    ma60 = nav.rolling(60, min_periods=2).mean()
+    ma120 = nav.rolling(120, min_periods=2).mean()
     out["ma20Deviation"] = ((nav / ma20 - 1) * 100).replace([np.inf, -np.inf], 0).fillna(0)
+    out["ma60Deviation"] = ((nav / ma60 - 1) * 100).replace([np.inf, -np.inf], 0).fillna(0)
+    out["ma120Deviation"] = ((nav / ma120 - 1) * 100).replace([np.inf, -np.inf], 0).fillna(0)
     out["volatility20d"] = returns.rolling(20, min_periods=2).apply(_annualized_volatility, raw=False).fillna(0)
+    out["volatility60d"] = returns.rolling(60, min_periods=2).apply(_annualized_volatility, raw=False).fillna(0)
     out["trendSlope20d"] = nav.rolling(20, min_periods=2).apply(_trend_slope, raw=True).fillna(0)
     rolling_max_20 = nav.rolling(20, min_periods=2).max()
     out["maxDrawdown20d"] = ((nav / rolling_max_20 - 1) * 100).fillna(0)
     rolling_max_60 = nav.rolling(60, min_periods=2).max()
     out["maxDrawdown60d"] = ((nav / rolling_max_60 - 1) * 100).fillna(0)
+    rolling_max_120 = nav.rolling(120, min_periods=2).max()
+    out["maxDrawdown120d"] = ((nav / rolling_max_120 - 1) * 100).fillna(0)
     out["lossDayRatio20d"] = returns.rolling(20, min_periods=2).apply(lambda value: (value < 0).mean() * 100, raw=False).fillna(0)
     daily = returns.fillna(0) * 100
     out["consecutiveUpDays"] = _consecutive_streak(daily, positive=True)
@@ -571,6 +583,9 @@ def _attach_signal_columns(
     out["navSampleSize"] = out["sampleIndex"]
     out["holdingProfitRate"] = out["return20d"]
     out["holdingDays"] = out["sampleIndex"]
+    _attach_market_signal_columns(out)
+    for column, value in fund_profile_features(fund_code, fund_name, fund_type).items():
+        out[column] = value
     out["trendScore"] = out.apply(_trend_score, axis=1)
     out["opportunityScore"] = out.apply(_opportunity_score, axis=1)
     out["riskScore"] = out.apply(_risk_score, axis=1)
@@ -587,6 +602,25 @@ def _attach_signal_columns(
         out = _apply_ml_score_adjustment(out, settings)
     out.loc[out.index < params.minNavSamples, "totalScore"] = 50.0
     return out
+
+
+def _attach_market_signal_columns(out: pd.DataFrame) -> None:
+    market_sources = {
+        "trackingIndex": "indexReturnRate",
+        "marketSh000001": "marketSh000001ReturnRate",
+        "marketSz399001": "marketSz399001ReturnRate",
+        "marketCyb399006": "marketCyb399006ReturnRate",
+        "marketHs300": "marketHs300ReturnRate",
+        "marketZz500": "marketZz500ReturnRate",
+    }
+    for prefix, column in market_sources.items():
+        values = pd.to_numeric(out.get(column, 0.0), errors="coerce")
+        relative = (1 + values / 100).replace([np.inf, -np.inf], np.nan)
+        for window in (20, 60, 120):
+            market_return = ((relative / relative.shift(window) - 1) * 100).replace([np.inf, -np.inf], 0).fillna(0)
+            out[f"{prefix}Return{window}d"] = market_return
+            if prefix == "trackingIndex":
+                out[f"trackingExcessReturn{window}d"] = out[f"return{window}d"] - market_return
 
 
 def _apply_ml_score_adjustment(out: pd.DataFrame, settings: Settings) -> pd.DataFrame:

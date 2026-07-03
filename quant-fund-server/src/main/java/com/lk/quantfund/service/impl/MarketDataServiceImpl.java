@@ -307,8 +307,14 @@ public class MarketDataServiceImpl implements MarketDataService {
     }
 
     private String secid(String indexCode) {
+        if ("HSTECH".equalsIgnoreCase(indexCode)) {
+            return "124.HSTECH";
+        }
         if ("HSI".equalsIgnoreCase(indexCode) || "NDX".equalsIgnoreCase(indexCode) || "SPX".equalsIgnoreCase(indexCode)) {
             return "100." + indexCode.toUpperCase();
+        }
+        if ("931994".equals(indexCode)) {
+            return "2.931994";
         }
         return indexCode.startsWith("399") ? "0." + indexCode : "1." + indexCode;
     }

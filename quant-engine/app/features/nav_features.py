@@ -17,7 +17,18 @@ def build_nav_frame(nav_series: list[NavPoint]) -> pd.DataFrame:
     frame = pd.DataFrame(rows)
     frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
     frame["nav"] = pd.to_numeric(frame["nav"], errors="coerce")
-    frame["dailyGrowthRate"] = pd.to_numeric(frame.get("dailyGrowthRate"), errors="coerce")
+    for column in (
+        "dailyGrowthRate",
+        "indexReturnRate",
+        "marketSh000001ReturnRate",
+        "marketSz399001ReturnRate",
+        "marketCyb399006ReturnRate",
+        "marketHs300ReturnRate",
+        "marketZz500ReturnRate",
+    ):
+        if column not in frame.columns:
+            frame[column] = np.nan
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
     frame = frame.dropna(subset=["date", "nav"]).sort_values("date")
     return frame.reset_index(drop=True)
 
@@ -47,6 +58,7 @@ def calculate_nav_features(nav_series: list[NavPoint]) -> dict[str, float | int]
     daily = daily.fillna(0)
     features["consecutiveUpDays"] = _consecutive_days(daily, positive=True)
     features["consecutiveDownDays"] = _consecutive_days(daily, positive=False)
+    features.update(_market_features(frame, features))
     return features
 
 
@@ -99,4 +111,55 @@ def _empty_nav_features() -> dict[str, float | int]:
     features["trendSlope60d"] = 0.0
     features["consecutiveUpDays"] = 0
     features["consecutiveDownDays"] = 0
+    for prefix in (
+        "trackingIndex",
+        "trackingExcess",
+        "marketSh000001",
+        "marketSz399001",
+        "marketCyb399006",
+        "marketHs300",
+        "marketZz500",
+    ):
+        for window in (20, 60, 120):
+            features[f"{prefix}Return{window}d"] = 0.0
     return features
+
+
+def _market_features(frame: pd.DataFrame, nav_features: dict[str, float | int]) -> dict[str, float]:
+    features: dict[str, float] = {}
+    market_sources = {
+        "trackingIndex": "indexReturnRate",
+        "marketSh000001": "marketSh000001ReturnRate",
+        "marketSz399001": "marketSz399001ReturnRate",
+        "marketCyb399006": "marketCyb399006ReturnRate",
+        "marketHs300": "marketHs300ReturnRate",
+        "marketZz500": "marketZz500ReturnRate",
+    }
+    for prefix, column in market_sources.items():
+        series = frame.get(column)
+        returns = _cumulative_return_windows(series)
+        for window, value in returns.items():
+            features[f"{prefix}Return{window}d"] = round(value, 4)
+            if prefix == "trackingIndex":
+                fund_return = float(nav_features.get(f"return{window}d", 0.0) or 0.0)
+                features[f"trackingExcessReturn{window}d"] = round(fund_return - value, 4)
+    return features
+
+
+def _cumulative_return_windows(series: pd.Series | None) -> dict[int, float]:
+    result: dict[int, float] = {}
+    if series is None:
+        return {window: 0.0 for window in (20, 60, 120)}
+    cumulative = pd.to_numeric(series, errors="coerce")
+    relative = (1 + cumulative / 100).replace([np.inf, -np.inf], np.nan)
+    for window in (20, 60, 120):
+        if len(relative) <= window:
+            result[window] = 0.0
+            continue
+        latest = float(relative.iloc[-1])
+        previous = float(relative.iloc[-window - 1])
+        if not np.isfinite(latest) or not np.isfinite(previous) or previous == 0:
+            result[window] = 0.0
+        else:
+            result[window] = (latest / previous - 1) * 100
+    return result

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import pandas as pd
+
 from app.core.config import Settings
 from app.core.schemas import BacktestFund, MlTrainingSampleExportRequest
-from app.ml.features import FEATURE_COLUMNS, feature_row
+from app.ml.features import FEATURE_COLUMNS, fund_profile_features, feature_row
 from app.ml.predict import (
     MlSignalPredictor,
     _confidence_level,
@@ -16,6 +18,13 @@ from app.ml.predict import (
 )
 from app.ml.registry import ModelMetadata, ModelRegistry
 from app.ml.samples import export_training_samples
+from app.ml.training import (
+    _activation_allowed,
+    _classification_label_column,
+    _classification_labels,
+    _feature_columns_for_set,
+    _sample_weights,
+)
 from app.strategies.scoring import ScoreBreakdown, adjust_total_score
 
 from .conftest import make_nav_series
@@ -27,6 +36,17 @@ def test_feature_row_uses_stable_columns_and_numeric_defaults():
     assert len(row) == len(FEATURE_COLUMNS)
     assert row[FEATURE_COLUMNS.index("return20d")] == 2.5
     assert row[FEATURE_COLUMNS.index("return5d")] == 0.0
+
+
+def test_fund_profile_features_normalize_numeric_fund_codes():
+    features = fund_profile_features("12922", "易方达全球成长优选混合(QDII)人民币C", "QDII")
+    float_code_features = fund_profile_features("12922.0", "", "QDII")
+
+    assert features["isActiveFund"] == 1.0
+    assert features["isActiveQdii"] == 1.0
+    assert features["isQdiiFund"] == 1.0
+    assert features["isIndexFund"] == 0.0
+    assert float_code_features["isActiveQdii"] == 1.0
 
 
 def test_registry_registers_single_active_model(tmp_path):
@@ -150,5 +170,55 @@ def test_export_training_samples_builds_csv_with_labels():
     assert response.rowCount > 0
     assert response.positiveCount > 0
     assert "return20d" in response.csvContent
+    assert "return120d" in response.csvContent
+    assert "ma60Deviation" in response.csvContent
+    assert "ma120Deviation" in response.csvContent
+    assert "volatility60d" in response.csvContent
+    assert "maxDrawdown120d" in response.csvContent
+    assert "trackingIndexReturn20d" in response.csvContent
+    assert "marketHs300Return20d" in response.csvContent
+    assert "marketZz500Return120d" in response.csvContent
+    assert "effectiveFundType" in response.csvContent
+    assert "isIndexFund" in response.csvContent
     assert "forwardReturn" in response.csvContent
     assert "label" in response.csvContent
+
+
+def test_training_activation_gate_rejects_low_quality_model():
+    assert _activation_allowed(True, 0.441087, 657, 13.30836, 0.55, 12.0) is False
+    assert _activation_allowed(True, 0.696113, 199, 8.754, 0.55, 12.0) is True
+
+
+def test_training_can_use_forward_return_direction_as_classification_target():
+    frame = pd.DataFrame({"label": [0, 0, 1], "forwardReturn": [-0.1, 0.0, 2.5]})
+
+    labels = _classification_labels(frame, "label", "forwardReturn", "forward-return-threshold", 0.0)
+
+    assert labels.to_list() == [0, 0, 1]
+    assert _classification_label_column("label", "forwardReturn", "forward-return-threshold", 0.0) == "forwardReturn>0"
+
+
+def test_training_sample_weights_support_recent_and_balanced_modes():
+    frame = pd.DataFrame({"fundCode": ["a", "a", "a", "b"]})
+    labels = pd.Series([0, 0, 0, 1])
+
+    recent = _sample_weights(frame, "exp-recent", 4.0)
+    balanced = _sample_weights(frame, "balanced", labels=labels)
+    fund_balanced = _sample_weights(frame, "fund-balanced")
+
+    assert recent is not None
+    assert recent.iloc[0] == 1.0
+    assert round(float(recent.iloc[-1]), 6) == 4.0
+    assert balanced is not None
+    assert balanced.iloc[-1] > balanced.iloc[0]
+    assert fund_balanced is not None
+    assert fund_balanced.iloc[-1] > fund_balanced.iloc[0]
+
+
+def test_training_feature_sets_can_focus_on_broad_market_features():
+    columns = _feature_columns_for_set("legacy-profile-broad")
+
+    assert "marketHs300Return20d" in columns
+    assert "marketZz500Return120d" in columns
+    assert "trackingIndexReturn20d" not in columns
+    assert "return120d" not in columns

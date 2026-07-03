@@ -1,8 +1,8 @@
 {
-  "modelId": "lgbm-8935bfc87b40",
-  "modelVersion": "lgbm-v1.1.0",
+  "modelId": "lgbm-5be33b6acbf7",
+  "modelVersion": "lgbm-v1.2.0",
   "modelType": "lightgbm",
-  "artifactPath": "lgbm-8935bfc87b40/model.txt",
+  "artifactPath": "lgbm-5be33b6acbf7/model.txt",
   "featureColumns": [
     "return5d",
     "return20d",
@@ -25,14 +25,14 @@
     "holdingDays"
   ],
   "labelColumn": "label",
-  "trainingRows": 795,
-  "validationRows": 199,
-  "validationAuc": 0.696113,
-  "createdAt": "2026-07-02T10:31:34+00:00",
-  "returnArtifactPath": "lgbm-8935bfc87b40/return_model.txt",
+  "trainingRows": 2627,
+  "validationRows": 657,
+  "validationAuc": 0.441087,
+  "createdAt": "2026-07-03T08:49:59+00:00",
+  "returnArtifactPath": "lgbm-5be33b6acbf7/return_model.txt",
   "returnTargetColumn": "forwardReturn",
-  "validationReturnRmse": 11.196615,
-  "validationReturnMae": 8.754,
+  "validationReturnRmse": 17.236081,
+  "validationReturnMae": 13.30836,
   "returnHorizonDays": 20,
   "active": false,
   "notes": "Trained binary probability and forward-return regression models from cached/exported QuantFund feature data. No external fund data requests are made."

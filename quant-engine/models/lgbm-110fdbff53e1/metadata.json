@@ -34,6 +34,6 @@
   "validationReturnRmse": 11.196615,
   "validationReturnMae": 8.754,
   "returnHorizonDays": null,
-  "active": true,
+  "active": false,
   "notes": "Trained binary probability and forward-return regression models from cached/exported QuantFund feature data. No external fund data requests are made."
 }

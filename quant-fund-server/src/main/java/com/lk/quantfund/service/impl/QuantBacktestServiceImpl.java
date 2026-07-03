@@ -31,7 +31,9 @@ import com.lk.quantfund.mapper.PortfolioAccountMapper;
 import com.lk.quantfund.mapper.QuantBacktestResultMapper;
 import com.lk.quantfund.quant.QuantEngineClient;
 import com.lk.quantfund.service.FundQueryService;
+import com.lk.quantfund.service.MarketDataService;
 import com.lk.quantfund.service.QuantBacktestService;
+import com.lk.quantfund.vo.market.MarketIndexDailyVO;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
@@ -42,6 +44,8 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableMap;
+import java.util.TreeMap;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
@@ -58,6 +62,15 @@ public class QuantBacktestServiceImpl implements QuantBacktestService {
             new BigDecimal("2.0000"),
             new BigDecimal("-8.0000")
     );
+    private static final Map<String, String> COMMON_MARKET_INDICES = new LinkedHashMap<>();
+
+    static {
+        COMMON_MARKET_INDICES.put("marketSh000001ReturnRate", "000001");
+        COMMON_MARKET_INDICES.put("marketSz399001ReturnRate", "399001");
+        COMMON_MARKET_INDICES.put("marketCyb399006ReturnRate", "399006");
+        COMMON_MARKET_INDICES.put("marketHs300ReturnRate", "000300");
+        COMMON_MARKET_INDICES.put("marketZz500ReturnRate", "000905");
+    }
 
     private final QuantEngineClient quantEngineClient;
     private final QuantFundProperties properties;
@@ -67,6 +80,7 @@ public class QuantBacktestServiceImpl implements QuantBacktestService {
     private final FundNavDailyMapper fundNavDailyMapper;
     private final QuantBacktestResultMapper quantBacktestResultMapper;
     private final FundQueryService fundQueryService;
+    private final MarketDataService marketDataService;
 
     public QuantBacktestServiceImpl(QuantEngineClient quantEngineClient,
                                     QuantFundProperties properties,
@@ -75,7 +89,8 @@ public class QuantBacktestServiceImpl implements QuantBacktestService {
                                     FundHoldingMapper fundHoldingMapper,
                                     FundNavDailyMapper fundNavDailyMapper,
                                     QuantBacktestResultMapper quantBacktestResultMapper,
-                                    FundQueryService fundQueryService) {
+                                    FundQueryService fundQueryService,
+                                    MarketDataService marketDataService) {
         this.quantEngineClient = quantEngineClient;
         this.properties = properties;
         this.objectMapper = objectMapper;
@@ -84,6 +99,7 @@ public class QuantBacktestServiceImpl implements QuantBacktestService {
         this.fundNavDailyMapper = fundNavDailyMapper;
         this.quantBacktestResultMapper = quantBacktestResultMapper;
         this.fundQueryService = fundQueryService;
+        this.marketDataService = marketDataService;
     }
 
     @Override
@@ -109,7 +125,7 @@ public class QuantBacktestServiceImpl implements QuantBacktestService {
                 .filter(item -> fundCodes.contains(item.getFundCode()))
                 .collect(Collectors.toMap(FundHolding::getFundCode, Function.identity(), (left, right) -> left, LinkedHashMap::new));
         StrategyParams strategyParams = defaultParams(request.strategyParams());
-        Map<String, List<QuantNavPointDTO>> navByFund = loadNavSeries(fundCodes, request, strategyParams);
+        Map<String, List<QuantNavPointDTO>> navByFund = loadNavSeries(fundCodes, request, strategyParams, metadata);
         List<EngineFund> funds = fundCodes.stream()
                 .map(code -> toEngineFund(code, metadata.get(code), navByFund.getOrDefault(code, List.of())))
                 .toList();
@@ -146,7 +162,7 @@ public class QuantBacktestServiceImpl implements QuantBacktestService {
         }
 
         StrategyParams strategyParams = defaultParams(request.strategyParams());
-        LocalDate requestedStartDate = request.startDate().minusDays(Math.max(strategyParams.warmupDays(), 0));
+        LocalDate requestedStartDate = request.startDate().minusDays(Math.max(Math.max(strategyParams.warmupDays(), 0), 180));
         LocalDate requestedEndDate = request.endDate();
         Map<String, FundHolding> metadata = holdings.stream()
                 .filter(item -> fundCodes.contains(item.getFundCode()))
@@ -187,7 +203,7 @@ public class QuantBacktestServiceImpl implements QuantBacktestService {
                 .filter(item -> fundCodes.contains(item.getFundCode()))
                 .collect(Collectors.toMap(FundHolding::getFundCode, Function.identity(), (left, right) -> left, LinkedHashMap::new));
         StrategyParams strategyParams = defaultParams(request.strategyParams());
-        Map<String, List<QuantNavPointDTO>> navByFund = loadNavSeries(fundCodes, request, strategyParams);
+        Map<String, List<QuantNavPointDTO>> navByFund = loadNavSeries(fundCodes, request, strategyParams, metadata);
         List<EngineFund> funds = fundCodes.stream()
                 .map(code -> toEngineFund(code, metadata.get(code), navByFund.getOrDefault(code, List.of())))
                 .toList();
@@ -263,28 +279,145 @@ public class QuantBacktestServiceImpl implements QuantBacktestService {
         return new ArrayList<>(codes);
     }
 
-    private Map<String, List<QuantNavPointDTO>> loadNavSeries(List<String> fundCodes, RunRequest request, StrategyParams strategyParams) {
+    private Map<String, List<QuantNavPointDTO>> loadNavSeries(
+            List<String> fundCodes,
+            RunRequest request,
+            StrategyParams strategyParams,
+            Map<String, FundHolding> metadata) {
         if (fundCodes.isEmpty()) {
             return Map.of();
         }
-        int warmupDays = strategyParams.warmupDays() == null ? 0 : Math.max(strategyParams.warmupDays(), 0);
+        int warmupDays = Math.max(strategyParams.warmupDays() == null ? 0 : Math.max(strategyParams.warmupDays(), 0), 180);
+        LocalDate seriesStartDate = request.startDate().minusDays(warmupDays);
         List<FundNavDaily> rows = fundNavDailyMapper.selectList(new LambdaQueryWrapper<FundNavDaily>()
                 .in(FundNavDaily::getFundCode, fundCodes)
-                .ge(FundNavDaily::getNavDate, request.startDate().minusDays(warmupDays))
+                .ge(FundNavDaily::getNavDate, seriesStartDate)
                 .le(FundNavDaily::getNavDate, request.endDate())
                 .orderByAsc(FundNavDaily::getFundCode)
                 .orderByAsc(FundNavDaily::getNavDate));
+        Map<String, NavigableMap<LocalDate, BigDecimal>> marketReturns = marketReturnSeries(seriesStartDate, request.endDate());
+        Map<String, IndexMatch> trackingIndexByFund = trackingIndexByFund(fundCodes, metadata);
+        Map<String, NavigableMap<LocalDate, BigDecimal>> trackingReturnsByFund = trackingIndexByFund.entrySet().stream()
+                .collect(Collectors.toMap(
+                        Map.Entry::getKey,
+                        entry -> marketReturnSeries(entry.getValue().code(), seriesStartDate, request.endDate()),
+                        (left, right) -> left,
+                        LinkedHashMap::new
+                ));
         return rows.stream()
                 .collect(Collectors.groupingBy(
                         FundNavDaily::getFundCode,
                         LinkedHashMap::new,
-                        Collectors.mapping(item -> new QuantNavPointDTO(
-                                item.getNavDate(),
-                                item.getUnitNav(),
-                                item.getAccumulatedNav(),
-                                item.getDailyGrowthRate()
-                        ), Collectors.toList())
+                        Collectors.mapping(item -> {
+                            IndexMatch tracking = trackingIndexByFund.get(item.getFundCode());
+                            return new QuantNavPointDTO(
+                                    item.getNavDate(),
+                                    item.getUnitNav(),
+                                    item.getAccumulatedNav(),
+                                    item.getDailyGrowthRate(),
+                                    marketReturn(trackingReturnsByFund.get(item.getFundCode()), item.getNavDate()),
+                                    tracking == null ? null : tracking.code(),
+                                    tracking == null ? null : tracking.name(),
+                                    marketReturn(marketReturns.get("marketSh000001ReturnRate"), item.getNavDate()),
+                                    marketReturn(marketReturns.get("marketSz399001ReturnRate"), item.getNavDate()),
+                                    marketReturn(marketReturns.get("marketCyb399006ReturnRate"), item.getNavDate()),
+                                    marketReturn(marketReturns.get("marketHs300ReturnRate"), item.getNavDate()),
+                                    marketReturn(marketReturns.get("marketZz500ReturnRate"), item.getNavDate())
+                            );
+                        }, Collectors.toList())
                 ));
+    }
+
+    private Map<String, NavigableMap<LocalDate, BigDecimal>> marketReturnSeries(LocalDate startDate, LocalDate endDate) {
+        Map<String, NavigableMap<LocalDate, BigDecimal>> result = new LinkedHashMap<>();
+        COMMON_MARKET_INDICES.forEach((fieldName, indexCode) -> {
+            try {
+                List<MarketIndexDailyVO> history = marketDataService.historicalIndex(indexCode, startDate, endDate);
+                result.put(fieldName, cumulativeReturnByDate(history));
+            } catch (RuntimeException exception) {
+                result.put(fieldName, new TreeMap<>());
+            }
+        });
+        return result;
+    }
+
+    private NavigableMap<LocalDate, BigDecimal> marketReturnSeries(String indexCode, LocalDate startDate, LocalDate endDate) {
+        try {
+            return cumulativeReturnByDate(marketDataService.historicalIndex(indexCode, startDate, endDate));
+        } catch (RuntimeException exception) {
+            return new TreeMap<>();
+        }
+    }
+
+    private NavigableMap<LocalDate, BigDecimal> cumulativeReturnByDate(List<MarketIndexDailyVO> history) {
+        NavigableMap<LocalDate, BigDecimal> result = new TreeMap<>();
+        if (history == null || history.isEmpty()) {
+            return result;
+        }
+        BigDecimal baseClose = history.stream()
+                .filter(item -> item.closePrice() != null && item.closePrice().compareTo(BigDecimal.ZERO) > 0)
+                .map(MarketIndexDailyVO::closePrice)
+                .findFirst()
+                .orElse(null);
+        if (baseClose == null) {
+            return result;
+        }
+        history.stream()
+                .filter(item -> item.tradeDate() != null && item.closePrice() != null && item.closePrice().compareTo(BigDecimal.ZERO) > 0)
+                .forEach(item -> result.put(item.tradeDate(), item.closePrice()
+                        .subtract(baseClose)
+                        .multiply(new BigDecimal("100.0000"))
+                        .divide(baseClose, 4, RoundingMode.HALF_UP)));
+        return result;
+    }
+
+    private BigDecimal marketReturn(NavigableMap<LocalDate, BigDecimal> returns, LocalDate date) {
+        if (returns == null || date == null) {
+            return null;
+        }
+        Map.Entry<LocalDate, BigDecimal> entry = returns.floorEntry(date);
+        return entry == null ? null : entry.getValue();
+    }
+
+    private Map<String, IndexMatch> trackingIndexByFund(List<String> fundCodes, Map<String, FundHolding> metadata) {
+        Map<String, IndexMatch> result = new LinkedHashMap<>();
+        for (String fundCode : fundCodes) {
+            result.put(fundCode, trackingIndex(fundCode, metadata.get(fundCode)));
+        }
+        return result;
+    }
+
+    private IndexMatch trackingIndex(String fundCode, FundHolding holding) {
+        String text = safe(fundCode);
+        if (holding != null) {
+            text += safe(holding.getFundName()) + safe(holding.getFundType());
+        }
+        if ("025833".equals(fundCode) || text.contains("电网") || text.contains("特高压")) {
+            return new IndexMatch("931994", "中证电网设备");
+        }
+        if ("013403".equals(fundCode) || text.contains("恒生科技")) {
+            return new IndexMatch("HSTECH", "恒生科技");
+        }
+        if ("161725".equals(fundCode) || text.contains("白酒")) {
+            return new IndexMatch("399997", "中证白酒");
+        }
+        if (text.contains("中证500") || text.contains("500")) {
+            return new IndexMatch("000905", "中证500");
+        }
+        if (text.contains("创业板")) {
+            return new IndexMatch("399006", "创业板指");
+        }
+        if (text.contains("上证") && !text.contains("沪深300")) {
+            return new IndexMatch("000001", "上证指数");
+        }
+        return new IndexMatch("000300", "沪深300");
+    }
+
+    private String safe(String value) {
+        return value == null ? "" : value;
+    }
+
+    private record IndexMatch(String code, String name) {
     }
 
     private EngineFund toEngineFund(String fundCode, FundHolding holding, List<QuantNavPointDTO> navSeries) {

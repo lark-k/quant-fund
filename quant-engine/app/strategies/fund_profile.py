@@ -66,7 +66,7 @@ FUND_PROFILE_BY_NAME_KEYWORD: tuple[tuple[str, FundProfile], ...] = (
 
 
 def resolve_fund_profile(fund_code: str | None, fund_name: str | None, fund_type: str | None) -> FundProfile:
-    code = (fund_code or "").strip()
+    code = _normalize_fund_code(fund_code)
     if code in FUND_PROFILE_BY_CODE:
         return FUND_PROFILE_BY_CODE[code]
 
@@ -133,3 +133,14 @@ def _infer_profile(fund_name: str | None, fund_type: str | None) -> FundProfile:
 
 def _normalize_type(fund_type: str | None) -> str:
     return normalize_fund_type(fund_type)
+
+
+def _normalize_fund_code(fund_code: str | None) -> str:
+    code = ("" if fund_code is None else str(fund_code)).strip()
+    if code.lower() in {"nan", "none", "<na>"}:
+        return ""
+    if code.endswith(".0") and code[:-2].isdigit():
+        code = code[:-2]
+    if code.isdigit() and len(code) < 6:
+        return code.zfill(6)
+    return code

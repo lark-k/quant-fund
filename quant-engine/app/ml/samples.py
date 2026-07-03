@@ -7,10 +7,11 @@ import pandas as pd
 
 from app.core.schemas import BacktestFund, MlTrainingLabelConfig, MlTrainingSampleExportRequest, MlTrainingSampleExportResponse
 from app.features.nav_features import build_nav_frame
-from app.ml.features import FEATURE_COLUMNS
+from app.ml.features import FEATURE_COLUMNS, fund_profile_features
+from app.strategies.fund_profile import resolve_fund_profile
 
 
-BASE_COLUMNS = ["fundCode", "fundName", "fundType", "date", "horizonDays"]
+BASE_COLUMNS = ["fundCode", "fundName", "fundType", "effectiveFundType", "date", "horizonDays"]
 AUDIT_COLUMNS = ["forwardReturn", "forwardMaxDrawdown"]
 
 
@@ -59,13 +60,20 @@ def _samples_for_fund(
     features["return5d"] = _past_return(nav, 5)
     features["return20d"] = _past_return(nav, 20)
     features["return60d"] = _past_return(nav, 60)
+    features["return120d"] = _past_return(nav, 120)
     ma20 = nav.rolling(20, min_periods=2).mean()
+    ma60 = nav.rolling(60, min_periods=2).mean()
+    ma120 = nav.rolling(120, min_periods=2).mean()
     features["ma20Deviation"] = _pct(nav, ma20)
+    features["ma60Deviation"] = _pct(nav, ma60)
+    features["ma120Deviation"] = _pct(nav, ma120)
     features["trendSlope20d"] = _rolling_slope(nav, 20)
     returns = nav.pct_change()
     features["volatility20d"] = returns.rolling(20, min_periods=2).std(ddof=1).fillna(0) * np.sqrt(252) * 100
+    features["volatility60d"] = returns.rolling(60, min_periods=2).std(ddof=1).fillna(0) * np.sqrt(252) * 100
     features["maxDrawdown20d"] = _rolling_max_drawdown(nav, 20)
     features["maxDrawdown60d"] = _rolling_max_drawdown(nav, 60)
+    features["maxDrawdown120d"] = _rolling_max_drawdown(nav, 120)
     features["lossDayRatio20d"] = (returns.lt(0).rolling(20, min_periods=1).mean() * 100).fillna(0)
     features["consecutiveUpDays"] = _consecutive_streak(daily, positive=True)
     features["consecutiveDownDays"] = _consecutive_streak(daily, positive=False)
@@ -77,6 +85,9 @@ def _samples_for_fund(
     features["navSampleSize"] = np.arange(1, len(frame) + 1)
     features["holdingProfitRate"] = features["return20d"]
     features["holdingDays"] = features["navSampleSize"]
+    _attach_market_features(features, frame)
+    for column, value in fund_profile_features(fund.fundCode, fund.fundName, fund.fundType).items():
+        features[column] = value
 
     forward_return = _forward_return(nav, label_config.horizonDays)
     forward_drawdown = _forward_max_drawdown(nav, label_config.horizonDays)
@@ -90,6 +101,7 @@ def _samples_for_fund(
             "fundCode": fund.fundCode,
             "fundName": fund.fundName,
             "fundType": fund.fundType,
+            "effectiveFundType": resolve_fund_profile(fund.fundCode, fund.fundName, fund.fundType).effectiveType,
             "date": frame["date"].dt.strftime("%Y-%m-%d"),
             "horizonDays": label_config.horizonDays,
         }
@@ -117,6 +129,35 @@ def _past_return(nav: pd.Series, window: int) -> pd.Series:
 
 def _forward_return(nav: pd.Series, horizon: int) -> pd.Series:
     return _pct(nav.shift(-horizon), nav).fillna(0)
+
+
+def _attach_market_features(features: pd.DataFrame, frame: pd.DataFrame) -> None:
+    market_sources = {
+        "trackingIndex": "indexReturnRate",
+        "marketSh000001": "marketSh000001ReturnRate",
+        "marketSz399001": "marketSz399001ReturnRate",
+        "marketCyb399006": "marketCyb399006ReturnRate",
+        "marketHs300": "marketHs300ReturnRate",
+        "marketZz500": "marketZz500ReturnRate",
+    }
+    for prefix, column in market_sources.items():
+        returns = _rolling_cumulative_return(frame.get(column), (20, 60, 120))
+        for window, values in returns.items():
+            feature_column = f"{prefix}Return{window}d"
+            features[feature_column] = values
+            if prefix == "trackingIndex":
+                features[f"trackingExcessReturn{window}d"] = features[f"return{window}d"] - values
+
+
+def _rolling_cumulative_return(series: pd.Series | None, windows: tuple[int, ...]) -> dict[int, pd.Series]:
+    if series is None:
+        return {window: pd.Series(0.0, index=pd.RangeIndex(0)) for window in windows}
+    cumulative = pd.to_numeric(series, errors="coerce")
+    relative = (1 + cumulative / 100).replace([np.inf, -np.inf], np.nan)
+    return {
+        window: _pct(relative, relative.shift(window)).fillna(0)
+        for window in windows
+    }
 
 
 def _rolling_slope(nav: pd.Series, window: int) -> pd.Series:

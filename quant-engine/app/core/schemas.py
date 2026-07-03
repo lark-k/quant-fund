@@ -63,6 +63,14 @@ class NavPoint(ApiModel):
     nav: float
     accumulatedNav: float | None = None
     dailyGrowthRate: float | None = None
+    indexReturnRate: float | None = None
+    indexCode: str | None = None
+    indexName: str | None = None
+    marketSh000001ReturnRate: float | None = None
+    marketSz399001ReturnRate: float | None = None
+    marketCyb399006ReturnRate: float | None = None
+    marketHs300ReturnRate: float | None = None
+    marketZz500ReturnRate: float | None = None
 
 
 class TradeRecord(ApiModel):

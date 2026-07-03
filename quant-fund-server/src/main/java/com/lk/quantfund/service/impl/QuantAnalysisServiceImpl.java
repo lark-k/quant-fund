@@ -41,7 +41,9 @@ import com.lk.quantfund.quant.QuantEngineClient;
 import com.lk.quantfund.quant.QuantEngineException;
 import com.lk.quantfund.scheduler.TradingCalendarService;
 import com.lk.quantfund.service.FundQueryService;
+import com.lk.quantfund.service.MarketDataService;
 import com.lk.quantfund.service.QuantAnalysisService;
+import com.lk.quantfund.vo.market.MarketIndexDailyVO;
 import com.lk.quantfund.vo.quant.QuantEngineHealthVO;
 import com.lk.quantfund.vo.quant.QuantSignalVO;
 import java.math.BigDecimal;
@@ -55,6 +57,8 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableMap;
+import java.util.TreeMap;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -67,6 +71,15 @@ public class QuantAnalysisServiceImpl implements QuantAnalysisService {
 
     private static final Logger log = LoggerFactory.getLogger(QuantAnalysisServiceImpl.class);
     private static final BigDecimal ZERO = BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP);
+    private static final Map<String, String> COMMON_MARKET_INDICES = new LinkedHashMap<>();
+
+    static {
+        COMMON_MARKET_INDICES.put("marketSh000001ReturnRate", "000001");
+        COMMON_MARKET_INDICES.put("marketSz399001ReturnRate", "399001");
+        COMMON_MARKET_INDICES.put("marketCyb399006ReturnRate", "399006");
+        COMMON_MARKET_INDICES.put("marketHs300ReturnRate", "000300");
+        COMMON_MARKET_INDICES.put("marketZz500ReturnRate", "000905");
+    }
 
     private final QuantEngineClient quantEngineClient;
     private final QuantFundProperties properties;
@@ -80,6 +93,7 @@ public class QuantAnalysisServiceImpl implements QuantAnalysisService {
     private final StrategySignalMapper strategySignalMapper;
     private final TradingCalendarService tradingCalendarService;
     private final FundQueryService fundQueryService;
+    private final MarketDataService marketDataService;
 
     public QuantAnalysisServiceImpl(QuantEngineClient quantEngineClient,
                                     QuantFundProperties properties,
@@ -92,7 +106,8 @@ public class QuantAnalysisServiceImpl implements QuantAnalysisService {
                                     QuantSignalMapper quantSignalMapper,
                                     StrategySignalMapper strategySignalMapper,
                                     TradingCalendarService tradingCalendarService,
-                                    FundQueryService fundQueryService) {
+                                    FundQueryService fundQueryService,
+                                    MarketDataService marketDataService) {
         this.quantEngineClient = quantEngineClient;
         this.properties = properties;
         this.objectMapper = objectMapper;
@@ -105,6 +120,7 @@ public class QuantAnalysisServiceImpl implements QuantAnalysisService {
         this.strategySignalMapper = strategySignalMapper;
         this.tradingCalendarService = tradingCalendarService;
         this.fundQueryService = fundQueryService;
+        this.marketDataService = marketDataService;
     }
 
     @Override
@@ -271,7 +287,7 @@ public class QuantAnalysisServiceImpl implements QuantAnalysisService {
                         holding.getCoreHolding() != null && holding.getCoreHolding() == 1,
                         holding.getWatchFocus() != null && holding.getWatchFocus() == 1
                 ),
-                navSeries(holding.getFundCode()),
+                navSeries(holding),
                 tradeRecords(userId, holding.getId()),
                 defaultStrategyParams(),
                 new QuantMarketContextDTO(
@@ -492,15 +508,116 @@ public class QuantAnalysisServiceImpl implements QuantAnalysisService {
         }
     }
 
-    private List<QuantNavPointDTO> navSeries(String fundCode) {
+    private List<QuantNavPointDTO> navSeries(FundHolding holding) {
         List<FundNavDaily> rows = fundNavDailyMapper.selectList(new LambdaQueryWrapper<FundNavDaily>()
-                .eq(FundNavDaily::getFundCode, fundCode)
+                .eq(FundNavDaily::getFundCode, holding.getFundCode())
                 .orderByDesc(FundNavDaily::getNavDate)
                 .last("LIMIT 260"));
-        return rows.stream()
+        List<FundNavDaily> sorted = rows.stream()
                 .sorted(Comparator.comparing(FundNavDaily::getNavDate))
-                .map(item -> new QuantNavPointDTO(item.getNavDate(), item.getUnitNav(), item.getAccumulatedNav(), item.getDailyGrowthRate()))
                 .toList();
+        if (sorted.isEmpty()) {
+            return List.of();
+        }
+        LocalDate startDate = sorted.get(0).getNavDate();
+        LocalDate endDate = sorted.get(sorted.size() - 1).getNavDate();
+        Map<String, NavigableMap<LocalDate, BigDecimal>> marketReturns = marketReturnSeries(startDate, endDate);
+        IndexMatch tracking = trackingIndex(holding);
+        NavigableMap<LocalDate, BigDecimal> trackingReturns = marketReturnSeries(tracking.code(), startDate, endDate);
+        return sorted.stream()
+                .map(item -> new QuantNavPointDTO(
+                        item.getNavDate(),
+                        item.getUnitNav(),
+                        item.getAccumulatedNav(),
+                        item.getDailyGrowthRate(),
+                        marketReturn(trackingReturns, item.getNavDate()),
+                        tracking.code(),
+                        tracking.name(),
+                        marketReturn(marketReturns.get("marketSh000001ReturnRate"), item.getNavDate()),
+                        marketReturn(marketReturns.get("marketSz399001ReturnRate"), item.getNavDate()),
+                        marketReturn(marketReturns.get("marketCyb399006ReturnRate"), item.getNavDate()),
+                        marketReturn(marketReturns.get("marketHs300ReturnRate"), item.getNavDate()),
+                        marketReturn(marketReturns.get("marketZz500ReturnRate"), item.getNavDate())
+                ))
+                .toList();
+    }
+
+    private Map<String, NavigableMap<LocalDate, BigDecimal>> marketReturnSeries(LocalDate startDate, LocalDate endDate) {
+        Map<String, NavigableMap<LocalDate, BigDecimal>> result = new LinkedHashMap<>();
+        COMMON_MARKET_INDICES.forEach((fieldName, indexCode) -> result.put(fieldName, marketReturnSeries(indexCode, startDate, endDate)));
+        return result;
+    }
+
+    private NavigableMap<LocalDate, BigDecimal> marketReturnSeries(String indexCode, LocalDate startDate, LocalDate endDate) {
+        try {
+            return cumulativeReturnByDate(marketDataService.historicalIndex(indexCode, startDate, endDate));
+        } catch (RuntimeException exception) {
+            return new TreeMap<>();
+        }
+    }
+
+    private NavigableMap<LocalDate, BigDecimal> cumulativeReturnByDate(List<MarketIndexDailyVO> history) {
+        NavigableMap<LocalDate, BigDecimal> result = new TreeMap<>();
+        if (history == null || history.isEmpty()) {
+            return result;
+        }
+        BigDecimal baseClose = history.stream()
+                .filter(item -> item.closePrice() != null && item.closePrice().compareTo(BigDecimal.ZERO) > 0)
+                .map(MarketIndexDailyVO::closePrice)
+                .findFirst()
+                .orElse(null);
+        if (baseClose == null) {
+            return result;
+        }
+        history.stream()
+                .filter(item -> item.tradeDate() != null && item.closePrice() != null && item.closePrice().compareTo(BigDecimal.ZERO) > 0)
+                .forEach(item -> result.put(item.tradeDate(), item.closePrice()
+                        .subtract(baseClose)
+                        .multiply(new BigDecimal("100.0000"))
+                        .divide(baseClose, 4, RoundingMode.HALF_UP)));
+        return result;
+    }
+
+    private BigDecimal marketReturn(NavigableMap<LocalDate, BigDecimal> returns, LocalDate date) {
+        if (returns == null || date == null) {
+            return null;
+        }
+        Map.Entry<LocalDate, BigDecimal> entry = returns.floorEntry(date);
+        return entry == null ? null : entry.getValue();
+    }
+
+    private IndexMatch trackingIndex(FundHolding holding) {
+        String fundCode = holding == null ? "" : safe(holding.getFundCode());
+        String text = fundCode;
+        if (holding != null) {
+            text += safe(holding.getFundName()) + safe(holding.getFundType());
+        }
+        if ("025833".equals(fundCode) || text.contains("电网") || text.contains("特高压")) {
+            return new IndexMatch("931994", "中证电网设备");
+        }
+        if ("013403".equals(fundCode) || text.contains("恒生科技")) {
+            return new IndexMatch("HSTECH", "恒生科技");
+        }
+        if ("161725".equals(fundCode) || text.contains("白酒")) {
+            return new IndexMatch("399997", "中证白酒");
+        }
+        if (text.contains("中证500") || text.contains("500")) {
+            return new IndexMatch("000905", "中证500");
+        }
+        if (text.contains("创业板")) {
+            return new IndexMatch("399006", "创业板指");
+        }
+        if (text.contains("上证") && !text.contains("沪深300")) {
+            return new IndexMatch("000001", "上证指数");
+        }
+        return new IndexMatch("000300", "沪深300");
+    }
+
+    private String safe(String value) {
+        return value == null ? "" : value;
+    }
+
+    private record IndexMatch(String code, String name) {
     }
 
     private List<QuantTradeDTO> tradeRecords(Long userId, Long holdingId) {
