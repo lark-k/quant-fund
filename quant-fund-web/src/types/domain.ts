@@ -336,6 +336,7 @@ export type BacktestSummary = {
   outperformPositionBenchmarkRate: number
   avgPositionExcessReturnRate: number
   avgTradeCount: number
+  avgAnnualTradeCount?: number
   avgSharpeRatio: number
   avgCalmarRatio: number
   passRate: number

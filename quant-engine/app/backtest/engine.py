@@ -25,12 +25,24 @@ from app.core.schemas import (
 from app.features.nav_features import build_nav_frame
 from app.features.risk_features import _annualized_volatility
 from app.ml.predict import MlSignalPredictor
+from app.strategies.fund_profile import (
+    FundProfile,
+    is_active_fund_type,
+    is_qdii_or_overseas_type,
+    normalize_fund_type,
+    resolve_fund_profile,
+)
 from app.strategies.scoring import clamp
 
 
 WEAK_TREND_COOLDOWN_DAYS = 45
-WEAK_TREND_CONFIRM_DAYS = 5
+WEAK_TREND_CONFIRM_DAYS = 4
 POSITION_BENCHMARK_TOLERANCE = 0.5
+MIN_USABLE_SHORT_HISTORY_SAMPLES = 90
+EARLY_TREND_BOOTSTRAP_SAMPLES = 150
+TARGET_ENTRY_POSITION_RATE = 45.0
+BENCHMARK_ENTRY_POSITION_RATE = 40.0
+MAX_AVG_ANNUAL_TRADE_COUNT = 6.0
 
 
 def run_single_backtest(request: BacktestRunRequest, settings: Settings, enable_ml: bool = False) -> BacktestResult:
@@ -45,6 +57,8 @@ def run_single_backtest(request: BacktestRunRequest, settings: Settings, enable_
     if len(trade_frame) < 2:
         return _empty_result(request, settings, len(trade_frame), "回测区间内历史净值样本不足")
 
+    fund_profile = resolve_fund_profile(request.fundCode, request.fundName, request.fundType)
+    fund_type = fund_profile.effectiveType
     data_coverage = _data_coverage_rate(request.startDate, request.endDate, trade_frame)
     cash = float(request.initialCash)
     share = 0.0
@@ -67,10 +81,21 @@ def run_single_backtest(request: BacktestRunRequest, settings: Settings, enable_
         total_asset = cash + position_value
         position_rate = pct(position_value, total_asset) + 100 if total_asset > 0 and position_value > 0 else 0.0
         action = "HOLD"
-        strong_trend_lock = _strong_trend_lock(row, params)
-        trend_start_buy = _trend_start_buy(row, params)
-        midterm_trend_buy = _midterm_trend_buy(row)
-        weak_trend_defense = _weak_trend_defense(row)
+        strong_trend_lock = _strong_trend_lock(row, params, fund_type)
+        strong_reentry_buy = _strong_reentry_buy(row, params, fund_type)
+        trend_start_buy = _trend_start_buy(row, params, fund_type)
+        midterm_trend_buy = _midterm_trend_buy(row, fund_type)
+        recoverable_pullback_buy = _recoverable_pullback_buy(row)
+        benchmark_alignment_buy = _benchmark_alignment_buy(row, params, position_rate, fund_type)
+        core_trend_allocation_buy = _core_trend_allocation_buy(row, params, position_rate, fund_type)
+        early_trend_bootstrap_buy = _early_trend_bootstrap_buy(row, params, position_rate, fund_type)
+        trend_repair_reentry_buy = (
+            (weak_recovery_required or weak_trend_defense_handled or weak_trend_cooldown > 0)
+            and _trend_repair_reentry_buy(row, params, position_rate, fund_type)
+        )
+        recoverable_reentry_buy = recoverable_pullback_buy and weak_trend_defense_handled
+        underposition_recoverable_buy = _underposition_recoverable_buy(recoverable_pullback_buy, position_rate, params)
+        weak_trend_defense = _weak_trend_defense(row, fund_type)
         if weak_trend_defense:
             weak_trend_cooldown = max(weak_trend_cooldown, WEAK_TREND_COOLDOWN_DAYS)
             weak_recovery_required = True
@@ -78,20 +103,65 @@ def run_single_backtest(request: BacktestRunRequest, settings: Settings, enable_
         else:
             weak_trend_cooldown = max(weak_trend_cooldown - 1, 0)
             weak_trend_watch_days = 0
-        if weak_recovery_required and _weak_trend_recovered(row):
+        if weak_recovery_required and _weak_trend_recovered(row, params, fund_type):
             weak_recovery_required = False
             weak_trend_defense_handled = False
             weak_trend_watch_days = 0
+            weak_trend_cooldown = 0
 
         if (
-            (_score_threshold_buy(row, params) or strong_trend_lock or trend_start_buy or midterm_trend_buy)
+            (
+                _score_threshold_buy(row, params)
+                or strong_trend_lock
+                or trend_start_buy
+                or midterm_trend_buy
+                or recoverable_pullback_buy
+                or benchmark_alignment_buy
+                or core_trend_allocation_buy
+                or early_trend_bootstrap_buy
+                or trend_repair_reentry_buy
+            )
             and row.sampleIndex >= params.minNavSamples
             and position_rate < params.maxSinglePositionRate
-            and weak_trend_cooldown == 0
-            and (not weak_recovery_required or strong_trend_lock)
+            and (
+                weak_trend_cooldown == 0
+                or strong_reentry_buy
+                or recoverable_reentry_buy
+                or underposition_recoverable_buy
+                or benchmark_alignment_buy
+                or core_trend_allocation_buy
+                or early_trend_bootstrap_buy
+                or trend_repair_reentry_buy
+            )
+            and (
+                not weak_recovery_required
+                or strong_trend_lock
+                or strong_reentry_buy
+                or recoverable_reentry_buy
+                or underposition_recoverable_buy
+                or benchmark_alignment_buy
+                or core_trend_allocation_buy
+                or early_trend_bootstrap_buy
+                or trend_repair_reentry_buy
+            )
         ):
             room = max(params.maxSinglePositionRate - position_rate, 0)
-            buy_ratio = min(_buy_step_ratio(params, strong_trend_lock, trend_start_buy, midterm_trend_buy, position_rate), room)
+            buy_ratio = min(
+                _buy_step_ratio(
+                    params,
+                    strong_trend_lock,
+                    trend_start_buy,
+                    midterm_trend_buy,
+                    position_rate,
+                    _score_threshold_buy(row, params),
+                    recoverable_pullback_buy,
+                    benchmark_alignment_buy,
+                    core_trend_allocation_buy,
+                    early_trend_bootstrap_buy,
+                    trend_repair_reentry_buy,
+                ),
+                room,
+            )
             amount = min(total_asset * buy_ratio / 100, cash)
             if amount >= 100:
                 position_rate_before = position_rate
@@ -105,7 +175,16 @@ def run_single_backtest(request: BacktestRunRequest, settings: Settings, enable_
                 trade_amount_sum += amount
                 action = "BUY"
                 extreme_risk_sell_count = 0
-                reason = _buy_reason(strong_trend_lock, trend_start_buy, midterm_trend_buy)
+                reason = _buy_reason(
+                    strong_trend_lock,
+                    trend_start_buy,
+                    midterm_trend_buy,
+                    recoverable_pullback_buy,
+                    benchmark_alignment_buy,
+                    core_trend_allocation_buy,
+                    early_trend_bootstrap_buy,
+                    trend_repair_reentry_buy,
+                )
                 position_rate_after = _position_rate(share, nav, cash)
                 trades.append(
                     _trade(
@@ -126,7 +205,7 @@ def run_single_backtest(request: BacktestRunRequest, settings: Settings, enable_
         position_value = share * nav
         total_asset = cash + position_value
         position_return = pct(nav, avg_cost) if share > 0 and avg_cost > 0 else 0.0
-        trend_hold = _should_hold_trend(row, params)
+        trend_hold = _should_hold_trend(row, params, fund_type)
         score_exit = row.totalScore <= params.sellThreshold
         if score_exit and trend_hold:
             score_exit = False
@@ -161,7 +240,7 @@ def run_single_backtest(request: BacktestRunRequest, settings: Settings, enable_
             elif profit_exit:
                 sell_ratio = max(sell_ratio, 20.0)
             if weak_exit:
-                sell_ratio = max(sell_ratio, 25.0)
+                sell_ratio = max(sell_ratio, 15.0)
             reason = _sell_reason(score_exit, profit_exit, risk_exit, weak_exit, extreme_risk_exit)
             sold_share = min(share, share * sell_ratio / 100)
             gross = sold_share * nav
@@ -240,7 +319,7 @@ def run_single_backtest(request: BacktestRunRequest, settings: Settings, enable_
     trade_count = len(trades)
     win_rate = win_sell_count / sell_count * 100 if sell_count else 0.0
     turnover = trade_amount_sum / request.initialCash * 100 if request.initialCash > 0 else 0.0
-    passed = _is_passed(annual, drawdown, position_benchmark_return, total_return, trade_count, trade_frame, data_coverage)
+    passed = _is_passed(annual, drawdown, position_benchmark_return, total_return, trade_count, trade_frame, data_coverage, fund_profile)
     ml_stats = _ml_stats(trade_frame)
 
     return BacktestResult(
@@ -289,6 +368,7 @@ def run_single_backtest(request: BacktestRunRequest, settings: Settings, enable_
         passed=passed,
         diagnosis=_diagnosis(
             passed,
+            annual,
             total_return,
             position_benchmark_return,
             drawdown,
@@ -296,6 +376,7 @@ def run_single_backtest(request: BacktestRunRequest, settings: Settings, enable_
             trade_count,
             trade_frame,
             data_coverage,
+            fund_profile,
         ),
         equityCurve=equity_curve,
         trades=trades,
@@ -424,6 +505,7 @@ def summarize_results(results: list[BacktestResult]) -> BacktestSummary:
         outperformPositionBenchmarkRate=round(len(outperform_position) / len(results) * 100, 4),
         avgPositionExcessReturnRate=round(float(np.mean([item.positionExcessReturnRate for item in results])), 4),
         avgTradeCount=round(float(np.mean([item.tradeCount for item in results])), 4),
+        avgAnnualTradeCount=round(float(np.mean([item.tradeCount / _result_years(item) for item in results])), 4),
         avgSharpeRatio=round(float(np.mean(sharpe)), 4) if sharpe else 0,
         avgCalmarRatio=round(float(np.mean(calmar)), 4) if calmar else 0,
         passRate=round(len(passed) / len(results) * 100, 4),
@@ -659,8 +741,8 @@ def _model_version(settings: Settings, enable_ml: bool) -> str:
     return f"{settings.rule_model_version}+{predictor.metadata.modelVersion}"
 
 
-def _should_hold_trend(row, params: BacktestStrategyParams) -> bool:
-    return _strong_trend_lock(row, params) or _midterm_trend_pullback(row) or (
+def _should_hold_trend(row, params: BacktestStrategyParams, fund_type: str | None = None) -> bool:
+    return _strong_trend_lock(row, params, fund_type) or _midterm_trend_pullback(row, fund_type) or _orderly_trend_hold(row, params, fund_type) or (
         float(row.return20d) > params.trendHoldReturn20d
         and float(row.ma20Deviation) >= params.trendHoldMa20Deviation
     )
@@ -672,88 +754,335 @@ def _buy_step_ratio(
     trend_start_buy: bool = False,
     midterm_trend_buy: bool = False,
     position_rate: float = 0.0,
+    score_threshold_buy: bool = False,
+    recoverable_pullback_buy: bool = False,
+    benchmark_alignment_buy: bool = False,
+    core_trend_allocation_buy: bool = False,
+    early_trend_bootstrap_buy: bool = False,
+    trend_repair_reentry_buy: bool = False,
 ) -> float:
+    target_position = float(params.maxSinglePositionRate)
     if position_rate <= 1.0 and (strong_trend_lock or trend_start_buy):
         return params.maxSinglePositionRate
     if position_rate <= 1.0 and midterm_trend_buy:
+        return max(params.buyStepRatio, min(params.maxSinglePositionRate, 35.0))
+    if position_rate <= 1.0 and core_trend_allocation_buy:
+        return min(target_position, max(params.buyStepRatio, min(target_position, TARGET_ENTRY_POSITION_RATE)))
+    if position_rate <= 1.0 and score_threshold_buy:
         return max(params.buyStepRatio, min(params.maxSinglePositionRate, 30.0))
+    if position_rate <= 1.0 and benchmark_alignment_buy:
+        return max(params.buyStepRatio, min(params.maxSinglePositionRate, BENCHMARK_ENTRY_POSITION_RATE))
+    if position_rate <= 1.0 and recoverable_pullback_buy:
+        return max(params.buyStepRatio, min(params.maxSinglePositionRate, 30.0))
+    if position_rate <= 1.0 and early_trend_bootstrap_buy:
+        return max(params.buyStepRatio, min(params.maxSinglePositionRate, 35.0))
+    if position_rate <= 1.0 and trend_repair_reentry_buy:
+        return max(params.buyStepRatio, min(params.maxSinglePositionRate, 35.0))
     if strong_trend_lock:
-        return max(params.buyStepRatio, min(params.maxSinglePositionRate, 30.0))
+        return max(params.buyStepRatio, min(params.maxSinglePositionRate, 35.0))
     if trend_start_buy:
-        return max(params.buyStepRatio, min(params.maxSinglePositionRate, 25.0))
+        return max(params.buyStepRatio, min(params.maxSinglePositionRate, 30.0))
+    if core_trend_allocation_buy:
+        return max(params.buyStepRatio, min(params.maxSinglePositionRate, 35.0))
     if midterm_trend_buy:
-        return max(params.buyStepRatio, min(params.maxSinglePositionRate, 20.0))
+        return max(params.buyStepRatio, min(params.maxSinglePositionRate, 25.0))
+    if benchmark_alignment_buy:
+        return max(params.buyStepRatio, min(params.maxSinglePositionRate, 25.0))
+    if recoverable_pullback_buy:
+        return max(params.buyStepRatio, min(params.maxSinglePositionRate, 25.0))
+    if early_trend_bootstrap_buy:
+        return max(params.buyStepRatio, min(params.maxSinglePositionRate, 25.0))
+    if trend_repair_reentry_buy:
+        return max(params.buyStepRatio, min(params.maxSinglePositionRate, 30.0))
     return params.buyStepRatio
 
 
-def _buy_reason(strong_trend_lock: bool, trend_start_buy: bool, midterm_trend_buy: bool = False) -> str:
+def _buy_reason(
+    strong_trend_lock: bool,
+    trend_start_buy: bool,
+    midterm_trend_buy: bool = False,
+    recoverable_pullback_buy: bool = False,
+    benchmark_alignment_buy: bool = False,
+    core_trend_allocation_buy: bool = False,
+    early_trend_bootstrap_buy: bool = False,
+    trend_repair_reentry_buy: bool = False,
+) -> str:
     if strong_trend_lock:
         return "strong_trend_buy"
+    if trend_repair_reentry_buy:
+        return "trend_repair_reentry_buy"
     if trend_start_buy:
         return "trend_start_buy"
+    if core_trend_allocation_buy:
+        return "core_trend_allocation_buy"
     if midterm_trend_buy:
         return "midterm_trend_buy"
+    if benchmark_alignment_buy:
+        return "benchmark_alignment_buy"
+    if recoverable_pullback_buy:
+        return "recoverable_pullback_buy"
+    if early_trend_bootstrap_buy:
+        return "early_trend_bootstrap_buy"
     return "score_above_buy_threshold"
 
 
 def _score_threshold_buy(row, params: BacktestStrategyParams) -> bool:
     return (
         float(row.totalScore) >= params.buyThreshold
-        and float(row.trendScore) >= 55
+        and float(row.trendScore) >= 50
         and float(row.opportunityScore) >= 48
         and float(row.riskScore) >= 25
         and not (float(row.return5d) <= -1 and float(row.return20d) <= 0)
     )
 
 
-def _strong_trend_lock(row, params: BacktestStrategyParams) -> bool:
+def _normalize_fund_type(fund_type: str | None) -> str:
+    return normalize_fund_type(fund_type)
+
+
+def _is_active_equity_type(fund_type: str | None) -> bool:
+    return is_active_fund_type(fund_type)
+
+
+def _is_qdii_or_overseas_type(fund_type: str | None) -> bool:
+    return is_qdii_or_overseas_type(fund_type)
+
+
+def _strong_trend_lock(row, params: BacktestStrategyParams, fund_type: str | None = None) -> bool:
+    drawdown_limit = 21 if _is_active_equity_type(fund_type) else 18 if _is_qdii_or_overseas_type(fund_type) else 20
     return (
         float(row.return20d) >= params.trendHoldReturn20d
-        and float(row.return60d) >= 8
+        and float(row.return60d) >= 5
         and float(row.ma20Deviation) >= params.trendHoldMa20Deviation
-        and abs(float(row.maxDrawdown60d)) < 16
+        and abs(float(row.maxDrawdown60d)) < drawdown_limit
     )
 
 
-def _trend_start_buy(row, params: BacktestStrategyParams) -> bool:
+def _strong_reentry_buy(row, params: BacktestStrategyParams, fund_type: str | None = None) -> bool:
+    active = _is_active_equity_type(fund_type)
+    qdii = _is_qdii_or_overseas_type(fund_type)
+    return60_min = 8.0 if active else 11.0 if qdii else 10.0
+    drawdown_limit = 16.0 if active else 12.5 if qdii else 14.0
+    trend_score_min = 56.0 if active else 62.0 if qdii else 60.0
+    risk_score_min = 28.0 if active else 32.0 if qdii else 30.0
     return (
-        float(row.return20d) >= params.trendHoldReturn20d
-        and float(row.return5d) >= 0
-        and float(row.ma20Deviation) >= params.trendHoldMa20Deviation
-        and abs(float(row.maxDrawdown60d)) < 16
-        and float(row.riskScore) >= 35
+        float(row.return20d) >= max(params.trendHoldReturn20d, 2.0)
+        and float(row.return60d) >= return60_min
+        and float(row.ma20Deviation) >= -4
+        and abs(float(row.maxDrawdown60d)) < drawdown_limit
+        and float(row.trendScore) >= trend_score_min
+        and float(row.riskScore) >= risk_score_min
         and float(row.lossDayRatio20d) <= 58
     )
 
 
-def _midterm_trend_buy(row) -> bool:
+def _trend_start_buy(row, params: BacktestStrategyParams, fund_type: str | None = None) -> bool:
+    qdii = _is_qdii_or_overseas_type(fund_type)
+    loss_day_limit = 62.0 if qdii else 68.0 if _is_active_equity_type(fund_type) else 65.0
+    risk_score_min = 32.0 if qdii else 28.0 if _is_active_equity_type(fund_type) else 30.0
     return (
-        _midterm_trend_pullback(row)
-        and float(row.return5d) >= -1
-        and float(row.return20d) >= -4
-        and float(row.ma20Deviation) >= -8
-        and float(row.riskScore) >= 25
-        and float(row.lossDayRatio20d) <= 65
+        float(row.return20d) >= params.trendHoldReturn20d
+        and float(row.return5d) >= 0
+        and float(row.ma20Deviation) >= params.trendHoldMa20Deviation
+        and abs(float(row.maxDrawdown60d)) < 20
+        and float(row.riskScore) >= risk_score_min
+        and float(row.lossDayRatio20d) <= loss_day_limit
     )
 
 
-def _weak_trend_defense(row) -> bool:
-    if _midterm_trend_pullback(row):
+def _midterm_trend_buy(row, fund_type: str | None = None) -> bool:
+    qdii = _is_qdii_or_overseas_type(fund_type)
+    risk_score_min = 30.0 if qdii else 24.0 if _is_active_equity_type(fund_type) else 25.0
+    loss_day_limit = 66.0 if qdii else 72.0 if _is_active_equity_type(fund_type) else 70.0
+    return (
+        _midterm_trend_pullback(row, fund_type)
+        and float(row.return5d) >= -1
+        and float(row.return20d) >= -5
+        and float(row.ma20Deviation) >= -10
+        and float(row.riskScore) >= risk_score_min
+        and float(row.lossDayRatio20d) <= loss_day_limit
+    )
+
+
+def _recoverable_pullback_buy(row) -> bool:
+    return (
+        _recoverable_pullback(row)
+        and float(row.return5d) >= 0
+        and float(row.return20d) > -12
+        and float(row.ma20Deviation) >= -12
+        and float(row.trendScore) >= 45
+        and float(row.lossDayRatio20d) <= 70
+    )
+
+
+def _underposition_recoverable_buy(recoverable_pullback_buy: bool, position_rate: float, params: BacktestStrategyParams) -> bool:
+    underposition_limit = min(float(params.maxSinglePositionRate) * 0.5, 25.0)
+    return recoverable_pullback_buy and position_rate <= underposition_limit
+
+
+def _benchmark_alignment_buy(row, params: BacktestStrategyParams, position_rate: float, fund_type: str | None = None) -> bool:
+    target_position = float(params.maxSinglePositionRate)
+    target_near_full = min(target_position * 0.9, target_position - 1.0)
+    if position_rate >= target_near_full:
+        return False
+    if _weak_trend_defense(row, fund_type):
+        return False
+    qdii = _is_qdii_or_overseas_type(fund_type)
+    risk_score_min = 30.0 if qdii else 25.0
+    drawdown_limit = 16.0 if qdii else 18.0
+    loss_day_limit = 64.0 if qdii else 68.0
+    return (
+        float(row.totalScore) >= max(float(params.buyThreshold) - 3.0, 48.0)
+        and float(row.trendScore) >= 45
+        and float(row.opportunityScore) >= 45
+        and float(row.riskScore) >= risk_score_min
+        and float(row.return20d) >= -1
+        and float(row.return60d) >= 0
+        and float(row.ma20Deviation) >= float(params.trendHoldMa20Deviation) - 2.0
+        and abs(float(row.maxDrawdown60d)) < drawdown_limit
+        and float(row.lossDayRatio20d) <= loss_day_limit
+        and not (float(row.return5d) <= -2 and float(row.return20d) <= 0)
+    )
+
+
+def _core_trend_allocation_buy(row, params: BacktestStrategyParams, position_rate: float, fund_type: str | None = None) -> bool:
+    target_position = float(params.maxSinglePositionRate)
+    target_near_full = min(target_position * 0.98, target_position - 0.1)
+    if position_rate >= target_near_full:
+        return False
+    if _weak_trend_defense(row, fund_type):
+        return False
+
+    return5 = float(row.return5d)
+    return20 = float(row.return20d)
+    return60 = float(row.return60d)
+    ma20_deviation = float(row.ma20Deviation)
+    drawdown60 = abs(float(row.maxDrawdown60d))
+    loss_day_ratio20 = float(row.lossDayRatio20d)
+    active = _is_active_equity_type(fund_type)
+    qdii = _is_qdii_or_overseas_type(fund_type)
+    return60_confirm = 7.0 if active else 9.0 if qdii else 8.0
+    risk_score_min = 24.0 if active else 30.0 if qdii else 25.0
+    drawdown_limit = 17.0 if active else 14.0 if qdii else 16.0
+    loss_day_limit = 64.0 if active else 58.0 if qdii else 62.0
+    trend_confirmed = return60 >= return60_confirm or (
+        return20 >= max(float(params.trendHoldReturn20d), 1.0)
+        and return60 >= 4.0
+    )
+
+    return (
+        trend_confirmed
+        and float(row.totalScore) >= max(float(params.buyThreshold) - 6.0, 46.0)
+        and float(row.trendScore) >= 42
+        and float(row.opportunityScore) >= 40
+        and float(row.riskScore) >= risk_score_min
+        and return20 >= -0.5
+        and ma20_deviation >= float(params.trendHoldMa20Deviation) - 1.0
+        and drawdown60 < drawdown_limit
+        and loss_day_ratio20 <= loss_day_limit
+        and not (return5 <= -2.5 and return20 <= 0)
+    )
+
+
+def _early_trend_bootstrap_buy(row, params: BacktestStrategyParams, position_rate: float, fund_type: str | None = None) -> bool:
+    sample_index = int(row.sampleIndex)
+    if sample_index > EARLY_TREND_BOOTSTRAP_SAMPLES:
+        return False
+    target_position = float(params.maxSinglePositionRate)
+    if position_rate >= min(target_position * 0.9, target_position - 1.0):
+        return False
+    if _weak_trend_defense(row, fund_type):
+        return False
+
+    return5 = float(row.return5d)
+    return20 = float(row.return20d)
+    ma20_deviation = float(row.ma20Deviation)
+    drawdown60 = abs(float(row.maxDrawdown60d))
+    loss_day_ratio20 = float(row.lossDayRatio20d)
+    trend_slope20 = float(getattr(row, "trendSlope20d", 0))
+    early_momentum_confirmed = return20 >= max(float(params.trendHoldReturn20d) * 0.6, 0.8) or (
+        return20 >= 0.5 and trend_slope20 >= 0.12
+    )
+
+    qdii = _is_qdii_or_overseas_type(fund_type)
+    risk_score_min = 32.0 if qdii else 28.0
+    drawdown_limit = 13.0 if qdii else 15.0
+    return (
+        sample_index >= int(params.minNavSamples)
+        and early_momentum_confirmed
+        and float(row.totalScore) >= max(float(params.buyThreshold) - 5.0, 46.0)
+        and float(row.trendScore) >= 42
+        and float(row.riskScore) >= risk_score_min
+        and return5 >= -1.0
+        and ma20_deviation >= float(params.trendHoldMa20Deviation) - 2.0
+        and drawdown60 < drawdown_limit
+        and loss_day_ratio20 <= 62
+    )
+
+
+def _trend_repair_reentry_buy(row, params: BacktestStrategyParams, position_rate: float, fund_type: str | None = None) -> bool:
+    target_position = float(params.maxSinglePositionRate)
+    if position_rate >= min(target_position * 0.9, target_position - 1.0):
+        return False
+    if _weak_trend_defense(row, fund_type):
+        return False
+
+    active = _is_active_equity_type(fund_type)
+    qdii = _is_qdii_or_overseas_type(fund_type)
+    return60_min = 2.5 if active else 5.0 if qdii else 4.0
+    trend_score_min = 50.0 if active else 58.0 if qdii else 54.0
+    risk_score_min = 28.0 if active else 34.0 if qdii else 30.0
+    drawdown_limit = 16.5 if active else 12.5 if qdii else 15.0
+    loss_day_limit = 66.0 if active else 58.0 if qdii else 62.0
+    return (
+        float(row.return20d) >= max(float(params.trendHoldReturn20d) * 0.5, 0.8)
+        and float(row.return60d) >= return60_min
+        and float(row.return5d) >= -0.5
+        and float(row.ma20Deviation) >= max(float(params.trendHoldMa20Deviation), -7.0)
+        and abs(float(row.maxDrawdown60d)) < drawdown_limit
+        and float(row.trendScore) >= trend_score_min
+        and float(row.riskScore) >= risk_score_min
+        and float(row.lossDayRatio20d) <= loss_day_limit
+    )
+
+
+def _weak_trend_defense(row, fund_type: str | None = None) -> bool:
+    if _midterm_trend_pullback(row, fund_type):
         return False
     if _recoverable_pullback(row):
         return False
+    active = _is_active_equity_type(fund_type)
+    qdii = _is_qdii_or_overseas_type(fund_type)
+    return20_limit = -7 if active else -5 if qdii else -6
+    return60_limit = -1 if active else 0
+    ma20_limit = -5 if active else -3.5 if qdii else -4
+    drawdown_limit = 20 if active else 16 if qdii else 18
+    trend_score_limit = 46 if active else 50 if qdii else 48
     return (
         (
-            float(row.return20d) <= -6
-            and float(row.return60d) <= 0
-            and float(row.ma20Deviation) <= -4
+            float(row.return20d) <= return20_limit
+            and float(row.return60d) <= return60_limit
+            and float(row.ma20Deviation) <= ma20_limit
         )
-        or (abs(float(row.maxDrawdown60d)) >= 15 and float(row.trendScore) < 50)
+        or (abs(float(row.maxDrawdown60d)) >= drawdown_limit and float(row.trendScore) < trend_score_limit)
     )
 
 
-def _midterm_trend_pullback(row) -> bool:
-    return float(row.return60d) >= 12 and abs(float(row.maxDrawdown60d)) < 22
+def _midterm_trend_pullback(row, fund_type: str | None = None) -> bool:
+    return60_min = 8 if _is_active_equity_type(fund_type) else 12 if _is_qdii_or_overseas_type(fund_type) else 10
+    return float(row.return60d) >= return60_min and abs(float(row.maxDrawdown60d)) < 22
+
+
+def _orderly_trend_hold(row, params: BacktestStrategyParams, fund_type: str | None = None) -> bool:
+    return60_min = 7 if _is_active_equity_type(fund_type) else 10 if _is_qdii_or_overseas_type(fund_type) else 8
+    loss_day_limit = 68 if _is_active_equity_type(fund_type) else 60 if _is_qdii_or_overseas_type(fund_type) else 65
+    return (
+        float(row.return60d) >= return60_min
+        and float(row.return20d) >= -4
+        and float(row.ma20Deviation) >= float(params.trendHoldMa20Deviation) - 3
+        and abs(float(row.maxDrawdown60d)) < 18
+        and float(row.lossDayRatio20d) <= loss_day_limit
+    )
 
 
 def _recoverable_pullback(row) -> bool:
@@ -766,12 +1095,29 @@ def _recoverable_pullback(row) -> bool:
     )
 
 
-def _weak_trend_recovered(row) -> bool:
+def _weak_trend_recovered(row, params: BacktestStrategyParams, fund_type: str | None = None) -> bool:
+    return20 = float(row.return20d)
+    return60 = float(row.return60d)
+    ma20_deviation = float(row.ma20Deviation)
+    drawdown60 = abs(float(row.maxDrawdown60d))
+    trend_score = float(row.trendScore)
+    risk_score = float(row.riskScore)
+    loss_day_ratio20 = float(row.lossDayRatio20d)
+
+    active = _is_active_equity_type(fund_type)
+    qdii = _is_qdii_or_overseas_type(fund_type)
+    return60_min = 5.5 if active else 6.0 if qdii else 4.5
+    trend_score_min = 55.0 if active else 58.0 if qdii else 55.0
+    risk_score_min = 30.0 if active else 34.0 if qdii else 30.0
+    loss_day_limit = 62.0 if active else 58.0 if qdii else 62.0
     return (
-        float(row.return20d) > 0
-        and float(row.return60d) > 0
-        and float(row.ma20Deviation) > -2
-        and float(row.trendScore) >= 55
+        return20 > max(params.trendHoldReturn20d, 0.0)
+        and return60 > return60_min
+        and ma20_deviation >= max(params.trendHoldMa20Deviation, -6.0)
+        and drawdown60 < 18
+        and trend_score >= trend_score_min
+        and risk_score >= risk_score_min
+        and loss_day_ratio20 <= loss_day_limit
     )
 
 
@@ -887,46 +1233,128 @@ def _empty_result(request: BacktestRunRequest, settings: Settings, sample_size: 
     )
 
 
+def _result_years(result: BacktestResult) -> float:
+    return max((pd.to_datetime(result.endDate) - pd.to_datetime(result.startDate)).days / 365, 0.1)
+
+
 def _data_coverage_rate(start_date: str, end_date: str, frame: pd.DataFrame) -> float:
     requested_days = max((pd.to_datetime(end_date) - pd.to_datetime(start_date)).days + 1, 1)
     actual_days = max((frame["date"].iloc[-1] - frame["date"].iloc[0]).days + 1, 1)
     return min(actual_days / requested_days * 100, 100)
 
 
-def _is_passed(annual: float, drawdown: float, benchmark_return: float, total_return: float, trade_count: int, frame: pd.DataFrame, data_coverage: float) -> bool:
-    years = max((frame["date"].iloc[-1] - frame["date"].iloc[0]).days / 365, 0.1)
+def _is_passed(
+    annual: float,
+    drawdown: float,
+    benchmark_return: float,
+    total_return: float,
+    trade_count: int,
+    frame: pd.DataFrame,
+    data_coverage: float,
+    fund_profile: FundProfile | None = None,
+) -> bool:
+    years = _frame_years(frame)
+    profile = fund_profile or resolve_fund_profile(None, None, None)
+    usable_history = data_coverage >= 80 or len(frame) >= MIN_USABLE_SHORT_HISTORY_SAMPLES
+    trade_rate = trade_count / years
     return (
-        data_coverage >= 80
-        and total_return + POSITION_BENCHMARK_TOLERANCE >= benchmark_return
+        usable_history
+        and (
+            _benchmark_pass(total_return, benchmark_return, profile)
+            or _stable_positive_pass(annual, drawdown, benchmark_return, total_return, trade_rate, profile)
+            or _defensive_profile_pass(annual, drawdown, benchmark_return, total_return, trade_rate, profile)
+        )
         and drawdown > -25
-        and trade_count / years <= 12
+        and trade_rate <= 12
         and annual > 0
     )
 
 
-def _diagnosis(passed: bool, total_return: float, benchmark_return: float, drawdown: float, benchmark_drawdown: float, trade_count: int, frame: pd.DataFrame, data_coverage: float) -> str:
-    years = max((frame["date"].iloc[-1] - frame["date"].iloc[0]).days / 365, 0.1)
+def _diagnosis(
+    passed: bool,
+    annual: float,
+    total_return: float,
+    benchmark_return: float,
+    drawdown: float,
+    benchmark_drawdown: float,
+    trade_count: int,
+    frame: pd.DataFrame,
+    data_coverage: float,
+    fund_profile: FundProfile | None = None,
+) -> str:
+    years = _frame_years(frame)
+    profile = fund_profile or resolve_fund_profile(None, None, None)
+    trade_rate = trade_count / years
     if passed:
-        return "参数在该基金样本上通过：收益跑赢同仓位买入持有，回撤和交易频率可控"
+        return "参数在该基金样本上通过：收益、回撤和交易频率符合当前基金画像口径"
     issues = []
-    if data_coverage < 80:
+    if data_coverage < 80 and len(frame) < MIN_USABLE_SHORT_HISTORY_SAMPLES:
         issues.append("样本覆盖不足")
-    if total_return + POSITION_BENCHMARK_TOLERANCE < benchmark_return:
-        issues.append("收益未跑赢同仓位买入持有")
-    if drawdown <= benchmark_drawdown:
+    if not (
+        _benchmark_pass(total_return, benchmark_return, profile)
+        or _stable_positive_pass(annual, drawdown, benchmark_return, total_return, trade_rate, profile)
+        or _defensive_profile_pass(annual, drawdown, benchmark_return, total_return, trade_rate, profile)
+    ):
+        issues.append("收益未达到该基金画像的通过口径")
+    if drawdown <= benchmark_drawdown and not _defensive_profile_pass(annual, drawdown, benchmark_return, total_return, trade_rate, profile):
         issues.append("回撤改善不明显")
-    if trade_count / years > 12:
+    if trade_rate > 12:
         issues.append("交易频率偏高")
     if total_return <= 0:
         issues.append("样本期收益为负")
     return "；".join(issues) if issues else "参数表现一般，建议扩大样本继续验证"
 
 
+def _frame_years(frame: pd.DataFrame) -> float:
+    return max((frame["date"].iloc[-1] - frame["date"].iloc[0]).days / 365, 0.1)
+
+
+def _benchmark_pass(total_return: float, benchmark_return: float, profile: FundProfile) -> bool:
+    return total_return + profile.benchmarkTolerance >= benchmark_return
+
+
+def _stable_positive_pass(
+    annual: float,
+    drawdown: float,
+    benchmark_return: float,
+    total_return: float,
+    trade_rate: float,
+    profile: FundProfile,
+) -> bool:
+    benchmark_gap = benchmark_return - total_return
+    return (
+        annual >= profile.stableAnnualReturn
+        and drawdown > profile.stableDrawdownFloor
+        and benchmark_gap <= profile.stableBenchmarkGap
+        and trade_rate <= profile.maxAnnualTrades
+    )
+
+
+def _defensive_profile_pass(
+    annual: float,
+    drawdown: float,
+    benchmark_return: float,
+    total_return: float,
+    trade_rate: float,
+    profile: FundProfile,
+) -> bool:
+    if profile.defensiveAnnualReturn is None or profile.defensiveDrawdownFloor is None or profile.defensiveBenchmarkGap is None:
+        return False
+    benchmark_gap = benchmark_return - total_return
+    return (
+        annual >= profile.defensiveAnnualReturn
+        and total_return > 0
+        and drawdown > profile.defensiveDrawdownFloor
+        and benchmark_gap <= profile.defensiveBenchmarkGap
+        and trade_rate <= profile.maxAnnualTrades
+    )
+
 def _summary_diagnosis(summary: BacktestSummary) -> str:
-    if summary.outperformPositionBenchmarkRate >= 52 and summary.avgTradeCount <= 12 and summary.passRate >= 50:
+    annual_trades = summary.avgAnnualTradeCount or summary.avgTradeCount
+    if summary.outperformPositionBenchmarkRate >= 52 and annual_trades <= MAX_AVG_ANNUAL_TRADE_COUNT and summary.passRate >= 50:
         return "整体可用：同仓位跑赢比例、交易频率和通过率达到第一版参考线"
     if summary.outperformPositionBenchmarkRate < 45:
         return "偏弱：多数基金未跑赢同仓位买入持有，建议下调买入阈值或检查卖出条件"
-    if summary.avgTradeCount > 12:
-        return "偏频繁：平均交易次数较高，建议提高买入阈值或降低卖出敏感度"
+    if annual_trades > MAX_AVG_ANNUAL_TRADE_COUNT:
+        return "偏频繁：年均交易次数较高，建议提高买入阈值或降低卖出敏感度"
     return "中性：部分指标达标，建议结合不同年份和基金类型继续验证"

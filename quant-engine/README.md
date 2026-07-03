@@ -52,7 +52,7 @@ Response:
 {
   "status": "UP",
   "service": "quant-engine",
-  "modelVersion": "rule-v1.0.0"
+  "modelVersion": "rule-v1.36.0"
 }
 ```
 
@@ -174,16 +174,17 @@ Batch request shape:
     }
   ],
   "strategyParams": {
-    "buyThreshold": 55,
-    "sellThreshold": 12,
+    "buyThreshold": 52,
+    "sellThreshold": 6,
     "maxSinglePositionRate": 45,
-    "buyStepRatio": 15,
-    "sellStepRatio": 15,
+    "buyStepRatio": 20,
+    "sellStepRatio": 8,
     "takeProfitRate": 300,
     "stopLossRate": -18,
-    "warmupDays": 90,
-    "trendHoldReturn20d": 2,
-    "trendHoldMa20Deviation": -6
+    "minNavSamples": 40,
+    "warmupDays": 180,
+    "trendHoldReturn20d": 1.5,
+    "trendHoldMa20Deviation": -7
   },
   "options": {
     "workers": 6,
@@ -212,9 +213,16 @@ When `totalScore` falls below `sellThreshold`, the engine keeps holding if the
 20-day return is above `trendHoldReturn20d` and the 20-day moving-average
 deviation is not below `trendHoldMa20Deviation`. The same two parameters also
 participate in the strong-trend lock, together with 60-day return, 60-day
-drawdown, and extreme-risk checks. The current recommended defaults favor a
-slightly stricter normal buy threshold while letting strong-trend funds build
-positions faster.
+drawdown, and extreme-risk checks. The current recommended defaults use the
+3-year window as the primary benchmark. Funds with less than 3 years of NAV
+history still participate when their usable sample count is sufficient; the
+4-year window is a stability check for older funds, and the 1-year window is
+mainly for recent fit.
+
+Fund strategy profiles are maintained in `app/strategies/fund_profile.py`.
+Use that registry when a fund's trading vehicle and management style differ,
+for example an active QDII fund that should keep overseas risk controls but use
+active-fund trend and re-entry rules.
 
 ## Phase 6 Optional LightGBM Helper
 
@@ -226,7 +234,7 @@ LightGBM helper with two outputs:
   horizon, currently the next 20 NAV samples by default.
 
 - By default `QUANT_ENGINE_ML_ENABLED=false`, so production behavior stays pure
-  `rule-v1.19.0`.
+  `rule-v1.36.0`.
 - When enabled, the active model in `models/registry.json` is loaded once. Its
   probability is converted into a capped score adjustment, and its
   `expectedReturn` is exposed for AI explanation and backtest diagnostics.

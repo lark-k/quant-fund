@@ -101,17 +101,17 @@ class MarketContext(ApiModel):
 
 
 class BacktestStrategyParams(ApiModel):
-    buyThreshold: float = 55
-    sellThreshold: float = 12
+    buyThreshold: float = 52
+    sellThreshold: float = 6
     maxSinglePositionRate: float = 45
-    buyStepRatio: float = 15
-    sellStepRatio: float = 15
+    buyStepRatio: float = 20
+    sellStepRatio: float = 8
     takeProfitRate: float = 300
     stopLossRate: float = -18
-    minNavSamples: int = 20
-    warmupDays: int = 90
-    trendHoldReturn20d: float = 2
-    trendHoldMa20Deviation: float = -6
+    minNavSamples: int = 40
+    warmupDays: int = 180
+    trendHoldReturn20d: float = 1.5
+    trendHoldMa20Deviation: float = -7
 
 
 class QuantAnalyzeRequest(ApiModel):
@@ -300,6 +300,7 @@ class BacktestSummary(ApiModel):
     outperformPositionBenchmarkRate: float = 0
     avgPositionExcessReturnRate: float = 0
     avgTradeCount: float = 0
+    avgAnnualTradeCount: float = 0
     avgSharpeRatio: float = 0
     avgCalmarRatio: float = 0
     passRate: float = 0

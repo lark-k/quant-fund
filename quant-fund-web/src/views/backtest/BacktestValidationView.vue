@@ -22,21 +22,21 @@ const selectedFundCode = ref('')
 
 const form = reactive({
   accountId: undefined as number | undefined,
-  startDate: oneYearAgo(),
+  startDate: yearsAgo(3),
   endDate: today(),
   initialCash: 10000,
   feeRate: 0.0015,
-  buyThreshold: 55,
-  sellThreshold: 12,
+  buyThreshold: 52,
+  sellThreshold: 6,
   maxSinglePositionRate: 45,
-  buyStepRatio: 15,
-  sellStepRatio: 15,
+  buyStepRatio: 20,
+  sellStepRatio: 8,
   takeProfitRate: 300,
   stopLossRate: -18,
-  minNavSamples: 20,
-  warmupDays: 90,
-  trendHoldReturn20d: 2,
-  trendHoldMa20Deviation: -6,
+  minNavSamples: 40,
+  warmupDays: 180,
+  trendHoldReturn20d: 1.5,
+  trendHoldMa20Deviation: -7,
   workers: 6,
   compareMl: false
 })
@@ -55,11 +55,13 @@ const summary = computed(() => response.value?.summary)
 const mlSummary = computed(() => mlResponse.value?.summary)
 const mlComparison = computed(() => {
   if (!summary.value || !mlSummary.value) return undefined
+  const baseAnnualTrades = summary.value.avgAnnualTradeCount ?? summary.value.avgTradeCount
+  const mlAnnualTrades = mlSummary.value.avgAnnualTradeCount ?? mlSummary.value.avgTradeCount
   return {
     annualReturnDelta: mlSummary.value.avgAnnualReturnRate - summary.value.avgAnnualReturnRate,
     drawdownDelta: mlSummary.value.avgMaxDrawdownRate - summary.value.avgMaxDrawdownRate,
     passRateDelta: mlSummary.value.passRate - summary.value.passRate,
-    tradeCountDelta: mlSummary.value.avgTradeCount - summary.value.avgTradeCount,
+    tradeCountDelta: mlAnnualTrades - baseAnnualTrades,
     outperformDelta: mlSummary.value.outperformPositionBenchmarkRate - summary.value.outperformPositionBenchmarkRate,
     mlAppliedFundRate: mlSummary.value.mlAppliedFundRate || 0,
     avgMlScoreAdjustmentAbs: mlSummary.value.avgMlScoreAdjustmentAbs || 0,
@@ -215,9 +217,9 @@ function today() {
   return new Date().toISOString().slice(0, 10)
 }
 
-function oneYearAgo() {
+function yearsAgo(years: number) {
   const date = new Date()
-  date.setFullYear(date.getFullYear() - 1)
+  date.setFullYear(date.getFullYear() - years)
   return date.toISOString().slice(0, 10)
 }
 
@@ -309,7 +311,7 @@ function reasonText(reason: string) {
         <MetricTile label="跑赢同仓位" :value="percentUnsigned(summary?.outperformPositionBenchmarkRate || 0, 1)" :delta="`满仓基准 ${percentUnsigned(summary?.outperformBuyHoldRate || 0, 1)}`" :tone="metricTone((summary?.outperformPositionBenchmarkRate || 0) - 52)" />
         <MetricTile label="平均年化收益" :value="percent(summary?.avgAnnualReturnRate || 0, 2)" :delta="`中位数 ${percent(summary?.medianAnnualReturnRate || 0, 2)}`" :tone="metricTone(summary?.avgAnnualReturnRate || 0)" />
         <MetricTile label="平均最大回撤" :value="percent(summary?.avgMaxDrawdownRate || 0, 2)" :delta="`最差 ${percent(summary?.worstMaxDrawdownRate || 0, 2)}`" tone="fall" />
-        <MetricTile label="平均交易次数" :value="nullableRatio(summary?.avgTradeCount, 1)" delta="每年建议不超过 12" :tone="metricTone(12 - (summary?.avgTradeCount || 0))" />
+        <MetricTile label="年均交易次数" :value="nullableRatio(summary?.avgAnnualTradeCount ?? summary?.avgTradeCount, 1)" :delta="`总均次 ${nullableRatio(summary?.avgTradeCount, 1)}`" :tone="metricTone(6 - (summary?.avgAnnualTradeCount ?? summary?.avgTradeCount ?? 0))" />
         <MetricTile label="样本基金" :value="`${response.successCount}/${response.fundCount}`" :delta="response.failedCount ? `失败 ${response.failedCount}` : response.modelVersion" tone="info" />
       </div>
 

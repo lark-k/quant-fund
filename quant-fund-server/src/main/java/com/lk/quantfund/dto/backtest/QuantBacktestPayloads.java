@@ -201,6 +201,7 @@ public final class QuantBacktestPayloads {
             BigDecimal outperformPositionBenchmarkRate,
             BigDecimal avgPositionExcessReturnRate,
             BigDecimal avgTradeCount,
+            BigDecimal avgAnnualTradeCount,
             BigDecimal avgSharpeRatio,
             BigDecimal avgCalmarRatio,
             BigDecimal passRate,

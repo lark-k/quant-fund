@@ -164,9 +164,11 @@ public class QuantAnalysisServiceImpl implements QuantAnalysisService {
                 responses = fallbackBatch(requests, account, holdings, riskProfile);
                 fallback = true;
             }
-        } else {
+        } else if (properties.getQuantEngine().isFallbackToJavaRules()) {
             responses = fallbackBatch(requests, account, holdings, riskProfile);
             fallback = true;
+        } else {
+            throw new QuantEngineException("Quant engine is disabled and Java fallback is disabled");
         }
         List<QuantSignalVO> saved = new ArrayList<>();
         for (QuantAnalyzeRequest request : requests) {
@@ -287,6 +289,9 @@ public class QuantAnalysisServiceImpl implements QuantAnalysisService {
                                                      FundHolding holding,
                                                      RiskProfile riskProfile) {
         if (!properties.getQuantEngine().isEnabled()) {
+            if (!properties.getQuantEngine().isFallbackToJavaRules()) {
+                throw new QuantEngineException("Quant engine is disabled and Java fallback is disabled");
+            }
             return fallbackResponse(request, account, holding, riskProfile);
         }
         try {

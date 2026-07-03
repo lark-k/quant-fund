@@ -515,8 +515,8 @@ async function generateAiAnalysis() {
   }
   generating.value = true
   try {
-    quantSignal.value = await quantApi.analyzeQuantHolding(currentHolding.id)
     await quantApi.generateAiAnalysis(currentHolding.id)
+    quantSignal.value = ((await quiet(quantApi.quantSignals({ holdingId: currentHolding.id }))) || [])[0] || null
     ElMessage.success('量化建议和 AI 解释已生成')
     router.push({ path: '/ai-analysis', query: { holdingId: currentHolding.id, fundCode: currentHolding.fundCode } })
   } finally {

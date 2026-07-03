@@ -15,7 +15,7 @@ def test_health_api_returns_up():
     assert response.json() == {
         "status": "UP",
         "service": "quant-engine",
-        "modelVersion": "rule-v1.21.0",
+        "modelVersion": "rule-v1.36.0",
     }
 
 

@@ -254,8 +254,8 @@ public class QuantFundProperties {
         @Min(1)
         private int responseMaxInMemoryMb = 16;
         @NotBlank
-        private String modelVersion = "rule-v1.21.0";
-        private boolean fallbackToJavaRules = true;
+        private String modelVersion = "rule-v1.36.0";
+        private boolean fallbackToJavaRules = false;
         @NotBlank
         private String decisionDeadline = "15:00:00";
         @Min(1)
@@ -264,17 +264,17 @@ public class QuantFundProperties {
         private int maxBacktestFunds = 1000;
         @Min(1)
         private int maxParamGrid = 100;
-        private BigDecimal buyThreshold = new BigDecimal("55.0000");
-        private BigDecimal sellThreshold = new BigDecimal("12.0000");
+        private BigDecimal buyThreshold = new BigDecimal("52.0000");
+        private BigDecimal sellThreshold = new BigDecimal("6.0000");
         private BigDecimal maxSinglePositionRate = new BigDecimal("45.0000");
-        private BigDecimal buyStepRatio = new BigDecimal("15.0000");
-        private BigDecimal sellStepRatio = new BigDecimal("15.0000");
+        private BigDecimal buyStepRatio = new BigDecimal("20.0000");
+        private BigDecimal sellStepRatio = new BigDecimal("8.0000");
         private BigDecimal takeProfitRate = new BigDecimal("300.0000");
         private BigDecimal stopLossRate = new BigDecimal("-18.0000");
-        private int minNavSamples = 20;
-        private int warmupDays = 90;
-        private BigDecimal trendHoldReturn20d = new BigDecimal("2.0000");
-        private BigDecimal trendHoldMa20Deviation = new BigDecimal("-6.0000");
+        private int minNavSamples = 40;
+        private int warmupDays = 180;
+        private BigDecimal trendHoldReturn20d = new BigDecimal("1.5000");
+        private BigDecimal trendHoldMa20Deviation = new BigDecimal("-7.0000");
 
         public boolean isEnabled() {
             return enabled;

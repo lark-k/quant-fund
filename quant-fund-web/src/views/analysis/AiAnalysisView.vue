@@ -328,8 +328,8 @@ async function generate() {
   }
   generating.value = true
   try {
-    quantSignal.value = await quantApi.analyzeQuantHolding(holdingId)
     const report = await quantApi.generateAiAnalysis(holdingId)
+    await loadQuantSignal(holdingId)
     reports.value = [report, ...reports.value.filter((item) => item.id !== report.id)]
     selected.value = report
     selectedHoldingId.value = report.holdingId
