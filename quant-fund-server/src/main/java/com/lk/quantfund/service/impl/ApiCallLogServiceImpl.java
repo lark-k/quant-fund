@@ -34,7 +34,7 @@ public class ApiCallLogServiceImpl implements ApiCallLogService {
         try {
             LocalDateTime now = LocalDateTime.now();
             ApiCallLogEntity entity = new ApiCallLogEntity();
-            entity.setUserId(UserContext.isLogin() ? UserContext.getUserId() : null);
+            entity.setUserId(currentUserId());
             entity.setProvider(provider);
             entity.setApiName(apiName);
             entity.setRequestUrl(SensitiveDataMaskUtil.maskMessage(requestUrl));
@@ -53,5 +53,12 @@ public class ApiCallLogServiceImpl implements ApiCallLogService {
             log.warn("API call log save failed: {}", exception.getMessage());
         }
     }
-}
 
+    private Long currentUserId() {
+        try {
+            return UserContext.isLogin() ? UserContext.getUserId() : null;
+        } catch (RuntimeException exception) {
+            return null;
+        }
+    }
+}

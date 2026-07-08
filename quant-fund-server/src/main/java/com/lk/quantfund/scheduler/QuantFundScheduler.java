@@ -4,6 +4,7 @@ import com.lk.quantfund.config.QuantFundProperties;
 import com.lk.quantfund.service.TradeRecordService;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,17 +22,20 @@ public class QuantFundScheduler {
     private final TradingCalendarService tradingCalendarService;
     private final SchedulerTaskLogService schedulerTaskLogService;
     private final ScheduledFundTaskService scheduledFundTaskService;
+    private final ScheduledFundScreenerTaskService scheduledFundScreenerTaskService;
     private final TradeRecordService tradeRecordService;
 
     public QuantFundScheduler(QuantFundProperties properties,
                               TradingCalendarService tradingCalendarService,
                               SchedulerTaskLogService schedulerTaskLogService,
                               ScheduledFundTaskService scheduledFundTaskService,
+                              ScheduledFundScreenerTaskService scheduledFundScreenerTaskService,
                               TradeRecordService tradeRecordService) {
         this.properties = properties;
         this.tradingCalendarService = tradingCalendarService;
         this.schedulerTaskLogService = schedulerTaskLogService;
         this.scheduledFundTaskService = scheduledFundTaskService;
+        this.scheduledFundScreenerTaskService = scheduledFundScreenerTaskService;
         this.tradeRecordService = tradeRecordService;
     }
 
@@ -91,11 +95,45 @@ public class QuantFundScheduler {
         runTask("WEEKLY_REVIEW_CHECKPOINT", false, scheduledFundTaskService::createWeeklyReviewCheckpoint);
     }
 
+    @Scheduled(cron = "0 30 21 ? * MON-FRI", zone = ZONE)
+    public void syncScreenerUniverse() {
+        runScreenerTask("SCREENER_SYNC_UNIVERSE", scheduledFundScreenerTaskService::syncUniverse);
+    }
+
+    @Scheduled(cron = "0 0 22 ? * MON-FRI", zone = ZONE)
+    public void syncScreenerNav() {
+        runScreenerTask("SCREENER_SYNC_NAV", scheduledFundScreenerTaskService::syncNav);
+    }
+
+    @Scheduled(cron = "0 0 23 ? * MON-FRI", zone = ZONE)
+    public void rebuildScreenerUniverse() {
+        runScreenerTask("SCREENER_REBUILD_UNIVERSE", scheduledFundScreenerTaskService::rebuildUniverse);
+    }
+
+    @Scheduled(cron = "0 20 23 ? * MON-FRI", zone = ZONE)
+    public void refreshScreenerFactors() {
+        runScreenerTask("SCREENER_REFRESH_FACTORS", scheduledFundScreenerTaskService::refreshFactors);
+    }
+
+    @Scheduled(cron = "0 40 23 ? * MON-FRI", zone = ZONE)
+    public void refreshScreenerQualityScore() {
+        runScreenerTask("SCREENER_REFRESH_QUALITY_SCORE", scheduledFundScreenerTaskService::refreshQualityScore);
+    }
+
     private void runTradingTask(String taskName, Supplier<SchedulerTaskResult> task) {
         runTask(taskName, true, task);
     }
 
+    private void runScreenerTask(String taskName, Supplier<SchedulerTaskResult> task) {
+        runTask(taskName, false, properties.getScheduler()::isScreenerEnabled, "screener scheduler is disabled", task);
+    }
+
     private void runTask(String taskName, boolean tradingDayRequired, Supplier<SchedulerTaskResult> task) {
+        runTask(taskName, tradingDayRequired, () -> true, "", task);
+    }
+
+    private void runTask(String taskName, boolean tradingDayRequired, BooleanSupplier taskEnabled,
+                         String disabledReason, Supplier<SchedulerTaskResult> task) {
         LocalDateTime startTime = LocalDateTime.now();
         SchedulerTaskResult result = new SchedulerTaskResult();
         boolean skipped = false;
@@ -108,6 +146,11 @@ public class QuantFundScheduler {
             if (tradingDayRequired && !tradingCalendarService.isTradingDay(LocalDate.now())) {
                 skipped = true;
                 log.info("Scheduler task {} skipped because today is not a trading day", taskName);
+                return;
+            }
+            if (!taskEnabled.getAsBoolean()) {
+                skipped = true;
+                log.info("Scheduler task {} skipped because {}", taskName, disabledReason);
                 return;
             }
             result = task.get();

@@ -42,7 +42,7 @@ const navItems = [
   { to: '/profit-calendar', label: '收益日历', icon: Calendar },
   { to: '/backtest-validation', label: '回测验证', icon: DataLine },
   { to: '/trades', label: '交易流水', icon: Operation },
-  { to: '/strategy-config', label: '策略配置', icon: Histogram },
+  { to: '/fund-screener', label: '基金优选', icon: Histogram },
   { to: '/system-config', label: '系统配置', icon: Setting }
 ]
 

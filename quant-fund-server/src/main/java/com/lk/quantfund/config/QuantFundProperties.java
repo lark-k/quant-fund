@@ -142,6 +142,8 @@ public class QuantFundProperties {
         @NotBlank
         private String eastMoneySearchUrl = "https://fundsuggest.eastmoney.com/FundSearch/api/FundSearchAPI.ashx";
         @NotBlank
+        private String eastMoneyFundListUrl = "https://fund.eastmoney.com/js/fundcode_search.js";
+        @NotBlank
         private String eastMoneyEstimateUrl = "https://fundgz.1234567.com.cn/js/{fundCode}.js";
         @NotBlank
         private String eastMoneyHistoricalNavUrl = "https://api.fund.eastmoney.com/f10/lsjz";
@@ -198,6 +200,14 @@ public class QuantFundProperties {
 
         public void setEastMoneySearchUrl(String eastMoneySearchUrl) {
             this.eastMoneySearchUrl = eastMoneySearchUrl;
+        }
+
+        public String getEastMoneyFundListUrl() {
+            return eastMoneyFundListUrl;
+        }
+
+        public void setEastMoneyFundListUrl(String eastMoneyFundListUrl) {
+            this.eastMoneyFundListUrl = eastMoneyFundListUrl;
         }
 
         public String getEastMoneyEstimateUrl() {
@@ -463,6 +473,7 @@ public class QuantFundProperties {
 
     public static class Scheduler {
         private boolean enabled = true;
+        private boolean screenerEnabled = false;
         private String holidays = "";
         private String hongKongHolidays = "";
         private String usHolidays = "";
@@ -479,6 +490,14 @@ public class QuantFundProperties {
 
         public void setEnabled(boolean enabled) {
             this.enabled = enabled;
+        }
+
+        public boolean isScreenerEnabled() {
+            return screenerEnabled;
+        }
+
+        public void setScreenerEnabled(boolean screenerEnabled) {
+            this.screenerEnabled = screenerEnabled;
         }
 
         public String getHolidays() {

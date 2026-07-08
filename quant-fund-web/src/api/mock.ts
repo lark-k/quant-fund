@@ -14,6 +14,10 @@ import type {
   FundHolding,
   FundNavPoint,
   FundPeerRank,
+  FundScreenerExplain,
+  FundScreenerRankItem,
+  FundScreenerRankQuery,
+  FundScreenerTaskResult,
   FundSearchResult,
   FundSearchMode,
   FundStockHolding,
@@ -818,6 +822,93 @@ export const strategyConfigs: StrategyConfig[] = [
   }
 ]
 
+export const fundScreenerRankItems: FundScreenerRankItem[] = [
+  {
+    fundCode: '110011',
+    fundName: '易方达中小盘混合',
+    fundType: 'MIXED',
+    companyName: '易方达基金',
+    managerName: '张坤',
+    qualityScore: 88.6,
+    returnScore: 91.2,
+    riskScore: 80.5,
+    stabilityScore: 84.1,
+    excessScore: 86.4,
+    peerScore: 78.8,
+    liquidityScore: 82.0,
+    dataScore: 96.0,
+    rankNo: 1,
+    rankPercentile: 3.2,
+    recommendLevel: 'STRONG',
+    return60d: 8.2,
+    return120d: 14.8,
+    return250d: 27.6,
+    maxDrawdown120d: -8.9,
+    volatility120d: 17.2,
+    peerPercentile: 3.2,
+    scoreDate: today,
+    reasons: ['近120日收益处于同类前列', '回撤控制优于同类中位数', '净值样本充足，评分可信度较高'],
+    risks: ['近期涨幅较高，短线追高风险上升', '基金优选结果仅供参考，不构成投资建议'],
+    disclaimer: DISCLAIMER
+  },
+  {
+    fundCode: '510300',
+    fundName: '沪深300ETF',
+    fundType: 'INDEX',
+    companyName: '华泰柏瑞基金',
+    managerName: '柳军',
+    qualityScore: 81.4,
+    returnScore: 79.6,
+    riskScore: 76.8,
+    stabilityScore: 80.2,
+    excessScore: 74.5,
+    peerScore: 82.1,
+    liquidityScore: 93.0,
+    dataScore: 98.0,
+    rankNo: 4,
+    rankPercentile: 12.5,
+    recommendLevel: 'WATCH',
+    return60d: 5.4,
+    return120d: 11.9,
+    return250d: 19.7,
+    maxDrawdown120d: -7.4,
+    volatility120d: 15.8,
+    peerPercentile: 12.5,
+    scoreDate: today,
+    reasons: ['规模和流动性较好', '跟踪标的样本稳定', '数据完整度较高'],
+    risks: ['指数基金收益取决于标的指数表现', '历史波动不代表未来风险上限'],
+    disclaimer: DISCLAIMER
+  },
+  {
+    fundCode: '007689',
+    fundName: '国投瑞银新能源混合A',
+    fundType: 'ACTIVE_EQUITY',
+    companyName: '国投瑞银基金',
+    managerName: '施成',
+    qualityScore: 73.5,
+    returnScore: 82.0,
+    riskScore: 61.5,
+    stabilityScore: 66.2,
+    excessScore: 78.1,
+    peerScore: 68.0,
+    liquidityScore: 70.0,
+    dataScore: 92.0,
+    rankNo: 18,
+    rankPercentile: 35.4,
+    recommendLevel: 'NEUTRAL',
+    return60d: 10.1,
+    return120d: 6.8,
+    return250d: 12.4,
+    maxDrawdown120d: -18.7,
+    volatility120d: 29.4,
+    peerPercentile: 35.4,
+    scoreDate: today,
+    reasons: ['近60日收益表现较强', '数据样本满足 MVP 评分要求'],
+    risks: ['行业集中度较高，净值波动可能放大', '不构成投资建议，不承诺收益'],
+    disclaimer: DISCLAIMER
+  }
+]
+
 export const riskProfile: RiskProfile = {
   id: 1,
   riskLevel: 'MEDIUM',
@@ -1352,6 +1443,74 @@ export const mockApi = {
       total: 920,
       percentile: holding.watchFocus ? 12.8 : 26.7,
       period: '近一年'
+    }
+  },
+  async fundScreenerRank(query: FundScreenerRankQuery = {}) {
+    const filtered = fundScreenerRankItems.filter((item) => {
+      if (query.fundType && item.fundType !== query.fundType) return false
+      if (query.recommendLevel && item.recommendLevel !== query.recommendLevel) return false
+      if (query.minScore !== undefined && item.qualityScore < query.minScore) return false
+      return true
+    })
+    const sorted = [...filtered].sort((left, right) => right.qualityScore - left.qualityScore)
+    return page(sorted, query.pageNo, query.pageSize)
+  },
+  async fundScreenerExplain(fundCode: string): Promise<FundScreenerExplain> {
+    const item = fundScreenerRankItems.find((rankItem) => rankItem.fundCode === fundCode) || fundScreenerRankItems[0]
+    return {
+      fundCode: item.fundCode,
+      fundName: item.fundName,
+      fundType: item.fundType,
+      qualityScore: item.qualityScore,
+      recommendLevel: item.recommendLevel,
+      scoreBreakdown: {
+        returnScore: item.returnScore,
+        riskScore: item.riskScore,
+        stabilityScore: item.stabilityScore,
+        excessScore: item.excessScore,
+        peerScore: item.peerScore,
+        liquidityScore: item.liquidityScore || 0,
+        dataScore: item.dataScore
+      },
+      factors: {
+        return60d: item.return60d,
+        return120d: item.return120d,
+        return250d: item.return250d,
+        maxDrawdown120d: item.maxDrawdown120d,
+        volatility120d: item.volatility120d,
+        peerPercentile: item.peerPercentile
+      },
+      reasons: item.reasons,
+      risks: item.risks,
+      scoreDate: item.scoreDate,
+      modelVersion: 'screener-rule-v1',
+      disclaimer: DISCLAIMER
+    }
+  },
+  async refreshFundScreenerScore(): Promise<FundScreenerTaskResult> {
+    return {
+      taskName: 'REFRESH_SCORE',
+      status: 'SKIPPED',
+      successCount: 0,
+      failureCount: 0,
+      skippedCount: 1,
+      costTimeMs: 0,
+      errorSummaries: [],
+      message: 'mock 模式下未执行真实评分刷新',
+      finishTime: now
+    }
+  },
+  async refreshFundScreenerFull(): Promise<FundScreenerTaskResult> {
+    return {
+      taskName: 'REFRESH_FULL',
+      status: 'SKIPPED',
+      successCount: 0,
+      failureCount: 0,
+      skippedCount: 1,
+      costTimeMs: 0,
+      errorSummaries: [],
+      message: 'mock 模式下未执行完整同步路径',
+      finishTime: now
     }
   },
   async refreshEstimate(fundCode: string) {

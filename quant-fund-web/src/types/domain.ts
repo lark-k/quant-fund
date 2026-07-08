@@ -689,6 +689,88 @@ export interface FundPeerRank {
   sourceName?: string
 }
 
+export type FundScreenerRecommendLevel = 'STRONG' | 'WATCH' | 'NEUTRAL' | 'AVOID'
+
+export type FundScreenerRankQuery = {
+  fundType?: string
+  period?: '60d' | '120d' | '250d'
+  riskLevel?: string
+  minScore?: number
+  minFundSize?: number
+  excludeShareClassC?: boolean
+  onlyActiveFund?: boolean
+  recommendLevel?: FundScreenerRecommendLevel | ''
+  pageNo?: number
+  pageSize?: number
+  sortBy?: string
+}
+
+export interface FundScreenerRankItem {
+  fundCode: string
+  fundName: string
+  fundType: string
+  companyName?: string | null
+  managerName?: string | null
+  qualityScore: number
+  returnScore: number
+  riskScore: number
+  stabilityScore: number
+  excessScore: number
+  peerScore: number
+  liquidityScore?: number
+  dataScore: number
+  rankNo?: number | null
+  rankPercentile?: number | null
+  recommendLevel: FundScreenerRecommendLevel
+  return60d?: number | null
+  return120d?: number | null
+  return250d?: number | null
+  maxDrawdown120d?: number | null
+  volatility120d?: number | null
+  peerPercentile?: number | null
+  scoreDate: string
+  reasons: string[]
+  risks: string[]
+  disclaimer: string
+}
+
+export interface FundScreenerScoreBreakdown {
+  returnScore: number
+  riskScore: number
+  stabilityScore: number
+  excessScore: number
+  peerScore: number
+  liquidityScore: number
+  dataScore: number
+}
+
+export interface FundScreenerExplain {
+  fundCode: string
+  fundName?: string | null
+  fundType?: string | null
+  qualityScore?: number | null
+  recommendLevel: FundScreenerRecommendLevel
+  scoreBreakdown: FundScreenerScoreBreakdown
+  factors: Record<string, unknown>
+  reasons: string[]
+  risks: string[]
+  scoreDate?: string | null
+  modelVersion: string
+  disclaimer: string
+}
+
+export interface FundScreenerTaskResult {
+  taskName: string
+  status: string
+  successCount: number
+  failureCount: number
+  skippedCount: number
+  costTimeMs: number
+  errorSummaries: string[]
+  message: string
+  finishTime: string
+}
+
 export interface DataSourceConfig {
   id: number
   userId?: number

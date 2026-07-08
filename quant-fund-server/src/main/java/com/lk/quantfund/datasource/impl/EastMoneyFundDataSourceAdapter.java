@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lk.quantfund.config.QuantFundProperties;
 import com.lk.quantfund.datasource.FundDataSourceAdapter;
 import com.lk.quantfund.datasource.FundDataSourceException;
+import com.lk.quantfund.datasource.FundUniverseDataSourceAdapter;
 import com.lk.quantfund.datasource.model.FundBasicInfoDTO;
 import com.lk.quantfund.datasource.model.FundEstimateDTO;
 import com.lk.quantfund.datasource.model.FundNavPointDTO;
@@ -12,6 +13,7 @@ import com.lk.quantfund.datasource.model.FundPeerRankDTO;
 import com.lk.quantfund.datasource.model.FundSearchResultDTO;
 import com.lk.quantfund.datasource.model.FundStockHoldingDTO;
 import com.lk.quantfund.datasource.model.FundThemeDTO;
+import com.lk.quantfund.datasource.model.MarketFundDTO;
 import com.lk.quantfund.service.ApiCallLogService;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -37,7 +39,7 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.client.WebClient;
 
 @Component
-public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter {
+public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter, FundUniverseDataSourceAdapter {
 
     private static final String SOURCE_NAME = "EAST_MONEY";
     private static final String EAST_MONEY_REFERER = "https://fundf10.eastmoney.com/";
@@ -51,6 +53,8 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter {
     private static final Pattern SECID_PATTERN = Pattern.compile("unify/r/([^'\" >]+)", Pattern.CASE_INSENSITIVE);
     private static final Pattern REPORT_DATE_PATTERN = Pattern.compile("截止至：<font[^>]*>(\\d{4}-\\d{2}-\\d{2})</font>");
     private static final DateTimeFormatter COMPACT_DATE = DateTimeFormatter.BASIC_ISO_DATE;
+    private static final int HISTORICAL_NAV_PAGE_SIZE = 200;
+    private static final int EAST_MONEY_LEGACY_PAGE_CAP = 20;
 
     private final WebClient fundDataWebClient;
     private final ObjectMapper objectMapper;
@@ -114,6 +118,115 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter {
     }
 
     @Override
+    public List<MarketFundDTO> listAllFunds() {
+        String body = get("fund_universe", properties.getFundDataSource().getEastMoneyFundListUrl() + "?v=" + System.currentTimeMillis());
+        try {
+            return parseFundCodeList(body);
+        } catch (Exception exception) {
+            throw new FundDataSourceException("东方财富全市场基金列表解析失败", exception);
+        }
+    }
+
+    @Override
+    public List<MarketFundDTO> listFundsByCategory(String category) {
+        if (!StringUtils.hasText(category)) {
+            return listAllFunds();
+        }
+        String normalizedCategory = category.trim().toUpperCase();
+        return listAllFunds().stream()
+                .filter(fund -> normalizeUniverseCategory(fund.fundType(), fund.fundName()).equals(normalizedCategory))
+                .toList();
+    }
+
+    private List<MarketFundDTO> parseFundCodeList(String body) throws Exception {
+        int start = body.indexOf('[');
+        int end = body.lastIndexOf(']');
+        if (start < 0 || end <= start) {
+            throw new FundDataSourceException("东方财富全市场基金列表为空");
+        }
+        JsonNode root = objectMapper.readTree(body.substring(start, end + 1));
+        List<MarketFundDTO> funds = new ArrayList<>();
+        if (!root.isArray()) {
+            return funds;
+        }
+        for (JsonNode item : root) {
+            if (!item.isArray() || item.size() < 4) {
+                continue;
+            }
+            String code = item.path(0).asText("");
+            String name = item.path(2).asText("");
+            String fundType = item.path(3).asText("");
+            if (!StringUtils.hasText(code) || !StringUtils.hasText(name)) {
+                continue;
+            }
+            funds.add(new MarketFundDTO(
+                    code,
+                    name,
+                    fundType,
+                    shareClass(name),
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    trackingIndex(name),
+                    activeFund(name),
+                    null,
+                    "NORMAL",
+                    SOURCE_NAME
+            ));
+        }
+        return funds;
+    }
+
+    private String normalizeUniverseCategory(String fundType, String fundName) {
+        String text = (cleanText(fundType) + cleanText(fundName)).toUpperCase();
+        if (text.contains("QDII")) {
+            return "QDII";
+        }
+        if (text.contains("货币")) {
+            return "MONEY";
+        }
+        if (text.contains("债")) {
+            return "BOND";
+        }
+        if (text.contains("ETF") || text.contains("指数") || text.contains("INDEX")) {
+            return "INDEX";
+        }
+        if (text.contains("混合") || text.contains("MIX")) {
+            return "MIXED";
+        }
+        if (text.contains("股票") || text.contains("权益") || text.contains("EQUITY")) {
+            return "ACTIVE_EQUITY";
+        }
+        return "UNKNOWN";
+    }
+
+    private String shareClass(String fundName) {
+        String name = cleanText(fundName).toUpperCase();
+        if (name.endsWith("C")) {
+            return "C";
+        }
+        if (name.endsWith("E")) {
+            return "E";
+        }
+        if (name.endsWith("A")) {
+            return "A";
+        }
+        if (name.contains("ETF")) {
+            return "ETF";
+        }
+        if (name.contains("LOF")) {
+            return "LOF";
+        }
+        return null;
+    }
+
+    private String cleanText(String value) {
+        return value == null ? "" : value.trim();
+    }
+
+    @Override
     public Optional<FundBasicInfoDTO> getBasicInfo(String fundCode) {
         try {
             String script = getDetailScript(fundCode);
@@ -135,19 +248,18 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter {
 
     @Override
     public List<FundNavPointDTO> getHistoricalNav(String fundCode, LocalDate startDate, LocalDate endDate) {
-        int pageSize = 20;
         List<FundNavPointDTO> points = new ArrayList<>();
         for (int pageIndex = 1; pageIndex <= 80; pageIndex++) {
             String url = properties.getFundDataSource().getEastMoneyHistoricalNavUrl()
                     + "?fundCode=" + fundCode
-                    + "&pageIndex=" + pageIndex + "&pageSize=" + pageSize
+                    + "&pageIndex=" + pageIndex + "&pageSize=" + HISTORICAL_NAV_PAGE_SIZE
                     + "&startDate=" + (startDate == null ? "" : startDate)
                     + "&endDate=" + (endDate == null ? "" : endDate)
                     + "&_=" + System.currentTimeMillis();
             try {
                 List<FundNavPointDTO> pagePoints = parseHistoricalNavPage(fundCode, get("historical_nav", url));
                 points.addAll(pagePoints);
-                if (pagePoints.size() < pageSize) {
+                if (!mayHaveMoreHistoricalNavPages(pagePoints.size())) {
                     break;
                 }
             } catch (Exception exception) {
@@ -160,6 +272,10 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter {
         return points.stream()
                 .sorted(Comparator.comparing(FundNavPointDTO::navDate))
                 .toList();
+    }
+
+    private boolean mayHaveMoreHistoricalNavPages(int rowCount) {
+        return rowCount == HISTORICAL_NAV_PAGE_SIZE || rowCount == EAST_MONEY_LEGACY_PAGE_CAP;
     }
 
     private List<FundNavPointDTO> parseHistoricalNavPage(String fundCode, String body) throws Exception {

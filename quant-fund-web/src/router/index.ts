@@ -25,6 +25,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'holdings', name: 'holdings', component: () => import('@/views/portfolio/HoldingsView.vue'), meta: { title: '持仓列表' } },
       { path: 'holding-edit', name: 'holding-edit', component: () => import('@/views/portfolio/HoldingEditView.vue'), meta: { title: '持仓编辑' } },
       { path: 'fund-detail', name: 'fund-detail', component: () => import('@/views/fund/FundDetailView.vue'), meta: { title: '基金详情' } },
+      { path: 'fund-screener', name: 'fund-screener', component: () => import('@/views/fund/FundScreenerView.vue'), meta: { title: '基金优选' } },
       { path: 'ai-analysis', name: 'ai-analysis', component: () => import('@/views/analysis/AiAnalysisView.vue'), meta: { title: '智能分析' } },
       { path: 'profit-analysis', name: 'profit-analysis', component: () => import('@/views/analysis/ProfitAnalysisView.vue'), meta: { title: '收益分析' } },
       { path: 'profit-calendar', name: 'profit-calendar', component: () => import('@/views/analysis/ProfitCalendarView.vue'), meta: { title: '收益日历' } },

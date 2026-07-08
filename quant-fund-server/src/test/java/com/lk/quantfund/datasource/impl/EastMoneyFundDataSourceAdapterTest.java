@@ -9,6 +9,7 @@ import com.lk.quantfund.datasource.model.FundNavPointDTO;
 import com.lk.quantfund.datasource.model.FundSearchResultDTO;
 import com.lk.quantfund.datasource.model.FundStockHoldingDTO;
 import com.lk.quantfund.datasource.model.FundThemeDTO;
+import com.lk.quantfund.datasource.model.MarketFundDTO;
 import com.lk.quantfund.service.ApiCallLogService;
 import java.time.LocalDate;
 import java.util.Optional;
@@ -101,6 +102,50 @@ class EastMoneyFundDataSourceAdapterTest {
     }
 
     @Test
+    void shouldParseAllMarketFundCodeList() {
+        String body = "var r = [[\"000001\",\"HXCZHH\",\"华夏成长混合A\",\"混合型-灵活\",\"HXCZHH\"],[\"510300\",\"HS300ETF\",\"沪深300ETF\",\"指数型-股票\",\"HS300ETF\"]];";
+        ExchangeFunction exchangeFunction = request -> Mono.just(ClientResponse.create(HttpStatus.OK).body(body).build());
+        WebClient webClient = WebClient.builder().exchangeFunction(exchangeFunction).build();
+        ApiCallLogService apiCallLogService = (provider, apiName, requestUrl, requestMethod, success, statusCode, errorMessage, costTimeMs, fallbackUsed) -> { };
+
+        EastMoneyFundDataSourceAdapter adapter = new EastMoneyFundDataSourceAdapter(
+                webClient,
+                new ObjectMapper(),
+                new QuantFundProperties(),
+                apiCallLogService
+        );
+
+        List<MarketFundDTO> funds = adapter.listAllFunds();
+
+        assertThat(funds).hasSize(2);
+        assertThat(funds.getFirst().fundCode()).isEqualTo("000001");
+        assertThat(funds.getFirst().fundName()).isEqualTo("华夏成长混合A");
+        assertThat(funds.getFirst().fundType()).isEqualTo("混合型-灵活");
+        assertThat(funds.getFirst().shareClass()).isEqualTo("A");
+        assertThat(funds.getFirst().sourceName()).isEqualTo("EAST_MONEY");
+    }
+
+    @Test
+    void shouldFilterAllMarketFundListByCategory() {
+        String body = "var r = [[\"000001\",\"HXCZHH\",\"华夏成长混合A\",\"混合型-灵活\",\"HXCZHH\"],[\"510300\",\"HS300ETF\",\"沪深300ETF\",\"指数型-股票\",\"HS300ETF\"]];";
+        ExchangeFunction exchangeFunction = request -> Mono.just(ClientResponse.create(HttpStatus.OK).body(body).build());
+        WebClient webClient = WebClient.builder().exchangeFunction(exchangeFunction).build();
+        ApiCallLogService apiCallLogService = (provider, apiName, requestUrl, requestMethod, success, statusCode, errorMessage, costTimeMs, fallbackUsed) -> { };
+
+        EastMoneyFundDataSourceAdapter adapter = new EastMoneyFundDataSourceAdapter(
+                webClient,
+                new ObjectMapper(),
+                new QuantFundProperties(),
+                apiCallLogService
+        );
+
+        List<MarketFundDTO> funds = adapter.listFundsByCategory("INDEX");
+
+        assertThat(funds).hasSize(1);
+        assertThat(funds.getFirst().fundCode()).isEqualTo("510300");
+    }
+
+    @Test
     void shouldUseOfficialHistoricalNavEndpointWithBrowserHeaders() {
         String body = "{\"Data\":{\"LSJZList\":[{\"FSRQ\":\"2026-06-24\",\"DWJZ\":\"2.4778\",\"LJJZ\":\"2.4778\",\"JZZZL\":\"4.52\"}]},\"ErrCode\":0}";
         AtomicReference<ClientRequest> requested = new AtomicReference<>();
@@ -160,7 +205,7 @@ class EastMoneyFundDataSourceAdapterTest {
 
         assertThat(points).hasSize(21);
         assertThat(requestCount[0]).isEqualTo(2);
-        assertThat(lastRequestedUrl.get()).contains("pageIndex=2").contains("pageSize=20");
+        assertThat(lastRequestedUrl.get()).contains("pageIndex=2").contains("pageSize=200");
     }
 
     private String historicalNavBody(int count) {

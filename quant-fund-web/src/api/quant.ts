@@ -19,8 +19,12 @@ import type {
   FundHolding,
   FundNavPoint,
   FundPeerRank,
+  FundScreenerExplain,
+  FundScreenerRankItem,
+  FundScreenerRankQuery,
   FundSearchResult,
   FundSearchMode,
+  FundScreenerTaskResult,
   FundStockHolding,
   FundTheme,
   HoldingCreateRequest,
@@ -194,6 +198,18 @@ export const quantApi = {
   },
   peerRank(fundCode: string): Promise<FundPeerRank> {
     return USE_MOCK ? mockApi.peerRank(fundCode) : http.get(`/funds/${fundCode}/peer-rank`)
+  },
+  fundScreenerRank(params?: FundScreenerRankQuery): Promise<PageResponse<FundScreenerRankItem>> {
+    return USE_MOCK ? mockApi.fundScreenerRank(params) : http.get('/fund-screener/rank', { params, timeout: 60000 })
+  },
+  fundScreenerExplain(fundCode: string): Promise<FundScreenerExplain> {
+    return USE_MOCK ? mockApi.fundScreenerExplain(fundCode) : http.get(`/fund-screener/${fundCode}/explain`)
+  },
+  refreshFundScreenerScore(): Promise<FundScreenerTaskResult> {
+    return USE_MOCK ? mockApi.refreshFundScreenerScore() : http.post('/fund-screener/refresh-score', undefined, { timeout: 600000 })
+  },
+  refreshFundScreenerFull(): Promise<FundScreenerTaskResult> {
+    return USE_MOCK ? mockApi.refreshFundScreenerFull() : http.post('/fund-screener/refresh-full', undefined, { timeout: 1800000 })
   },
   refreshEstimate(fundCode: string): Promise<FundEstimate> {
     return USE_MOCK ? mockApi.refreshEstimate(fundCode) : http.post(`/funds/${fundCode}/refresh-estimate`)
