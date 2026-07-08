@@ -77,6 +77,13 @@ function numberText(value?: number | null, digits = 1) {
   return value.toFixed(digits)
 }
 
+function scoreValue(primary?: number | null, fallback?: number | null) {
+  if (primary !== null && primary !== undefined && Number.isFinite(primary) && primary > 0) {
+    return primary
+  }
+  return fallback
+}
+
 function signedPercent(value?: number | null, digits = 2) {
   if (value === null || value === undefined || Number.isNaN(value)) return '--'
   return percent(value, digits)
@@ -226,6 +233,18 @@ onMounted(loadRank)
               <b :class="`score-${scoreTone(row.qualityScore)}`">{{ numberText(row.qualityScore) }}</b>
             </template>
           </el-table-column>
+          <el-table-column label="收益质量" width="110" align="right">
+            <template #default="{ row }">{{ numberText(scoreValue(row.returnQualityScore, row.returnScore)) }}</template>
+          </el-table-column>
+          <el-table-column label="风险控制" width="110" align="right">
+            <template #default="{ row }">{{ numberText(scoreValue(row.drawdownControlScore, row.riskScore)) }}</template>
+          </el-table-column>
+          <el-table-column label="稳定性" width="100" align="right">
+            <template #default="{ row }">{{ numberText(scoreValue(row.consistencyScore, row.stabilityScore)) }}</template>
+          </el-table-column>
+          <el-table-column label="可投性" width="100" align="right">
+            <template #default="{ row }">{{ numberText(scoreValue(row.investabilityScore, row.dataScore)) }}</template>
+          </el-table-column>
           <el-table-column label="近3月" width="100" align="right">
             <template #default="{ row }">{{ signedPercent(row.return60d) }}</template>
           </el-table-column>
@@ -293,9 +312,15 @@ onMounted(loadRank)
         </div>
         <div class="score-grid">
           <MetricTile label="综合分" :value="numberText(selectedExplain.qualityScore)" :tone="scoreTone(selectedExplain.qualityScore)" />
-          <MetricTile label="收益" :value="numberText(selectedExplain.scoreBreakdown.returnScore)" tone="rise" />
-          <MetricTile label="风险" :value="numberText(selectedExplain.scoreBreakdown.riskScore)" tone="warning" />
-          <MetricTile label="数据" :value="numberText(selectedExplain.scoreBreakdown.dataScore)" tone="info" />
+          <MetricTile label="收益质量" :value="numberText(scoreValue(selectedExplain.scoreBreakdown.returnQualityScore, selectedExplain.scoreBreakdown.returnScore))" tone="rise" />
+          <MetricTile label="风险控制" :value="numberText(scoreValue(selectedExplain.scoreBreakdown.drawdownControlScore, selectedExplain.scoreBreakdown.riskScore))" tone="warning" />
+          <MetricTile label="稳定性" :value="numberText(scoreValue(selectedExplain.scoreBreakdown.consistencyScore, selectedExplain.scoreBreakdown.stabilityScore))" tone="info" />
+          <MetricTile label="可投性" :value="numberText(scoreValue(selectedExplain.scoreBreakdown.investabilityScore, selectedExplain.scoreBreakdown.dataScore))" tone="info" />
+        </div>
+        <div class="factor-strip">
+          <span>基准：{{ selectedExplain.factors.benchmarkCode || '--' }}</span>
+          <span>收益回撤比：{{ numberText(Number(selectedExplain.factors.returnDrawdownRatio120d ?? NaN), 2) }}</span>
+          <span>多周期一致性：{{ numberText(Number(selectedExplain.factors.returnConsistencyScore ?? NaN)) }}</span>
         </div>
         <div class="explain-block">
           <h3>推荐理由</h3>
@@ -680,6 +705,24 @@ onMounted(loadRank)
   gap: 10px;
 }
 
+.factor-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 8px;
+}
+
+.factor-strip span {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid rgba(117, 144, 158, 0.16);
+  border-radius: 8px;
+  background: rgba(12, 26, 35, 0.88);
+  color: #9fb2bf;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .explain-block {
   border-top: 1px solid var(--line-soft);
   padding-top: 12px;
@@ -820,6 +863,10 @@ onMounted(loadRank)
 
   .filter-band,
   .metric-row {
+    grid-template-columns: 1fr;
+  }
+
+  .factor-strip {
     grid-template-columns: 1fr;
   }
 }

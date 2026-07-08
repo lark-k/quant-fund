@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -64,6 +65,45 @@ class FundUniverseServiceImplTest {
         assertThat(captor.getValue().getFundType()).isEqualTo("INDEX");
         assertThat(captor.getValue().getFundName()).isEqualTo("沪深300ETF");
         assertThat(result.successCount()).isEqualTo(1);
+    }
+
+    @Test
+    void shouldPreserveExistingProfileWhenMarketListHasNoProfileFields() {
+        ScreenerFundUniverse existing = new ScreenerFundUniverse();
+        existing.setId(9L);
+        existing.setFundCode("006976");
+        existing.setCompanyName("鹏华基金");
+        existing.setManagerName("黄奕松");
+        existing.setEstablishDate(LocalDate.of(2019, 4, 3));
+        existing.setFundSize(new BigDecimal("1.5408"));
+        existing.setCreateTime(java.time.LocalDateTime.now().minusDays(1));
+        MarketFundDTO marketListFund = new MarketFundDTO(
+                "006976",
+                "鹏华核心优势混合A",
+                "混合型-偏股",
+                "A",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                true,
+                null,
+                "NORMAL",
+                "TEST"
+        );
+        FundUniverseServiceImpl service = service(List.of(adapter(List.of(marketListFund))));
+        when(mapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(existing);
+
+        service.syncUniverse();
+
+        ArgumentCaptor<ScreenerFundUniverse> captor = ArgumentCaptor.forClass(ScreenerFundUniverse.class);
+        verify(mapper).updateById(captor.capture());
+        assertThat(captor.getValue().getCompanyName()).isEqualTo("鹏华基金");
+        assertThat(captor.getValue().getManagerName()).isEqualTo("黄奕松");
+        assertThat(captor.getValue().getEstablishDate()).isEqualTo(LocalDate.of(2019, 4, 3));
+        assertThat(captor.getValue().getFundSize()).isEqualByComparingTo("1.5408");
     }
 
     @Test
@@ -130,6 +170,49 @@ class FundUniverseServiceImplTest {
         assertThat(result.status()).isEqualTo("SUCCESS");
         assertThat(result.successCount()).isEqualTo(1);
         assertThat(result.skippedCount()).isEqualTo(4);
+    }
+
+    @Test
+    void shouldEnrichIncludedFundProfileBeforeRebuildFilter() {
+        ScreenerFundUniverse missingProfile = universe("006976", "MIXED", "A", "NORMAL");
+        missingProfile.setCompanyName(null);
+        missingProfile.setManagerName(null);
+        missingProfile.setEstablishDate(null);
+        missingProfile.setFundSize(null);
+        when(mapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(missingProfile));
+        when(navMapper.selectCount(any(LambdaQueryWrapper.class))).thenReturn(250L, 250L);
+        when(filterMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(null);
+        FundUniverseDataSourceAdapter adapter = adapter(List.of());
+        when(adapter.getFundProfile("006976")).thenReturn(java.util.Optional.of(new MarketFundDTO(
+                "006976",
+                "鹏华核心优势混合A",
+                "混合型-偏股",
+                "A",
+                null,
+                "鹏华基金",
+                "黄奕松",
+                LocalDate.of(2019, 4, 3),
+                new BigDecimal("1.5408"),
+                null,
+                true,
+                "4",
+                "NORMAL",
+                "TEST"
+        )));
+
+        service(List.of(adapter)).rebuildUniverse();
+
+        ArgumentCaptor<ScreenerFundUniverse> universeCaptor = ArgumentCaptor.forClass(ScreenerFundUniverse.class);
+        verify(mapper).updateById(universeCaptor.capture());
+        assertThat(universeCaptor.getValue().getCompanyName()).isEqualTo("鹏华基金");
+        assertThat(universeCaptor.getValue().getManagerName()).isEqualTo("黄奕松");
+        assertThat(universeCaptor.getValue().getEstablishDate()).isEqualTo(LocalDate.of(2019, 4, 3));
+        assertThat(universeCaptor.getValue().getFundSize()).isEqualByComparingTo("1.5408");
+
+        ArgumentCaptor<ScreenerUniverseFilter> filterCaptor = ArgumentCaptor.forClass(ScreenerUniverseFilter.class);
+        verify(filterMapper).insert(filterCaptor.capture());
+        assertThat(filterCaptor.getValue().getSizeFilterPassed()).isEqualTo(1);
+        verify(navMapper, times(2)).selectCount(any(LambdaQueryWrapper.class));
     }
 
     private FundUniverseDataSourceAdapter adapter(List<MarketFundDTO> funds) {

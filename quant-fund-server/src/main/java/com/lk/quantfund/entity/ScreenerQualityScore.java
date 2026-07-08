@@ -23,6 +23,10 @@ public class ScreenerQualityScore {
     private BigDecimal peerScore;
     private BigDecimal liquidityScore;
     private BigDecimal dataScore;
+    private BigDecimal returnQualityScore;
+    private BigDecimal drawdownControlScore;
+    private BigDecimal consistencyScore;
+    private BigDecimal investabilityScore;
     private Integer rankNo;
     private BigDecimal rankPercentile;
     private String recommendLevel;
@@ -56,6 +60,14 @@ public class ScreenerQualityScore {
     public void setLiquidityScore(BigDecimal liquidityScore) { this.liquidityScore = liquidityScore; }
     public BigDecimal getDataScore() { return dataScore; }
     public void setDataScore(BigDecimal dataScore) { this.dataScore = dataScore; }
+    public BigDecimal getReturnQualityScore() { return returnQualityScore; }
+    public void setReturnQualityScore(BigDecimal returnQualityScore) { this.returnQualityScore = returnQualityScore; }
+    public BigDecimal getDrawdownControlScore() { return drawdownControlScore; }
+    public void setDrawdownControlScore(BigDecimal drawdownControlScore) { this.drawdownControlScore = drawdownControlScore; }
+    public BigDecimal getConsistencyScore() { return consistencyScore; }
+    public void setConsistencyScore(BigDecimal consistencyScore) { this.consistencyScore = consistencyScore; }
+    public BigDecimal getInvestabilityScore() { return investabilityScore; }
+    public void setInvestabilityScore(BigDecimal investabilityScore) { this.investabilityScore = investabilityScore; }
     public Integer getRankNo() { return rankNo; }
     public void setRankNo(Integer rankNo) { this.rankNo = rankNo; }
     public BigDecimal getRankPercentile() { return rankPercentile; }

@@ -719,6 +719,10 @@ export interface FundScreenerRankItem {
   peerScore: number
   liquidityScore?: number
   dataScore: number
+  returnQualityScore?: number
+  drawdownControlScore?: number
+  consistencyScore?: number
+  investabilityScore?: number
   rankNo?: number | null
   rankPercentile?: number | null
   recommendLevel: FundScreenerRecommendLevel
@@ -728,6 +732,9 @@ export interface FundScreenerRankItem {
   maxDrawdown120d?: number | null
   volatility120d?: number | null
   peerPercentile?: number | null
+  returnDrawdownRatio120d?: number | null
+  returnConsistencyScore?: number | null
+  benchmarkCode?: string | null
   scoreDate: string
   reasons: string[]
   risks: string[]
@@ -742,6 +749,10 @@ export interface FundScreenerScoreBreakdown {
   peerScore: number
   liquidityScore: number
   dataScore: number
+  returnQualityScore?: number
+  drawdownControlScore?: number
+  consistencyScore?: number
+  investabilityScore?: number
 }
 
 export interface FundScreenerExplain {

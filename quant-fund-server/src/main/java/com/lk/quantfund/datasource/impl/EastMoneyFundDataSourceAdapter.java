@@ -43,6 +43,8 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter, Fu
 
     private static final String SOURCE_NAME = "EAST_MONEY";
     private static final String EAST_MONEY_REFERER = "https://fundf10.eastmoney.com/";
+    private static final String EAST_MONEY_MOBILE_FUND_DETAIL_URL =
+            "https://fundmobapi.eastmoney.com/FundMApi/FundDetailInformation.ashx";
     private static final String BROWSER_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
             + "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
     private static final Charset GB18030 = Charset.forName("GB18030");
@@ -136,6 +138,44 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter, Fu
         return listAllFunds().stream()
                 .filter(fund -> normalizeUniverseCategory(fund.fundType(), fund.fundName()).equals(normalizedCategory))
                 .toList();
+    }
+
+    @Override
+    public Optional<MarketFundDTO> getFundProfile(String fundCode) {
+        if (!StringUtils.hasText(fundCode)) {
+            return Optional.empty();
+        }
+        String code = fundCode.trim();
+        String url = EAST_MONEY_MOBILE_FUND_DETAIL_URL
+                + "?FCODE=" + code
+                + "&deviceid=Wap&plat=Wap&product=EFund&version=2.0.0";
+        try {
+            JsonNode data = objectMapper.readTree(get("fund_profile", url)).path("Datas");
+            if (data.isMissingNode() || data.isNull() || data.isEmpty()) {
+                return Optional.empty();
+            }
+            String name = firstText(text(data, "SHORTNAME"), code);
+            String fundType = text(data, "FTYPE");
+            String trackingIndex = firstText(text(data, "INDEXNAME"), trackingIndex(name));
+            return Optional.of(new MarketFundDTO(
+                    firstText(text(data, "FCODE"), code),
+                    name,
+                    fundType,
+                    shareClass(name),
+                    null,
+                    emptyToNull(text(data, "JJGS")),
+                    emptyToNull(text(data, "JJJL")),
+                    parseProfileDate(text(data, "ESTABDATE")),
+                    fundSizeFromYuan(text(data, "ENDNAV")),
+                    emptyToNull(trackingIndex),
+                    activeFund(name),
+                    emptyToNull(text(data, "RISKLEVEL")),
+                    "NORMAL",
+                    SOURCE_NAME
+            ));
+        } catch (Exception exception) {
+            throw new FundDataSourceException("东方财富基金档案解析失败", exception);
+        }
     }
 
     private List<MarketFundDTO> parseFundCodeList(String body) throws Exception {
@@ -885,6 +925,25 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter, Fu
             return null;
         }
         return new BigDecimal(value.replace("%", "").replace(",", "").trim());
+    }
+
+    private BigDecimal fundSizeFromYuan(String value) {
+        BigDecimal yuan = decimal(value);
+        if (yuan == null) {
+            return null;
+        }
+        return yuan.divide(new BigDecimal("100000000"), 4, RoundingMode.HALF_UP);
+    }
+
+    private LocalDate parseProfileDate(String value) {
+        if (!StringUtils.hasText(value) || value.length() < 10) {
+            return null;
+        }
+        return LocalDate.parse(value.substring(0, 10), DateTimeFormatter.ISO_LOCAL_DATE);
+    }
+
+    private String emptyToNull(String value) {
+        return StringUtils.hasText(value) ? value.trim() : null;
     }
 
     private BigDecimal valueOrZero(BigDecimal value) {

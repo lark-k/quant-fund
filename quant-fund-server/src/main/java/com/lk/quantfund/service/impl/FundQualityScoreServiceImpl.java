@@ -35,7 +35,7 @@ import org.springframework.util.StringUtils;
 @Service
 public class FundQualityScoreServiceImpl implements FundQualityScoreService {
 
-    private static final String MODEL_VERSION = "screener-rule-v1";
+    private static final String MODEL_VERSION = "screener-rule-v2";
     private static final BigDecimal ZERO = BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP);
     private static final BigDecimal HUNDRED = new BigDecimal("100.0000");
     private static final String REASON_RETURN_120D = "\u8fd1120\u65e5\u6536\u76ca\u8868\u73b0\u8f83\u597d";
@@ -64,9 +64,10 @@ public class FundQualityScoreServiceImpl implements FundQualityScoreService {
     public PageResponse<FundScreenerRankItemVO> rank(FundScreenerQueryRequest request) {
         List<ScreenerQualityScore> scores = screenerQualityScoreMapper.selectList(new LambdaQueryWrapper<ScreenerQualityScore>()
                 .orderByDesc(ScreenerQualityScore::getQualityScore));
+        List<ScreenerQualityScore> latestScores = latestScoresByCode(scores).values().stream().toList();
         Map<String, ScreenerFundUniverse> universeByCode = universesByCode();
         Map<String, ScreenerFactorSnapshot> latestFactorByCode = latestFactorsByCode();
-        List<FundScreenerRankItemVO> records = scores.stream()
+        List<FundScreenerRankItemVO> records = latestScores.stream()
                 .map(score -> new RankSource(score, universeByCode.get(score.getFundCode()), latestFactorByCode.get(score.getFundCode())))
                 .filter(source -> matches(request, source))
                 .map(source -> toRankItem(source.score(), source.universe(), source.factor()))
@@ -82,6 +83,30 @@ public class FundQualityScoreServiceImpl implements FundQualityScoreService {
                 .stream()
                 .filter(universe -> StringUtils.hasText(universe.getFundCode()))
                 .collect(Collectors.toMap(ScreenerFundUniverse::getFundCode, Function.identity(), (left, right) -> left));
+    }
+
+    private Map<String, ScreenerQualityScore> latestScoresByCode(List<ScreenerQualityScore> scores) {
+        Map<String, ScreenerQualityScore> latest = new LinkedHashMap<>();
+        for (ScreenerQualityScore score : scores) {
+            if (!StringUtils.hasText(score.getFundCode())) {
+                continue;
+            }
+            ScreenerQualityScore existing = latest.get(score.getFundCode());
+            if (existing == null || isAfter(score, existing)) {
+                latest.put(score.getFundCode(), score);
+            }
+        }
+        return latest;
+    }
+
+    private boolean isAfter(ScreenerQualityScore candidate, ScreenerQualityScore existing) {
+        if (candidate.getScoreDate() == null) {
+            return false;
+        }
+        if (existing.getScoreDate() == null) {
+            return true;
+        }
+        return candidate.getScoreDate().isAfter(existing.getScoreDate());
     }
 
     private Map<String, ScreenerFactorSnapshot> latestFactorsByCode() {
@@ -124,8 +149,9 @@ public class FundQualityScoreServiceImpl implements FundQualityScoreService {
         int success = 0;
         int failed = 0;
         List<String> errors = new ArrayList<>();
-        List<ScreenerFactorSnapshot> factors = screenerFactorSnapshotMapper.selectList(new LambdaQueryWrapper<ScreenerFactorSnapshot>()
-                .orderByAsc(ScreenerFactorSnapshot::getFundCode));
+        List<ScreenerFactorSnapshot> factors = latestFactorsByCode().values().stream()
+                .sorted(Comparator.comparing(ScreenerFactorSnapshot::getFundCode))
+                .toList();
         Map<String, ScreenerFundUniverse> universeByCode = universesByCode();
         Map<String, ScreenerQualityScore> existingScoreByKey = existingScoresByKey();
         List<ScreenerQualityScore> calculated = new ArrayList<>();
@@ -146,6 +172,7 @@ public class FundQualityScoreServiceImpl implements FundQualityScoreService {
             score.setRankPercentile(BigDecimal.valueOf(index + 1L)
                     .multiply(HUNDRED)
                     .divide(BigDecimal.valueOf(calculated.size()), 4, RoundingMode.HALF_UP));
+            score.setRecommendLevel(recommendLevel(score.getQualityScore(), score.getRankNo(), calculated.size()));
             upsert(score, existingScoreByKey);
         }
         return new FundScreenerTaskResultVO(
@@ -162,10 +189,14 @@ public class FundQualityScoreServiceImpl implements FundQualityScoreService {
     }
 
     private ScreenerQualityScore calculate(ScreenerFactorSnapshot factor, ScreenerFundUniverse universe) {
-        BigDecimal returnScore = clip(scoreFromReturn(factor.getReturn120d()));
-        BigDecimal riskScore = clip(scoreFromDrawdown(factor.getMaxDrawdown120d()));
-        BigDecimal stabilityScore = clip(valueOrDefault(factor.getPositiveDayRatio60d(), new BigDecimal("50.0000")));
-        BigDecimal excessScore = clip(new BigDecimal("50.0000").add(valueOrZero(factor.getExcessReturn120d()).multiply(new BigDecimal("5.0000"))));
+        BigDecimal returnQualityScore = returnQualityScore(factor);
+        BigDecimal drawdownControlScore = drawdownControlScore(factor);
+        BigDecimal consistencyScore = consistencyScore(factor);
+        BigDecimal investabilityScore = investabilityScore(factor, universe);
+        BigDecimal returnScore = returnQualityScore;
+        BigDecimal riskScore = drawdownControlScore;
+        BigDecimal stabilityScore = consistencyScore;
+        BigDecimal excessScore = clip(new BigDecimal("50.0000").add(valueOrZero(factor.getExcessReturn120d()).multiply(new BigDecimal("4.0000"))));
         BigDecimal peerScore = clip(HUNDRED.subtract(valueOrDefault(factor.getPeerPercentile(), new BigDecimal("50.0000"))));
         BigDecimal liquidityScore = clip(valueOrDefault(factor.getFundSize(), new BigDecimal("25.0000")).multiply(new BigDecimal("2.0000")));
         BigDecimal dataScore = clip(BigDecimal.valueOf(factor.getNavSampleSize() == null ? 0 : factor.getNavSampleSize())
@@ -185,7 +216,11 @@ public class FundQualityScoreServiceImpl implements FundQualityScoreService {
         score.setPeerScore(peerScore);
         score.setLiquidityScore(liquidityScore);
         score.setDataScore(dataScore);
-        score.setRecommendLevel(recommendLevel(qualityScore));
+        score.setReturnQualityScore(returnQualityScore);
+        score.setDrawdownControlScore(drawdownControlScore);
+        score.setConsistencyScore(consistencyScore);
+        score.setInvestabilityScore(investabilityScore);
+        score.setRecommendLevel(recommendLevel(qualityScore, 1, 1));
         score.setReasonsJson(writeStringList(reasons(factor)));
         score.setRisksJson(writeStringList(List.of(RISK_DISCLAIMER)));
         score.setModelVersion(MODEL_VERSION);
@@ -202,21 +237,66 @@ public class FundQualityScoreServiceImpl implements FundQualityScoreService {
             return weighted(
                     returnScore, "0.2500",
                     riskScore, "0.2000",
-                    stabilityScore, "0.0000",
+                    stabilityScore, "0.1000",
                     excessScore, "0.2500",
                     peerScore, "0.0000",
-                    liquidityScore, "0.2000",
-                    dataScore, "0.1000"
+                    liquidityScore, "0.1000",
+                    dataScore, "0.0500"
             );
         }
         return weighted(
-                returnScore, "0.3500",
+                returnScore, "0.3000",
                 riskScore, "0.2500",
-                stabilityScore, "0.1500",
-                excessScore, "0.1500",
-                peerScore, "0.0500",
+                stabilityScore, "0.2000",
+                excessScore, "0.1000",
+                peerScore, "0.1000",
                 liquidityScore, "0.0000",
                 dataScore, "0.0500"
+        );
+    }
+
+    private BigDecimal returnQualityScore(ScreenerFactorSnapshot factor) {
+        BigDecimal raw = new BigDecimal("45.0000")
+                .add(capped(valueOrZero(factor.getReturn60d()), "20.0000").multiply(new BigDecimal("0.7000")))
+                .add(capped(valueOrZero(factor.getReturn120d()), "30.0000").multiply(new BigDecimal("1.0000")))
+                .add(capped(valueOrZero(factor.getReturn250d()), "50.0000").multiply(new BigDecimal("0.3500")))
+                .add(valueOrZero(factor.getReturnDrawdownRatio120d()).multiply(new BigDecimal("5.0000")))
+                .add(valueOrZero(factor.getExcessReturn120d()).multiply(new BigDecimal("2.0000")));
+        return clip(raw);
+    }
+
+    private BigDecimal drawdownControlScore(ScreenerFactorSnapshot factor) {
+        BigDecimal raw = new BigDecimal("92.0000")
+                .add(valueOrZero(factor.getMaxDrawdown120d()).multiply(new BigDecimal("1.6000")))
+                .subtract(valueOrZero(factor.getVolatility120d()).multiply(new BigDecimal("0.3500")))
+                .add(valueOrZero(factor.getReturnDrawdownRatio120d()).multiply(new BigDecimal("4.0000")));
+        return clip(raw);
+    }
+
+    private BigDecimal consistencyScore(ScreenerFactorSnapshot factor) {
+        BigDecimal raw = valueOrDefault(factor.getReturnConsistencyScore(), new BigDecimal("50.0000"))
+                .multiply(new BigDecimal("0.7000"))
+                .add(valueOrDefault(factor.getPositiveDayRatio60d(), new BigDecimal("50.0000")).multiply(new BigDecimal("0.3000")))
+                .add(valueOrZero(factor.getTrendSlope60d()).multiply(new BigDecimal("20.0000")));
+        return clip(raw);
+    }
+
+    private BigDecimal investabilityScore(ScreenerFactorSnapshot factor, ScreenerFundUniverse universe) {
+        BigDecimal sizeScore = clip(valueOrDefault(factor.getFundSize(),
+                universe == null ? null : universe.getFundSize(),
+                new BigDecimal("25.0000")).multiply(new BigDecimal("2.0000")));
+        BigDecimal dataScore = clip(BigDecimal.valueOf(factor.getNavSampleSize() == null ? 0 : factor.getNavSampleSize())
+                .multiply(HUNDRED)
+                .divide(new BigDecimal("250.0000"), 4, RoundingMode.HALF_UP));
+        BigDecimal ageScore = clip(valueOrZero(factor.getFundAgeYears()).multiply(new BigDecimal("16.0000")));
+        return weighted(
+                dataScore, "0.4500",
+                sizeScore, "0.2500",
+                ageScore, "0.2500",
+                new BigDecimal("80.0000"), "0.0500",
+                ZERO, "0.0000",
+                ZERO, "0.0000",
+                ZERO, "0.0000"
         );
     }
 
@@ -291,6 +371,10 @@ public class FundQualityScoreServiceImpl implements FundQualityScoreService {
                 primitive(score.getPeerScore()),
                 primitive(score.getLiquidityScore()),
                 primitive(score.getDataScore()),
+                primitive(score.getReturnQualityScore()),
+                primitive(score.getDrawdownControlScore()),
+                primitive(score.getConsistencyScore()),
+                primitive(score.getInvestabilityScore()),
                 score.getRankNo(),
                 toDouble(score.getRankPercentile()),
                 score.getRecommendLevel(),
@@ -300,6 +384,9 @@ public class FundQualityScoreServiceImpl implements FundQualityScoreService {
                 factor == null ? null : toDouble(factor.getMaxDrawdown120d()),
                 factor == null ? null : toDouble(factor.getVolatility120d()),
                 factor == null ? null : toDouble(factor.getPeerPercentile()),
+                factor == null ? null : toDouble(factor.getReturnDrawdownRatio120d()),
+                factor == null ? null : toDouble(factor.getReturnConsistencyScore()),
+                factor == null ? null : factor.getBenchmarkCode(),
                 score.getScoreDate() == null ? null : score.getScoreDate().toString(),
                 readStringList(score.getReasonsJson()),
                 readStringList(score.getRisksJson()),
@@ -356,7 +443,11 @@ public class FundQualityScoreServiceImpl implements FundQualityScoreService {
                 primitive(score.getExcessScore()),
                 primitive(score.getPeerScore()),
                 primitive(score.getLiquidityScore()),
-                primitive(score.getDataScore())
+                primitive(score.getDataScore()),
+                primitive(score.getReturnQualityScore()),
+                primitive(score.getDrawdownControlScore()),
+                primitive(score.getConsistencyScore()),
+                primitive(score.getInvestabilityScore())
         );
     }
 
@@ -374,6 +465,10 @@ public class FundQualityScoreServiceImpl implements FundQualityScoreService {
         factors.put("positiveDayRatio60d", factor.getPositiveDayRatio60d());
         factors.put("excessReturn120d", factor.getExcessReturn120d());
         factors.put("peerPercentile", factor.getPeerPercentile());
+        factors.put("benchmarkCode", factor.getBenchmarkCode());
+        factors.put("returnDrawdownRatio120d", factor.getReturnDrawdownRatio120d());
+        factors.put("returnConsistencyScore", factor.getReturnConsistencyScore());
+        factors.put("fundAgeYears", factor.getFundAgeYears());
         factors.put("fundSize", factor.getFundSize());
         factors.put("navSampleSize", factor.getNavSampleSize());
         return factors;
@@ -409,14 +504,16 @@ public class FundQualityScoreServiceImpl implements FundQualityScoreService {
                 .last("LIMIT 1"));
     }
 
-    private String recommendLevel(BigDecimal qualityScore) {
-        if (qualityScore.compareTo(new BigDecimal("85.0000")) >= 0) {
+    private String recommendLevel(BigDecimal qualityScore, int rankNo, int total) {
+        int strongCutoff = Math.max(1, (int) Math.ceil(total * 0.08));
+        int watchCutoff = Math.max(strongCutoff, (int) Math.ceil(total * 0.20));
+        if (qualityScore.compareTo(new BigDecimal("82.0000")) >= 0 && rankNo <= strongCutoff) {
             return "STRONG";
         }
-        if (qualityScore.compareTo(new BigDecimal("75.0000")) >= 0) {
+        if (qualityScore.compareTo(new BigDecimal("72.0000")) >= 0 || rankNo <= watchCutoff) {
             return "WATCH";
         }
-        if (qualityScore.compareTo(new BigDecimal("60.0000")) >= 0) {
+        if (qualityScore.compareTo(new BigDecimal("58.0000")) >= 0) {
             return "NEUTRAL";
         }
         return "AVOID";
@@ -447,8 +544,23 @@ public class FundQualityScoreServiceImpl implements FundQualityScoreService {
         return value == null ? defaultValue : value;
     }
 
+    private BigDecimal valueOrDefault(BigDecimal value, BigDecimal secondaryValue, BigDecimal defaultValue) {
+        if (value != null) {
+            return value;
+        }
+        return secondaryValue == null ? defaultValue : secondaryValue;
+    }
+
     private BigDecimal valueOrZero(BigDecimal value) {
         return value == null ? ZERO : value;
+    }
+
+    private BigDecimal capped(BigDecimal value, String cap) {
+        BigDecimal upper = new BigDecimal(cap);
+        if (value.compareTo(upper) > 0) {
+            return upper;
+        }
+        return value;
     }
 
     private double primitive(BigDecimal value) {

@@ -126,6 +126,51 @@ class EastMoneyFundDataSourceAdapterTest {
     }
 
     @Test
+    void shouldParseFundProfileFromMobileDetailEndpoint() {
+        String body = """
+                {
+                  "Datas": {
+                    "FCODE": "006976",
+                    "SHORTNAME": "鹏华核心优势混合A",
+                    "FTYPE": "混合型-偏股",
+                    "ESTABDATE": "2019-04-03",
+                    "ENDNAV": "154083534.96",
+                    "JJGS": "鹏华基金",
+                    "JJJL": "黄奕松",
+                    "INDEXNAME": "",
+                    "RISKLEVEL": "4"
+                  },
+                  "ErrCode": 0
+                }
+                """;
+        AtomicReference<String> requestedUrl = new AtomicReference<>();
+        ExchangeFunction exchangeFunction = request -> {
+            requestedUrl.set(request.url().toString());
+            return Mono.just(ClientResponse.create(HttpStatus.OK).body(body).build());
+        };
+        WebClient webClient = WebClient.builder().exchangeFunction(exchangeFunction).build();
+        ApiCallLogService apiCallLogService = (provider, apiName, requestUrl, requestMethod, success, statusCode, errorMessage, costTimeMs, fallbackUsed) -> { };
+
+        EastMoneyFundDataSourceAdapter adapter = new EastMoneyFundDataSourceAdapter(
+                webClient,
+                new ObjectMapper(),
+                new QuantFundProperties(),
+                apiCallLogService
+        );
+
+        Optional<MarketFundDTO> profile = adapter.getFundProfile("006976");
+
+        assertThat(requestedUrl.get()).contains("FundDetailInformation.ashx").contains("FCODE=006976");
+        assertThat(profile).isPresent();
+        assertThat(profile.get().fundCode()).isEqualTo("006976");
+        assertThat(profile.get().fundName()).isEqualTo("鹏华核心优势混合A");
+        assertThat(profile.get().companyName()).isEqualTo("鹏华基金");
+        assertThat(profile.get().managerName()).isEqualTo("黄奕松");
+        assertThat(profile.get().establishDate()).isEqualTo(LocalDate.of(2019, 4, 3));
+        assertThat(profile.get().fundSize()).isEqualByComparingTo("1.5408");
+    }
+
+    @Test
     void shouldFilterAllMarketFundListByCategory() {
         String body = "var r = [[\"000001\",\"HXCZHH\",\"华夏成长混合A\",\"混合型-灵活\",\"HXCZHH\"],[\"510300\",\"HS300ETF\",\"沪深300ETF\",\"指数型-股票\",\"HS300ETF\"]];";
         ExchangeFunction exchangeFunction = request -> Mono.just(ClientResponse.create(HttpStatus.OK).body(body).build());

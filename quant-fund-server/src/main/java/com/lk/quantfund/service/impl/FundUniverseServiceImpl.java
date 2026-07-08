@@ -94,6 +94,9 @@ public class FundUniverseServiceImpl implements FundUniverseService {
         int excluded = 0;
         for (ScreenerFundUniverse fund : funds) {
             ScreenerUniverseFilter filter = buildFilter(fund);
+            if (filter.getIncluded() == 1 && missingProfile(fund) && enrichFundProfile(fund)) {
+                filter = buildFilter(fund);
+            }
             if (filter.getIncluded() == 1) {
                 included++;
             } else {
@@ -199,10 +202,7 @@ public class FundUniverseServiceImpl implements FundUniverseService {
         entity.setFundType(normalizeFundType(fund.fundType(), fund.fundName()));
         entity.setShareClass(shareClass(fund.shareClass(), fund.fundName()));
         entity.setMainFundCode(fund.mainFundCode());
-        entity.setCompanyName(fund.companyName());
-        entity.setManagerName(fund.managerName());
-        entity.setEstablishDate(fund.establishDate());
-        entity.setFundSize(fund.fundSize());
+        mergeProfile(entity, fund);
         entity.setTrackingIndex(fund.trackingIndex());
         entity.setActiveFund(fund.activeFund() ? 1 : 0);
         entity.setRiskLevel(fund.riskLevel());
@@ -214,6 +214,45 @@ public class FundUniverseServiceImpl implements FundUniverseService {
             screenerFundUniverseMapper.insert(entity);
         } else {
             screenerFundUniverseMapper.updateById(entity);
+        }
+    }
+
+    private boolean enrichFundProfile(ScreenerFundUniverse fund) {
+        for (FundUniverseDataSourceAdapter adapter : adapters) {
+            if (!adapter.enabled()) {
+                continue;
+            }
+            try {
+                java.util.Optional<MarketFundDTO> profile = adapter.getFundProfile(fund.getFundCode());
+                if (profile.isPresent()) {
+                    mergeProfile(fund, profile.get());
+                    screenerFundUniverseMapper.updateById(fund);
+                    return true;
+                }
+            } catch (RuntimeException ignored) {
+                // Profile enrichment is best-effort; universe rebuild must keep historical data usable.
+            }
+        }
+        return false;
+    }
+
+    private boolean missingProfile(ScreenerFundUniverse fund) {
+        return fund.getEstablishDate() == null || fund.getFundSize() == null
+                || !StringUtils.hasText(fund.getCompanyName()) || !StringUtils.hasText(fund.getManagerName());
+    }
+
+    private void mergeProfile(ScreenerFundUniverse entity, MarketFundDTO fund) {
+        if (StringUtils.hasText(fund.companyName()) || !StringUtils.hasText(entity.getCompanyName())) {
+            entity.setCompanyName(fund.companyName());
+        }
+        if (StringUtils.hasText(fund.managerName()) || !StringUtils.hasText(entity.getManagerName())) {
+            entity.setManagerName(fund.managerName());
+        }
+        if (fund.establishDate() != null || entity.getEstablishDate() == null) {
+            entity.setEstablishDate(fund.establishDate());
+        }
+        if (fund.fundSize() != null || entity.getFundSize() == null) {
+            entity.setFundSize(fund.fundSize());
         }
     }
 

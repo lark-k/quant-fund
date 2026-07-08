@@ -44,6 +44,30 @@ class FundScreenerBacktestServiceImplTest {
     }
 
     @Test
+    void shouldSummarizeForwardReturnsByScoreBucketAndHorizon() {
+        when(scoreMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(
+                score("000001", "2026-01-02", "92.0000"),
+                score("000002", "2026-01-02", "84.0000"),
+                score("000003", "2026-01-02", "64.0000"),
+                score("000004", "2026-01-02", "42.0000")
+        ));
+        when(navMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(
+                navSeries("000001", "1.0000", "1.0800"),
+                navSeries("000002", "1.0000", "1.0400"),
+                navSeries("000003", "1.0000", "1.0100"),
+                navSeries("000004", "1.0000", "0.9500")
+        );
+
+        var result = service.backtest();
+
+        assertThat(result.status()).isEqualTo("SUCCESS");
+        assertThat(result.message()).contains("TOP_5");
+        assertThat(result.message()).contains("20日");
+        assertThat(result.message()).contains("60日");
+        assertThat(result.message()).contains("120日");
+    }
+
+    @Test
     void shouldCountMissingForwardNavAsFailureWithoutWritingTables() {
         when(scoreMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(
                 score("000001", "2026-01-02", "90.0000")
@@ -79,5 +103,16 @@ class FundScreenerBacktestServiceImplTest {
         nav.setNavDate(LocalDate.parse(navDate));
         nav.setUnitNav(new BigDecimal(unitNav));
         return nav;
+    }
+
+    private List<ScreenerFundNavDaily> navSeries(String fundCode, String baseNav, String lastNav) {
+        List<ScreenerFundNavDaily> points = new java.util.ArrayList<>();
+        BigDecimal base = new BigDecimal(baseNav);
+        BigDecimal last = new BigDecimal(lastNav);
+        for (int index = 0; index <= 130; index++) {
+            BigDecimal nav = index == 0 ? base : last;
+            points.add(nav(fundCode, LocalDate.of(2026, 1, 2).plusDays(index).toString(), nav.toPlainString()));
+        }
+        return points;
     }
 }

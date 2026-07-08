@@ -48,6 +48,10 @@ class FundFactorServiceImplTest {
         assertThat(snapshot.getMaxDrawdown60d()).isEqualByComparingTo("-10.0000");
         assertThat(snapshot.getNavSampleSize()).isEqualTo(21);
         assertThat(snapshot.getFundSize()).isEqualByComparingTo("25.0000");
+        assertThat(snapshot.getBenchmarkCode()).isEqualTo("000300");
+        assertThat(snapshot.getReturnDrawdownRatio120d()).isEqualByComparingTo("4.0000");
+        assertThat(snapshot.getReturnConsistencyScore()).isEqualByComparingTo("100.0000");
+        assertThat(snapshot.getFundAgeYears()).isBetween(new BigDecimal("6.5000"), new BigDecimal("6.6000"));
         assertThat(result.status()).isEqualTo("SUCCESS");
         assertThat(result.successCount()).isEqualTo(1);
     }
@@ -97,7 +101,9 @@ class FundFactorServiceImplTest {
     private ScreenerFundUniverse universe() {
         ScreenerFundUniverse universe = new ScreenerFundUniverse();
         universe.setFundCode("000001");
+        universe.setFundType("MIXED");
         universe.setFundSize(new BigDecimal("25.0000"));
+        universe.setEstablishDate(LocalDate.of(2020, 1, 1));
         return universe;
     }
 

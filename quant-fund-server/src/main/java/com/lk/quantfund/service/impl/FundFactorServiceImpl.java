@@ -14,6 +14,7 @@ import com.lk.quantfund.vo.screener.FundScreenerTaskResultVO;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -105,6 +106,10 @@ public class FundFactorServiceImpl implements FundFactorService {
         snapshot.setTrendSlope60d(trendSlope(points, 60));
         snapshot.setExcessReturn60d(BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP));
         snapshot.setExcessReturn120d(BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP));
+        snapshot.setBenchmarkCode(benchmarkCode(universe));
+        snapshot.setReturnDrawdownRatio120d(returnDrawdownRatio(rankingReturn(snapshot), snapshot.getMaxDrawdown120d()));
+        snapshot.setReturnConsistencyScore(returnConsistencyScore(snapshot));
+        snapshot.setFundAgeYears(fundAgeYears(universe, latest.getNavDate()));
         snapshot.setFundSize(universe == null ? null : universe.getFundSize());
         snapshot.setNavSampleSize(points.size());
         snapshot.setSourceName("SCREENER");
@@ -221,6 +226,62 @@ public class FundFactorServiceImpl implements FundFactorService {
         }
         return rate(window.getLast().getUnitNav(), window.getFirst().getUnitNav())
                 .divide(BigDecimal.valueOf(window.size() - 1), 4, RoundingMode.HALF_UP);
+    }
+
+    private String benchmarkCode(ScreenerFundUniverse universe) {
+        if (universe == null || universe.getFundType() == null) {
+            return "000300";
+        }
+        if ("ACTIVE_EQUITY".equalsIgnoreCase(universe.getFundType())) {
+            return "000985";
+        }
+        if ("INDEX".equalsIgnoreCase(universe.getFundType())
+                && universe.getTrackingIndex() != null
+                && !universe.getTrackingIndex().isBlank()) {
+            return universe.getTrackingIndex().trim();
+        }
+        return "000300";
+    }
+
+    private BigDecimal returnDrawdownRatio(BigDecimal returnValue, BigDecimal maxDrawdown) {
+        if (returnValue == null || maxDrawdown == null || maxDrawdown.compareTo(BigDecimal.ZERO) == 0) {
+            return BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP);
+        }
+        return returnValue.divide(maxDrawdown.abs(), 4, RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal returnConsistencyScore(ScreenerFactorSnapshot snapshot) {
+        BigDecimal[] values = {
+                snapshot.getReturn20d(),
+                snapshot.getReturn60d(),
+                snapshot.getReturn120d(),
+                snapshot.getReturn250d()
+        };
+        int available = 0;
+        int positive = 0;
+        for (BigDecimal value : values) {
+            if (value != null) {
+                available++;
+                if (value.compareTo(BigDecimal.ZERO) > 0) {
+                    positive++;
+                }
+            }
+        }
+        if (available == 0) {
+            return BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP);
+        }
+        return BigDecimal.valueOf(positive)
+                .multiply(HUNDRED)
+                .divide(BigDecimal.valueOf(available), 4, RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal fundAgeYears(ScreenerFundUniverse universe, java.time.LocalDate factorDate) {
+        if (universe == null || universe.getEstablishDate() == null || factorDate == null
+                || universe.getEstablishDate().isAfter(factorDate)) {
+            return BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP);
+        }
+        return BigDecimal.valueOf(ChronoUnit.DAYS.between(universe.getEstablishDate(), factorDate))
+                .divide(new BigDecimal("365.2500"), 4, RoundingMode.HALF_UP);
     }
 
     private List<ScreenerFundNavDaily> tail(List<ScreenerFundNavDaily> points, int size) {

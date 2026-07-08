@@ -114,6 +114,58 @@ class FundQualityScoreServiceImplTest {
     }
 
     @Test
+    void shouldRankOnlyLatestScorePerFund() {
+        ScreenerQualityScore oldScore = score("000001");
+        oldScore.setScoreDate(LocalDate.of(2026, 7, 20));
+        oldScore.setQualityScore(new BigDecimal("96.0000"));
+        ScreenerQualityScore latestScore = score("000001");
+        latestScore.setScoreDate(LocalDate.of(2026, 7, 21));
+        latestScore.setQualityScore(new BigDecimal("78.0000"));
+        ScreenerQualityScore otherFund = score("000002");
+        otherFund.setScoreDate(LocalDate.of(2026, 7, 21));
+        otherFund.setQualityScore(new BigDecimal("88.0000"));
+        when(scoreMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(oldScore, latestScore, otherFund));
+        when(universeMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(
+                universe("000001", "MIXED"),
+                universe("000002", "MIXED")
+        ));
+        when(factorMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(
+                factor("000001"),
+                factor("000002")
+        ));
+
+        var page = service.rank(new FundScreenerQueryRequest(null, "120d", null, null, null, true, false, null, 1, 20, "qualityScore"));
+
+        assertThat(page.total()).isEqualTo(2);
+        assertThat(page.records()).extracting(FundScreenerRankItemVO::fundCode).containsExactly("000002", "000001");
+        assertThat(page.records().get(1).qualityScore()).isEqualTo(78.0);
+    }
+
+    @Test
+    void shouldGenerateV2ScoreDimensionsAndRankBasedRecommendation() {
+        ScreenerFactorSnapshot factor = factor("000001");
+        factor.setReturnDrawdownRatio120d(new BigDecimal("2.5000"));
+        factor.setReturnConsistencyScore(new BigDecimal("86.0000"));
+        factor.setFundAgeYears(new BigDecimal("6.0000"));
+        when(factorMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(factor));
+        when(universeMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(universe("000001", "MIXED")));
+        when(scoreMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
+
+        var result = service.refreshScore();
+
+        ArgumentCaptor<ScreenerQualityScore> captor = ArgumentCaptor.forClass(ScreenerQualityScore.class);
+        verify(scoreMapper).insert(captor.capture());
+        ScreenerQualityScore score = captor.getValue();
+        assertThat(result.status()).isEqualTo("SUCCESS");
+        assertThat(score.getModelVersion()).isEqualTo("screener-rule-v2");
+        assertThat(score.getReturnQualityScore()).isBetween(BigDecimal.ZERO, new BigDecimal("100.0000"));
+        assertThat(score.getDrawdownControlScore()).isBetween(BigDecimal.ZERO, new BigDecimal("100.0000"));
+        assertThat(score.getConsistencyScore()).isBetween(BigDecimal.ZERO, new BigDecimal("100.0000"));
+        assertThat(score.getInvestabilityScore()).isBetween(BigDecimal.ZERO, new BigDecimal("100.0000"));
+        assertThat(score.getRecommendLevel()).isEqualTo("STRONG");
+    }
+
+    @Test
     void shouldApplyShareClassActiveAndFundSizeRankFilters() {
         ScreenerQualityScore activeA = score("000001");
         ScreenerQualityScore activeC = score("000002");
@@ -159,6 +211,10 @@ class FundQualityScoreServiceImplTest {
         factor.setPeerPercentile(new BigDecimal("18.0000"));
         factor.setFundSize(new BigDecimal("25.0000"));
         factor.setNavSampleSize(250);
+        factor.setReturnDrawdownRatio120d(new BigDecimal("1.7778"));
+        factor.setReturnConsistencyScore(new BigDecimal("80.0000"));
+        factor.setFundAgeYears(new BigDecimal("5.0000"));
+        factor.setBenchmarkCode("000300");
         return factor;
     }
 
@@ -191,6 +247,10 @@ class FundQualityScoreServiceImplTest {
         score.setPeerScore(new BigDecimal("82.0000"));
         score.setLiquidityScore(new BigDecimal("50.0000"));
         score.setDataScore(new BigDecimal("100.0000"));
+        score.setReturnQualityScore(new BigDecimal("83.0000"));
+        score.setDrawdownControlScore(new BigDecimal("74.0000"));
+        score.setConsistencyScore(new BigDecimal("70.0000"));
+        score.setInvestabilityScore(new BigDecimal("88.0000"));
         score.setRankNo(1);
         score.setRankPercentile(new BigDecimal("1.0000"));
         score.setRecommendLevel("STRONG");

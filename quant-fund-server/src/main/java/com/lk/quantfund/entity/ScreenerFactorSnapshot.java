@@ -42,6 +42,11 @@ public class ScreenerFactorSnapshot {
     private BigDecimal excessReturn60d;
     @TableField("excess_return_120d")
     private BigDecimal excessReturn120d;
+    private String benchmarkCode;
+    @TableField("return_drawdown_ratio_120d")
+    private BigDecimal returnDrawdownRatio120d;
+    private BigDecimal returnConsistencyScore;
+    private BigDecimal fundAgeYears;
     private BigDecimal peerPercentile;
     private BigDecimal fundSize;
     private Integer navSampleSize;
@@ -83,6 +88,14 @@ public class ScreenerFactorSnapshot {
     public void setExcessReturn60d(BigDecimal excessReturn60d) { this.excessReturn60d = excessReturn60d; }
     public BigDecimal getExcessReturn120d() { return excessReturn120d; }
     public void setExcessReturn120d(BigDecimal excessReturn120d) { this.excessReturn120d = excessReturn120d; }
+    public String getBenchmarkCode() { return benchmarkCode; }
+    public void setBenchmarkCode(String benchmarkCode) { this.benchmarkCode = benchmarkCode; }
+    public BigDecimal getReturnDrawdownRatio120d() { return returnDrawdownRatio120d; }
+    public void setReturnDrawdownRatio120d(BigDecimal returnDrawdownRatio120d) { this.returnDrawdownRatio120d = returnDrawdownRatio120d; }
+    public BigDecimal getReturnConsistencyScore() { return returnConsistencyScore; }
+    public void setReturnConsistencyScore(BigDecimal returnConsistencyScore) { this.returnConsistencyScore = returnConsistencyScore; }
+    public BigDecimal getFundAgeYears() { return fundAgeYears; }
+    public void setFundAgeYears(BigDecimal fundAgeYears) { this.fundAgeYears = fundAgeYears; }
     public BigDecimal getPeerPercentile() { return peerPercentile; }
     public void setPeerPercentile(BigDecimal peerPercentile) { this.peerPercentile = peerPercentile; }
     public BigDecimal getFundSize() { return fundSize; }
