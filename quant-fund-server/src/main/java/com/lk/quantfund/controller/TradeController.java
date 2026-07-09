@@ -13,6 +13,7 @@ import com.lk.quantfund.enums.DataOperation;
 import com.lk.quantfund.enums.ResourceType;
 import com.lk.quantfund.enums.TradeStatus;
 import com.lk.quantfund.enums.TradeType;
+import com.lk.quantfund.scheduler.SchedulerTaskResult;
 import com.lk.quantfund.service.TradeRecordService;
 import com.lk.quantfund.vo.trade.TradeRecordVO;
 import jakarta.validation.Valid;
@@ -69,6 +70,14 @@ public class TradeController {
     @OperationLog(module = "trade", action = "simulated_regular_invest", bizType = "TRADE_RECORD")
     public ApiResponse<TradeRecordVO> regularInvest(@Valid @RequestBody TradeRecordRequest request) {
         return ApiResponse.success(tradeRecordService.createAs(request, TradeType.REGULAR_INVEST));
+    }
+
+    @PostMapping("/regular-invest/compensate-due")
+    @RateLimit(key = "trade:regular-invest:compensate-due", windowSeconds = 60, maxRequests = 10)
+    @RepeatSubmit(intervalSeconds = 5)
+    @OperationLog(module = "trade", action = "compensate_due_regular_invest", bizType = "TRADE_RECORD")
+    public ApiResponse<SchedulerTaskResult> compensateDueRegularInvest() {
+        return ApiResponse.success(tradeRecordService.compensateDueRegularInvestTrades());
     }
 
     @PostMapping("/convert-in")

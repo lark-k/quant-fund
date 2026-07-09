@@ -15,6 +15,7 @@ import com.lk.quantfund.dto.trade.ConvertPairTradeRequest;
 import com.lk.quantfund.dto.trade.TradeRecordRequest;
 import com.lk.quantfund.datasource.model.FundNavPointDTO;
 import com.lk.quantfund.entity.FundHolding;
+import com.lk.quantfund.entity.InvestmentPlan;
 import com.lk.quantfund.entity.PortfolioAccount;
 import com.lk.quantfund.entity.TradeRecord;
 import com.lk.quantfund.exception.BusinessException;
@@ -22,6 +23,7 @@ import com.lk.quantfund.mapper.FundHoldingMapper;
 import com.lk.quantfund.mapper.InvestmentPlanMapper;
 import com.lk.quantfund.mapper.PortfolioAccountMapper;
 import com.lk.quantfund.mapper.TradeRecordMapper;
+import com.lk.quantfund.scheduler.SchedulerTaskResult;
 import com.lk.quantfund.scheduler.TradingCalendarService;
 import com.lk.quantfund.service.FundQueryService;
 import com.lk.quantfund.service.PortfolioAccountService;
@@ -208,6 +210,83 @@ class TradeRecordServiceImplTest {
         assertThat(saved.getHoldingShare()).isEqualByComparingTo("1050.0000");
         assertThat(saved.getHoldingCost()).isEqualByComparingTo("1060.0000");
         assertThat(saved.getHoldingAmount()).isEqualByComparingTo("1260.0000");
+    }
+
+    @Test
+    void dueRegularInvestCompensationShouldCreateTodayProcessingTradeAndAdvanceDomesticDailyPlanOneTradingDay() {
+        TradeRecordMapper tradeRecordMapper = mock(TradeRecordMapper.class);
+        FundHoldingMapper holdingMapper = mock(FundHoldingMapper.class);
+        InvestmentPlanMapper investmentPlanMapper = mock(InvestmentPlanMapper.class);
+        TradingCalendarService tradingCalendarService = mock(TradingCalendarService.class);
+        LocalDate runDate = LocalDate.of(2026, 7, 9);
+        LocalDate nextTradingDay = LocalDate.of(2026, 7, 10);
+        InvestmentPlan plan = dailyInvestmentPlan(runDate);
+        when(investmentPlanMapper.selectList(any())).thenReturn(List.of(plan));
+        when(tradeRecordMapper.selectOne(any())).thenReturn(null);
+        when(holdingMapper.selectOne(any())).thenReturn(holding());
+        when(tradingCalendarService.nextTradingDay(runDate)).thenReturn(nextTradingDay);
+        TradeRecordServiceImpl service = new TradeRecordServiceImpl(
+                tradeRecordMapper,
+                holdingMapper,
+                mock(PortfolioAccountMapper.class),
+                mock(PortfolioAccountService.class),
+                investmentPlanMapper,
+                mock(FundQueryService.class),
+                tradingCalendarService);
+        ArgumentCaptor<TradeRecord> recordCaptor = ArgumentCaptor.forClass(TradeRecord.class);
+        ArgumentCaptor<InvestmentPlan> planCaptor = ArgumentCaptor.forClass(InvestmentPlan.class);
+
+        SchedulerTaskResult result = service.createDueRegularInvestTrades(runDate);
+
+        assertThat(result.getSuccessCount()).isEqualTo(1);
+        assertThat(result.getFailureCount()).isZero();
+        verify(tradeRecordMapper).insert(recordCaptor.capture());
+        TradeRecord savedRecord = recordCaptor.getValue();
+        assertThat(savedRecord.getUserId()).isEqualTo(1L);
+        assertThat(savedRecord.getAccountId()).isEqualTo(10L);
+        assertThat(savedRecord.getHoldingId()).isEqualTo(100L);
+        assertThat(savedRecord.getFundCode()).isEqualTo("021528");
+        assertThat(savedRecord.getFundName()).isEqualTo("Mock Daily Plan Fund");
+        assertThat(savedRecord.getTradeType()).isEqualTo("REGULAR_INVEST");
+        assertThat(savedRecord.getTradeStatus()).isEqualTo("PROCESSING");
+        assertThat(savedRecord.getTradeAmount()).isEqualByComparingTo("20.0000");
+        assertThat(savedRecord.getTradeTime()).isEqualTo(LocalDateTime.of(2026, 7, 9, 14, 59));
+        assertThat(savedRecord.getRemark()).contains("定投计划#3 2026-07-09");
+        verify(investmentPlanMapper).updateById(planCaptor.capture());
+        assertThat(planCaptor.getValue().getNextExecuteDate()).isEqualTo(nextTradingDay);
+    }
+
+    @Test
+    void dueRegularInvestCompensationShouldAdvanceOverseasDailyPlanTwoTradingDays() {
+        TradeRecordMapper tradeRecordMapper = mock(TradeRecordMapper.class);
+        FundHoldingMapper holdingMapper = mock(FundHoldingMapper.class);
+        InvestmentPlanMapper investmentPlanMapper = mock(InvestmentPlanMapper.class);
+        TradingCalendarService tradingCalendarService = mock(TradingCalendarService.class);
+        LocalDate runDate = LocalDate.of(2026, 7, 9);
+        LocalDate firstTradingDay = LocalDate.of(2026, 7, 10);
+        LocalDate secondTradingDay = LocalDate.of(2026, 7, 13);
+        InvestmentPlan plan = dailyInvestmentPlan(runDate, "012922", "Global Growth QDII");
+        when(investmentPlanMapper.selectList(any())).thenReturn(List.of(plan));
+        when(tradeRecordMapper.selectOne(any())).thenReturn(null);
+        when(holdingMapper.selectOne(any())).thenReturn(null);
+        when(tradingCalendarService.nextTradingDay(runDate)).thenReturn(firstTradingDay);
+        when(tradingCalendarService.nextTradingDay(firstTradingDay)).thenReturn(secondTradingDay);
+        TradeRecordServiceImpl service = new TradeRecordServiceImpl(
+                tradeRecordMapper,
+                holdingMapper,
+                mock(PortfolioAccountMapper.class),
+                mock(PortfolioAccountService.class),
+                investmentPlanMapper,
+                mock(FundQueryService.class),
+                tradingCalendarService);
+        ArgumentCaptor<InvestmentPlan> planCaptor = ArgumentCaptor.forClass(InvestmentPlan.class);
+
+        SchedulerTaskResult result = service.createDueRegularInvestTrades(runDate);
+
+        assertThat(result.getSuccessCount()).isEqualTo(1);
+        assertThat(result.getFailureCount()).isZero();
+        verify(investmentPlanMapper).updateById(planCaptor.capture());
+        assertThat(planCaptor.getValue().getNextExecuteDate()).isEqualTo(secondTradingDay);
     }
 
     @Test
@@ -668,6 +747,27 @@ class TradeRecordServiceImplTest {
         holding.setCurrentEstimateNav(new BigDecimal("1.0000"));
         holding.setLatestOfficialNav(new BigDecimal("1.0000"));
         return holding;
+    }
+
+    private InvestmentPlan dailyInvestmentPlan(LocalDate nextExecuteDate) {
+        return dailyInvestmentPlan(nextExecuteDate, "021528", "Mock Daily Plan Fund");
+    }
+
+    private InvestmentPlan dailyInvestmentPlan(LocalDate nextExecuteDate, String fundCode, String fundName) {
+        InvestmentPlan plan = new InvestmentPlan();
+        plan.setId(3L);
+        plan.setUserId(1L);
+        plan.setAccountId(10L);
+        plan.setFundCode(fundCode);
+        plan.setFundName(fundName);
+        plan.setPlanName(fundName + " Regular Invest");
+        plan.setPlanType("REGULAR_INVEST");
+        plan.setAmount(new BigDecimal("20.0000"));
+        plan.setFrequency("DAILY");
+        plan.setNextExecuteDate(nextExecuteDate);
+        plan.setStatus("ENABLED");
+        plan.setDeleted(0);
+        return plan;
     }
 
     private PortfolioAccount account() {

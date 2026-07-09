@@ -576,6 +576,12 @@ export interface InvestmentPlan {
   updateTime: string
 }
 
+export interface SchedulerTaskResult {
+  successCount: number
+  failureCount: number
+  errorSummary: string
+}
+
 export type TradeRecordRequest = {
   accountId: number
   holdingId?: number

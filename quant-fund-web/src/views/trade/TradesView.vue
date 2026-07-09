@@ -36,6 +36,7 @@ const filter = ref('ALL')
 const dialogOpen = ref(false)
 const saving = ref(false)
 const settling = ref(false)
+const compensatingRegularInvest = ref(false)
 const deletingTradeId = ref<number | null>(null)
 const convertDialogOpen = ref(false)
 const convertSaving = ref(false)
@@ -404,6 +405,26 @@ async function settleDueTrades() {
     settling.value = false
   }
 }
+
+async function compensateDueRegularInvestTrades() {
+  compensatingRegularInvest.value = true
+  try {
+    const result = await quantApi.compensateDueRegularInvestTrades()
+    const [tradeList, holdingList] = await Promise.all([quantApi.trades(), quantApi.holdings()])
+    trades.value = mergeRecentTrades(tradeList)
+    holdings.value = holdingList
+    filter.value = 'REGULAR_INVEST'
+    if (result.failureCount > 0) {
+      ElMessage.warning(`已补跑 ${result.successCount} 笔定投，${result.failureCount} 笔失败：${result.errorSummary || '请查看任务日志'}`)
+    } else if (result.successCount > 0) {
+      ElMessage.success(`已补跑 ${result.successCount} 笔到期定投`)
+    } else {
+      ElMessage.info('没有需要补跑的到期定投')
+    }
+  } finally {
+    compensatingRegularInvest.value = false
+  }
+}
 </script>
 
 <template>
@@ -419,6 +440,9 @@ async function settleDueTrades() {
           </div>
           <button class="ghost-button" :disabled="settling" title="手动触发到期交易结算，用于补偿错过自动任务的情况" @click="settleDueTrades">
             {{ settling ? '补偿中' : '补偿结算' }}
+          </button>
+          <button class="ghost-button" :disabled="compensatingRegularInvest" title="手动生成今天到期但错过自动任务的定投流水" @click="compensateDueRegularInvestTrades">
+            {{ compensatingRegularInvest ? '补跑中' : '补跑定投' }}
           </button>
         </div>
       </div>

@@ -31,5 +31,8 @@ public class SchedulerTaskResult {
     public String errorSummary() {
         return String.join("; ", errors);
     }
-}
 
+    public String getErrorSummary() {
+        return errorSummary();
+    }
+}

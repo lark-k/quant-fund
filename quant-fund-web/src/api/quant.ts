@@ -44,6 +44,7 @@ import type {
   QuantSignal,
   RiskProfile,
   RiskProfileRequest,
+  SchedulerTaskResult,
   StrategyConfig,
   StrategyConfigRequest,
   StrategySignal,
@@ -231,6 +232,11 @@ export const quantApi = {
   },
   settleDueTrades(): Promise<TradeRecord[]> {
     return USE_MOCK ? mockApi.trades() : http.post('/trades/settle-due')
+  },
+  compensateDueRegularInvestTrades(): Promise<SchedulerTaskResult> {
+    return USE_MOCK
+      ? Promise.resolve({ successCount: 0, failureCount: 0, errorSummary: '' })
+      : http.post('/trades/regular-invest/compensate-due')
   },
   investmentPlans(accountId?: number): Promise<InvestmentPlan[]> {
     return USE_MOCK ? Promise.resolve([]) : http.get('/investment-plans', { params: { accountId } })

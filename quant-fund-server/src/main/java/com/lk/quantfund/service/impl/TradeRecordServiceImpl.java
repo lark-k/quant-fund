@@ -179,6 +179,12 @@ public class TradeRecordServiceImpl implements TradeRecordService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    public SchedulerTaskResult compensateDueRegularInvestTrades() {
+        return createDueRegularInvestTrades(LocalDate.now(), UserContext.getUserId());
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
     public SchedulerTaskResult settleDueProcessingTrades(LocalDate today) {
         return settleProcessingTrades(today == null ? LocalDate.now() : today, null);
     }
@@ -186,6 +192,10 @@ public class TradeRecordServiceImpl implements TradeRecordService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public SchedulerTaskResult createDueRegularInvestTrades(LocalDate today) {
+        return createDueRegularInvestTrades(today, null);
+    }
+
+    private SchedulerTaskResult createDueRegularInvestTrades(LocalDate today, Long onlyUserId) {
         SchedulerTaskResult result = new SchedulerTaskResult();
         LocalDate runDate = today == null ? LocalDate.now() : today;
         if (investmentPlanMapper == null) {
@@ -193,6 +203,7 @@ public class TradeRecordServiceImpl implements TradeRecordService {
         }
         List<InvestmentPlan> plans = investmentPlanMapper.selectList(new LambdaQueryWrapper<InvestmentPlan>()
                 .eq(InvestmentPlan::getStatus, "ENABLED")
+                .eq(onlyUserId != null, InvestmentPlan::getUserId, onlyUserId)
                 .le(InvestmentPlan::getNextExecuteDate, runDate));
         for (InvestmentPlan plan : plans) {
             try {
@@ -314,14 +325,25 @@ public class TradeRecordServiceImpl implements TradeRecordService {
 
     private LocalDate nextPlanExecuteDate(InvestmentPlan plan, LocalDate runDate) {
         String frequency = plan.getFrequency() == null ? "WEEKLY" : plan.getFrequency().trim().toUpperCase();
+        if ("DAILY".equals(frequency)) {
+            return nextDailyPlanExecuteDate(plan, runDate);
+        }
         LocalDate next = switch (frequency) {
-            case "DAILY" -> runDate.plusDays(1);
             case "BIWEEKLY", "EVERY_TWO_WEEKS" -> runDate.plusWeeks(2);
             case "MONTHLY" -> runDate.plusMonths(1);
             default -> runDate.plusWeeks(1);
         };
         while (!tradingCalendarService.isTradingDay(next)) {
             next = next.plusDays(1);
+        }
+        return next;
+    }
+
+    private LocalDate nextDailyPlanExecuteDate(InvestmentPlan plan, LocalDate runDate) {
+        int tradingDays = isOverseasT2Fund(plan.getFundCode(), plan.getFundName(), null) ? 2 : 1;
+        LocalDate next = runDate;
+        for (int index = 0; index < tradingDays; index++) {
+            next = tradingCalendarService.nextTradingDay(next);
         }
         return next;
     }

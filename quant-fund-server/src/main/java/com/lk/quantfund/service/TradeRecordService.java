@@ -27,6 +27,8 @@ public interface TradeRecordService {
 
     List<TradeRecordVO> settleDueProcessingTrades();
 
+    SchedulerTaskResult compensateDueRegularInvestTrades();
+
     SchedulerTaskResult settleDueProcessingTrades(LocalDate today);
 
     SchedulerTaskResult createDueRegularInvestTrades(LocalDate today);
