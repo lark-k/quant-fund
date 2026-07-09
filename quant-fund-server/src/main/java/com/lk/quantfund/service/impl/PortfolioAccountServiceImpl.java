@@ -219,28 +219,18 @@ public class PortfolioAccountServiceImpl implements PortfolioAccountService {
                 .map(PortfolioAccount::getDailyProfit)
                 .map(this::valueOrZero)
                 .reduce(ZERO, BigDecimal::add);
-        PortfolioIntradaySnapshot snapshot = portfolioIntradaySnapshotMapper.selectOne(new LambdaQueryWrapper<PortfolioIntradaySnapshot>()
-                .eq(PortfolioIntradaySnapshot::getUserId, userId)
-                .eq(PortfolioIntradaySnapshot::getSnapshotTime, snapshotTime)
-                .last("LIMIT 1"));
-        if (snapshot == null) {
-            snapshot = new PortfolioIntradaySnapshot();
-            snapshot.setUserId(userId);
-            snapshot.setSnapshotDate(snapshotTime.toLocalDate());
-            snapshot.setSnapshotTime(snapshotTime);
-            snapshot.setCreateTime(now);
-            snapshot.setDeleted(0);
-        }
+        PortfolioIntradaySnapshot snapshot = new PortfolioIntradaySnapshot();
+        snapshot.setUserId(userId);
+        snapshot.setSnapshotDate(snapshotTime.toLocalDate());
+        snapshot.setSnapshotTime(snapshotTime);
+        snapshot.setCreateTime(now);
+        snapshot.setDeleted(0);
         snapshot.setTotalAsset(scale(totalAsset));
         snapshot.setDailyProfit(scale(dailyProfit));
         snapshot.setDailyProfitRate(rate(dailyProfit, totalAsset));
         snapshot.setSourceName("PORTFOLIO_RECALCULATE");
         snapshot.setUpdateTime(now);
-        if (snapshot.getId() == null) {
-            portfolioIntradaySnapshotMapper.insert(snapshot);
-        } else {
-            portfolioIntradaySnapshotMapper.updateById(snapshot);
-        }
+        portfolioIntradaySnapshotMapper.upsertByUserAndSnapshotTime(snapshot);
     }
 
     private PortfolioAccount loadOwnedAccount(Long userId, Long accountId) {
