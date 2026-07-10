@@ -176,6 +176,34 @@ class FundScreenerBacktestServiceImplTest {
     }
 
     @Test
+    void shouldReturnLatestScoreLookbackMetricsEvenWhenForwardRowsAreEmpty() {
+        when(resultMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
+        when(scoreMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(
+                score("000001", "92.0000", "WATCH"),
+                score("000002", "84.0000", "WATCH"),
+                score("000003", "64.0000", "NEUTRAL"),
+                score("000004", "42.0000", "AVOID")
+        ));
+        List<ScreenerFundNavDaily> lookbackNavs = new ArrayList<>();
+        lookbackNavs.addAll(lookbackNavSeries("000001", "1.0000", "1.1200"));
+        lookbackNavs.addAll(lookbackNavSeries("000002", "1.0000", "1.0800"));
+        lookbackNavs.addAll(lookbackNavSeries("000003", "1.0000", "1.0200"));
+        lookbackNavs.addAll(lookbackNavSeries("000004", "1.0000", "0.9400"));
+        when(navMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(lookbackNavs);
+
+        var validation = service.getValidation();
+
+        assertThat(validation.status()).isEqualTo("INSUFFICIENT");
+        assertThat(validation.metrics()).isEmpty();
+        FundScreenerBacktestMetricVO top10 = metric(validation.lookbackMetrics(), "TOP_10", 120);
+        assertThat(top10.sampleCount()).isEqualTo(1);
+        assertThat(top10.scoreDateCount()).isEqualTo(1);
+        assertThat(top10.avgForwardReturn()).isEqualTo(12.0);
+        assertThat(top10.avgExcessReturn()).isGreaterThan(0);
+        assertThat(top10.statisticallySignificant()).isFalse();
+    }
+
+    @Test
     void shouldReturnInsufficientWhenCachedSamplesAreTooSmall() {
         when(resultMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(
                 cached("2026-01-02", 60, "TOP_10", 10, "5.0000", "60.0000", "2.0000", "-3.0000"),
@@ -254,6 +282,20 @@ class FundScreenerBacktestServiceImplTest {
                     .divide(BigDecimal.valueOf(futureCount), 8, java.math.RoundingMode.HALF_UP);
             BigDecimal value = base.add(last.subtract(base).multiply(progress));
             points.add(nav(fundCode, LocalDate.of(2026, 1, 2).plusDays(index), value));
+        }
+        return points;
+    }
+
+    private List<ScreenerFundNavDaily> lookbackNavSeries(String fundCode, String firstNav, String latestNav) {
+        List<ScreenerFundNavDaily> points = new ArrayList<>();
+        BigDecimal first = new BigDecimal(firstNav);
+        BigDecimal latest = new BigDecimal(latestNav);
+        LocalDate start = LocalDate.of(2025, 9, 4);
+        for (int index = 0; index <= 120; index++) {
+            BigDecimal progress = BigDecimal.valueOf(index)
+                    .divide(new BigDecimal("120"), 8, java.math.RoundingMode.HALF_UP);
+            BigDecimal value = first.add(latest.subtract(first).multiply(progress));
+            points.add(nav(fundCode, start.plusDays(index), value));
         }
         return points;
     }

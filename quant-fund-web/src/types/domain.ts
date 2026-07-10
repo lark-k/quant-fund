@@ -820,6 +820,7 @@ export interface FundScreenerValidation {
   conclusion: string
   calibrationAdvice: string[]
   policy: FundScreenerStrategyPolicy
+  lookbackMetrics: FundScreenerBacktestMetric[]
   metrics: FundScreenerBacktestMetric[]
 }
 

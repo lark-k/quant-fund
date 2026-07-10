@@ -1,4 +1,4 @@
-import type { FundScreenerBacktestMetric } from '@/types/domain'
+import type { FundScreenerBacktestMetric, FundScreenerValidation } from '@/types/domain'
 
 export type ValidationBucketRow = {
   bucketName: FundScreenerBacktestMetric['bucketName']
@@ -27,6 +27,30 @@ export function buildValidationRows(metrics: FundScreenerBacktestMetric[]): Vali
 export function significanceText(metric?: Pick<FundScreenerBacktestMetric, 'statisticallySignificant'>) {
   if (!metric) return '暂无样本'
   return metric.statisticallySignificant ? '样本有效' : '不具备统计意义'
+}
+
+export function hasValidationSamples(rows: ValidationBucketRow[]) {
+  return rows.some((row) => Object.values(row.horizons).some((metric) => (metric?.sampleCount || 0) > 0))
+}
+
+export function validationStatusText(status?: FundScreenerValidation['status']) {
+  const labels: Record<FundScreenerValidation['status'], string> = {
+    EFFECTIVE: '策略有效',
+    NEUTRAL: '策略中性',
+    FAILED: '策略失效',
+    INSUFFICIENT: '样本不足'
+  }
+  return status ? labels[status] : '尚未验证'
+}
+
+export function validationStatusType(status?: FundScreenerValidation['status']) {
+  if (status === 'EFFECTIVE') return 'success'
+  if (status === 'FAILED') return 'danger'
+  return 'warning'
+}
+
+export function validationStatusClass(status?: FundScreenerValidation['status']) {
+  return `validation-status-${(status || 'UNKNOWN').toLowerCase()}`
 }
 
 export function taskResultMessageLevel(status: string): 'success' | 'warning' | 'error' {

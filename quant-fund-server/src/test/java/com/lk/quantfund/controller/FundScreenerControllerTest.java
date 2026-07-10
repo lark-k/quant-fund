@@ -148,6 +148,7 @@ class FundScreenerControllerTest {
                 List.of("保持当前阈值"),
                 new FundScreenerStrategyPolicyVO(new BigDecimal("82"), 8, new BigDecimal("72"),
                         20, new BigDecimal("58"), 30, 3),
+                List.of(),
                 List.of()
         );
         when(backtestService.runIncremental()).thenReturn(task);

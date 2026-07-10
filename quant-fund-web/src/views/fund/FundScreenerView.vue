@@ -9,7 +9,14 @@ import LoadingState from '@/components/common/LoadingState.vue'
 import DisclaimerBar from '@/components/common/DisclaimerBar.vue'
 import { quantApi } from '@/api/quant'
 import { percent, percentUnsigned } from '@/utils/format'
-import { buildValidationRows, significanceText, taskResultMessageLevel } from '@/utils/fundScreenerValidation'
+import {
+  buildValidationRows,
+  hasValidationSamples,
+  significanceText,
+  taskResultMessageLevel,
+  validationStatusClass,
+  validationStatusText
+} from '@/utils/fundScreenerValidation'
 import type { ValidationBucketRow } from '@/utils/fundScreenerValidation'
 import type { FundScreenerExplain, FundScreenerRankItem, FundScreenerRankQuery, FundScreenerRecommendLevel, FundScreenerValidation, PageResponse } from '@/types/domain'
 
@@ -24,7 +31,9 @@ const drawerVisible = ref(false)
 const rankPage = ref<PageResponse<FundScreenerRankItem>>({ pageNo: 1, pageSize: 20, total: 0, records: [] })
 const selectedExplain = ref<FundScreenerExplain | null>(null)
 const validation = ref<FundScreenerValidation | null>(null)
+const lookbackRows = computed(() => buildValidationRows(validation.value?.lookbackMetrics || []))
 const validationRows = computed(() => buildValidationRows(validation.value?.metrics || []))
+const forwardValidationHasSamples = computed(() => hasValidationSamples(validationRows.value))
 const latestScoreDate = computed(() => rankPage.value.records[0]?.scoreDate || '--')
 const scoredCount = computed(() => rankPage.value.total)
 const includedCount = computed(() => Math.max(rankPage.value.total, rankPage.value.records.length))
@@ -99,23 +108,6 @@ function signedPercent(value?: number | null, digits = 2) {
 function unsignedPercent(value?: number | null, digits = 2) {
   if (value === null || value === undefined || Number.isNaN(value)) return '--'
   return percentUnsigned(value, digits)
-}
-
-function validationStatusText(status?: FundScreenerValidation['status']) {
-  const labels: Record<FundScreenerValidation['status'], string> = {
-    EFFECTIVE: '策略有效',
-    NEUTRAL: '策略中性',
-    FAILED: '策略失效',
-    INSUFFICIENT: '样本不足'
-  }
-  return status ? labels[status] : '尚未验证'
-}
-
-function validationStatusType(status?: FundScreenerValidation['status']) {
-  if (status === 'EFFECTIVE') return 'success'
-  if (status === 'FAILED') return 'danger'
-  if (status === 'NEUTRAL') return 'warning'
-  return 'info'
 }
 
 function metricAt(row: ValidationBucketRow, horizon: 20 | 60 | 120) {
@@ -280,11 +272,8 @@ onMounted(() => {
         <div>
           <div class="section-title validation-title">
             <span>策略验证</span>
-            <el-tag :type="validationStatusType(validation?.status)" effect="dark">
-              {{ validationStatusText(validation?.status) }}
-            </el-tag>
           </div>
-          <p>用历史评分后的真实净值检验分层效果；只做验证与调参建议，不会自动修改生产阈值。</p>
+          <p>先看当前榜单过去表现，再用历史评分后的真实净值验证预测能力；只做验证与调参建议，不会自动修改生产阈值。</p>
         </div>
         <el-button type="success" :loading="backtestRunning" @click="runBacktest">
           <el-icon><Histogram /></el-icon>
@@ -294,6 +283,51 @@ onMounted(() => {
 
       <LoadingState v-if="validationLoading && !validation" title="正在加载策略验证" description="读取已缓存的历史分层回测结果。" />
       <template v-else-if="validation">
+        <div class="validation-subhead">
+          <strong>当前榜单回看表现</strong>
+          <span>按最新评分分层，回看过去 20/60/120 个净值观察日，用于辅助判断当前候选基金质量。</span>
+        </div>
+        <el-table :data="lookbackRows" class="validation-table" stripe>
+          <el-table-column prop="label" label="分层" width="100" fixed />
+          <el-table-column v-for="horizon in validationHorizons" :key="`lookback-${horizon}`" :label="`${horizon}日`" min-width="255">
+            <template #default="{ row }">
+              <div v-if="metricAt(row, horizon)" class="validation-cell">
+                <div class="validation-return">
+                  <strong>{{ signedPercent(metricAt(row, horizon)?.avgForwardReturn) }}</strong>
+                  <span>过去收益</span>
+                </div>
+                <div class="validation-details">
+                  <span>胜率 {{ unsignedPercent(metricAt(row, horizon)?.winRate) }}</span>
+                  <span>超额 {{ signedPercent(metricAt(row, horizon)?.avgExcessReturn) }}</span>
+                  <span>最大回撤 {{ signedPercent(metricAt(row, horizon)?.maxDrawdown) }}</span>
+                </div>
+                <div class="validation-sample">
+                  <span>{{ metricAt(row, horizon)?.sampleCount }} 个样本 / 最新评分日</span>
+                  <el-tag
+                    size="small"
+                    :type="metricAt(row, horizon)?.statisticallySignificant ? 'success' : 'warning'"
+                    effect="plain"
+                  >
+                    {{ significanceText(metricAt(row, horizon)) }}
+                  </el-tag>
+                </div>
+              </div>
+              <span v-else class="validation-empty">暂无回看样本</span>
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <div class="validation-section-divider" aria-hidden="true"></div>
+
+        <div class="validation-subhead validation-subhead-status">
+          <div>
+            <strong>前瞻策略验证</strong>
+            <span class="validation-status-badge" :class="validationStatusClass(validation.status)">
+              {{ validationStatusText(validation.status) }}
+            </span>
+          </div>
+          <span>按历史评分日分层，等待未来 20/60/120 个净值日到期后验证算法是否真的选对。</span>
+        </div>
         <div class="validation-meta">
           <span>最新运行：<strong>{{ validation.latestRunDate || '--' }}</strong></span>
           <span>可用评分日期：<strong>{{ validation.earliestScoreDate || '--' }} 至 {{ validation.latestScoreDate || '--' }}</strong></span>
@@ -302,9 +336,8 @@ onMounted(() => {
 
         <div class="validation-conclusion" :class="`validation-${validation.status.toLowerCase()}`">
           <strong>{{ validationStatusText(validation.status) }}</strong>
-          <span>{{ validation.conclusion }}</span>
+          <span>{{ forwardValidationHasSamples ? validation.conclusion : '前瞻策略验证暂无到期样本，当前不具备统计意义；当前榜单回看表现仅用于辅助判断候选池质量。' }}</span>
         </div>
-
         <el-table :data="validationRows" class="validation-table" stripe>
           <el-table-column prop="label" label="分层" width="100" fixed />
           <el-table-column v-for="horizon in validationHorizons" :key="horizon" :label="`${horizon}日`" min-width="255">
@@ -559,6 +592,105 @@ onMounted(() => {
 .validation-conclusion strong {
   flex: 0 0 auto;
   color: #dbeafe;
+}
+
+.validation-subhead {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 18px 0 10px;
+  color: #d7e7f5;
+}
+
+.validation-subhead strong {
+  font-size: 15px;
+  white-space: nowrap;
+}
+
+.validation-subhead-status {
+  align-items: center;
+}
+
+.validation-subhead-status div {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.validation-status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 76px;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid rgba(250, 204, 21, 0.58);
+  border-radius: 6px;
+  background: rgba(180, 83, 9, 0.9);
+  color: #fff7d6;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 0 0 1px rgba(0, 0, 0, 0.08);
+}
+
+.validation-status-effective {
+  border-color: rgba(134, 239, 172, 0.58);
+  background: rgba(22, 101, 52, 0.9);
+  color: #dcfce7;
+}
+
+.validation-status-neutral {
+  border-color: rgba(253, 224, 71, 0.52);
+  background: rgba(133, 77, 14, 0.86);
+  color: #fef9c3;
+}
+
+.validation-status-failed {
+  border-color: rgba(252, 165, 165, 0.58);
+  background: rgba(153, 27, 27, 0.9);
+  color: #fee2e2;
+}
+
+.validation-status-insufficient {
+  border-color: rgba(251, 191, 36, 0.68);
+  background: #a85f08;
+  color: #fffbe8;
+}
+
+.validation-subhead > span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.validation-section-divider {
+  position: relative;
+  height: 24px;
+  margin: 14px 0 18px;
+}
+
+.validation-section-divider::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 1px;
+  content: '';
+  background: linear-gradient(90deg, rgba(125, 211, 252, 0), rgba(125, 211, 252, 0.34), rgba(245, 158, 11, 0.32), rgba(125, 211, 252, 0));
+}
+
+.validation-section-divider::after {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 120px;
+  height: 3px;
+  content: '';
+  transform: translateY(-50%);
+  border-radius: 999px;
+  background: linear-gradient(90deg, #7dd3fc, rgba(245, 158, 11, 0.95));
+  box-shadow: 0 0 18px rgba(125, 211, 252, 0.2);
 }
 
 .validation-effective {

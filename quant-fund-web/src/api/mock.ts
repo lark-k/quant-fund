@@ -1556,6 +1556,17 @@ export const mockApi = {
         minValidationSamples: 30,
         minValidationScoreDates: 3
       },
+      lookbackMetrics: buckets.flatMap((bucketName, bucketIndex) => horizons.map((horizonDays, horizonIndex) => ({
+        bucketName,
+        horizonDays,
+        sampleCount: 110 - bucketIndex * 8,
+        scoreDateCount: 1,
+        avgForwardReturn: baseReturn[bucketName] * (0.7 + horizonIndex * 0.3),
+        winRate: 67 - bucketIndex * 4 + horizonIndex,
+        avgExcessReturn: (3.2 - bucketIndex * 0.8) * (0.75 + horizonIndex * 0.18),
+        maxDrawdown: -4.8 - bucketIndex * 1.1 - horizonIndex * 1.0,
+        statisticallySignificant: true
+      }))),
       metrics: buckets.flatMap((bucketName, bucketIndex) => horizons.map((horizonDays, horizonIndex) => ({
         bucketName,
         horizonDays,

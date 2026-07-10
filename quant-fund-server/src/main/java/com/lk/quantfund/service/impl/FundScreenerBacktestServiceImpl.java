@@ -145,6 +145,7 @@ public class FundScreenerBacktestServiceImpl implements FundScreenerBacktestServ
                         .eq(ScreenerBacktestResult::getModelVersion, MODEL_VERSION)
                         .orderByAsc(ScreenerBacktestResult::getScoreDate));
         List<FundScreenerBacktestMetricVO> metrics = aggregate(rows);
+        List<FundScreenerBacktestMetricVO> lookbackMetrics = latestLookbackMetrics();
         Effectiveness effectiveness = effectiveness(metrics);
         String latestRunDate = rows.stream().map(ScreenerBacktestResult::getRunDate)
                 .filter(java.util.Objects::nonNull).max(LocalDate::compareTo).map(LocalDate::toString).orElse(null);
@@ -154,7 +155,7 @@ public class FundScreenerBacktestServiceImpl implements FundScreenerBacktestServ
                 .filter(java.util.Objects::nonNull).max(LocalDate::compareTo).map(LocalDate::toString).orElse(null);
         return new FundScreenerValidationVO(latestRunDate, earliestScoreDate, latestScoreDate,
                 effectiveness.status(), effectiveness.conclusion(), advice(effectiveness.status()),
-                policy(), metrics);
+                policy(), lookbackMetrics, metrics);
     }
 
     private Set<String> existingResultKeys() {
@@ -282,6 +283,116 @@ public class FundScreenerBacktestServiceImpl implements FundScreenerBacktestServ
                 maxDrawdown.doubleValue(), significant);
     }
 
+    private List<FundScreenerBacktestMetricVO> latestLookbackMetrics() {
+        List<ScreenerQualityScore> scores = java.util.Optional.ofNullable(screenerQualityScoreMapper.selectList(
+                        new LambdaQueryWrapper<ScreenerQualityScore>()
+                                .eq(ScreenerQualityScore::getModelVersion, MODEL_VERSION)
+                                .orderByDesc(ScreenerQualityScore::getScoreDate)
+                                .orderByDesc(ScreenerQualityScore::getQualityScore)))
+                .orElse(List.of())
+                .stream()
+                .filter(score -> score.getScoreDate() != null && MODEL_VERSION.equals(score.getModelVersion()))
+                .toList();
+        if (scores.isEmpty()) {
+            return List.of();
+        }
+        LocalDate latestScoreDate = scores.stream()
+                .map(ScreenerQualityScore::getScoreDate)
+                .max(LocalDate::compareTo)
+                .orElse(null);
+        if (latestScoreDate == null) {
+            return List.of();
+        }
+        List<ScreenerQualityScore> latestScores = scores.stream()
+                .filter(score -> latestScoreDate.equals(score.getScoreDate()))
+                .sorted(Comparator.comparing(ScreenerQualityScore::getQualityScore,
+                        Comparator.nullsLast(BigDecimal::compareTo)).reversed())
+                .toList();
+        Map<String, List<ScreenerFundNavDaily>> navCache = lookbackNavCache(latestScores, latestScoreDate);
+        List<FundScreenerBacktestMetricVO> metrics = new ArrayList<>();
+        for (int horizon : HORIZONS) {
+            Map<ScreenerQualityScore, BacktestObservation> eligible = new HashMap<>();
+            for (ScreenerQualityScore score : latestScores) {
+                BacktestObservation observation = lookbackObservation(score, horizon, navCache);
+                if (observation != null) {
+                    eligible.put(score, observation);
+                }
+            }
+            if (eligible.isEmpty()) {
+                continue;
+            }
+            BigDecimal allAverage = average(eligible.values().stream()
+                    .map(BacktestObservation::forwardReturn)
+                    .toList());
+            for (String bucket : BUCKETS) {
+                List<BacktestObservation> observations = bucketScores(latestScores, bucket).stream()
+                        .map(eligible::get)
+                        .filter(java.util.Objects::nonNull)
+                        .toList();
+                if (!observations.isEmpty()) {
+                    metrics.add(metric(bucket, horizon, observations, allAverage, 1,
+                            observations.size() >= strategy.getMinValidationSamples()));
+                }
+            }
+        }
+        return metrics;
+    }
+
+    private BacktestObservation lookbackObservation(ScreenerQualityScore score, int horizon,
+                                                    Map<String, List<ScreenerFundNavDaily>> navCache) {
+        if (score.getScoreDate() == null || score.getFundCode() == null) {
+            return null;
+        }
+        List<ScreenerFundNavDaily> points = navCache.getOrDefault(score.getFundCode(), List.of());
+        List<ScreenerFundNavDaily> history = points.stream()
+                .filter(this::validNav)
+                .filter(point -> !point.getNavDate().isAfter(score.getScoreDate()))
+                .sorted(Comparator.comparing(ScreenerFundNavDaily::getNavDate))
+                .toList();
+        if (history.size() <= horizon) {
+            return null;
+        }
+        ScreenerFundNavDaily base = history.getLast();
+        ScreenerFundNavDaily past = history.get(history.size() - horizon - 1);
+        List<ScreenerFundNavDaily> window = history.subList(history.size() - horizon - 1, history.size());
+        return new BacktestObservation(rate(base.getUnitNav(), past.getUnitNav()), windowMaxDrawdown(window));
+    }
+
+    private Map<String, List<ScreenerFundNavDaily>> lookbackNavCache(List<ScreenerQualityScore> scores, LocalDate scoreDate) {
+        List<String> fundCodes = scores.stream()
+                .map(ScreenerQualityScore::getFundCode)
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .toList();
+        if (fundCodes.isEmpty()) {
+            return Map.of();
+        }
+        List<ScreenerFundNavDaily> navPoints = java.util.Optional.ofNullable(screenerFundNavDailyMapper.selectList(
+                        new LambdaQueryWrapper<ScreenerFundNavDaily>()
+                                .in(ScreenerFundNavDaily::getFundCode, fundCodes)
+                                .ge(ScreenerFundNavDaily::getNavDate, scoreDate.minusDays(240))
+                                .le(ScreenerFundNavDaily::getNavDate, scoreDate)
+                                .orderByAsc(ScreenerFundNavDaily::getFundCode)
+                                .orderByAsc(ScreenerFundNavDaily::getNavDate)))
+                .orElse(List.of());
+        return navPoints.stream()
+                .collect(Collectors.groupingBy(ScreenerFundNavDaily::getFundCode, HashMap::new, Collectors.toList()));
+    }
+
+    private FundScreenerBacktestMetricVO metric(String bucket, int horizon, List<BacktestObservation> observations,
+                                                BigDecimal allAverage, int scoreDateCount, boolean significant) {
+        BigDecimal averageReturn = average(observations.stream().map(BacktestObservation::forwardReturn).toList());
+        long wins = observations.stream().filter(item -> item.forwardReturn().compareTo(BigDecimal.ZERO) > 0).count();
+        BigDecimal winRate = BigDecimal.valueOf(wins).multiply(HUNDRED)
+                .divide(BigDecimal.valueOf(observations.size()), 4, RoundingMode.HALF_UP);
+        BigDecimal maxDrawdown = observations.stream().map(BacktestObservation::maxDrawdown)
+                .min(BigDecimal::compareTo).orElse(BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP));
+        return new FundScreenerBacktestMetricVO(bucket, horizon, observations.size(), scoreDateCount,
+                averageReturn.doubleValue(), winRate.doubleValue(),
+                averageReturn.subtract(allAverage).setScale(4, RoundingMode.HALF_UP).doubleValue(),
+                maxDrawdown.doubleValue(), significant);
+    }
+
     private BigDecimal weightedAverage(List<ScreenerBacktestResult> rows,
                                        Function<ScreenerBacktestResult, BigDecimal> valueExtractor) {
         BigDecimal weightedSum = BigDecimal.ZERO;
@@ -352,6 +463,24 @@ public class FundScreenerBacktestServiceImpl implements FundScreenerBacktestServ
 
     private BigDecimal forwardMaxDrawdown(BigDecimal baseNav, List<ScreenerFundNavDaily> points) {
         BigDecimal peak = baseNav;
+        BigDecimal maxDrawdown = BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP);
+        for (ScreenerFundNavDaily point : points) {
+            if (point.getUnitNav().compareTo(peak) > 0) {
+                peak = point.getUnitNav();
+            }
+            BigDecimal drawdown = rate(point.getUnitNav(), peak);
+            if (drawdown.compareTo(maxDrawdown) < 0) {
+                maxDrawdown = drawdown;
+            }
+        }
+        return maxDrawdown;
+    }
+
+    private BigDecimal windowMaxDrawdown(List<ScreenerFundNavDaily> points) {
+        if (points.isEmpty()) {
+            return BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP);
+        }
+        BigDecimal peak = points.getFirst().getUnitNav();
         BigDecimal maxDrawdown = BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP);
         for (ScreenerFundNavDaily point : points) {
             if (point.getUnitNav().compareTo(peak) > 0) {

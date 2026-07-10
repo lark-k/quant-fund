@@ -10,6 +10,7 @@ public record FundScreenerValidationVO(
         String conclusion,
         List<String> calibrationAdvice,
         FundScreenerStrategyPolicyVO policy,
+        List<FundScreenerBacktestMetricVO> lookbackMetrics,
         List<FundScreenerBacktestMetricVO> metrics
 ) {
 }
