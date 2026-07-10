@@ -7,6 +7,7 @@ import static org.mockito.Mockito.when;
 
 import com.lk.quantfund.service.FundFactorService;
 import com.lk.quantfund.service.FundQualityScoreService;
+import com.lk.quantfund.service.FundScreenerBacktestService;
 import com.lk.quantfund.service.FundScreenerNavService;
 import com.lk.quantfund.service.FundUniverseService;
 import com.lk.quantfund.vo.screener.FundScreenerTaskResultVO;
@@ -20,11 +21,13 @@ class ScheduledFundScreenerTaskServiceTest {
     private final FundScreenerNavService navService = mock(FundScreenerNavService.class);
     private final FundFactorService factorService = mock(FundFactorService.class);
     private final FundQualityScoreService qualityScoreService = mock(FundQualityScoreService.class);
+    private final FundScreenerBacktestService backtestService = mock(FundScreenerBacktestService.class);
     private final ScheduledFundScreenerTaskService service = new ScheduledFundScreenerTaskService(
             universeService,
             navService,
             factorService,
-            qualityScoreService
+            qualityScoreService,
+            backtestService
     );
 
     @Test
@@ -59,5 +62,20 @@ class ScheduledFundScreenerTaskServiceTest {
         assertThat(result.getFailureCount()).isZero();
         assertThat(result.errorSummary()).isEmpty();
         verify(factorService).refreshFactors();
+    }
+
+    @Test
+    void incrementalBacktestDelegatesAndPreservesSkippedCount() {
+        when(backtestService.runIncremental()).thenReturn(new FundScreenerTaskResultVO(
+                "SCREENER_BACKTEST", "SUCCESS", 4, 0, 11, 80,
+                List.of(), "增量回测完成", LocalDateTime.now()
+        ));
+
+        SchedulerTaskResult result = service.runIncrementalBacktest();
+
+        assertThat(result.getSuccessCount()).isEqualTo(4);
+        assertThat(result.getFailureCount()).isZero();
+        assertThat(result.getSkippedCount()).isEqualTo(11);
+        verify(backtestService).runIncremental();
     }
 }

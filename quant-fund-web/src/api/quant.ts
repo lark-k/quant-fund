@@ -25,6 +25,7 @@ import type {
   FundSearchResult,
   FundSearchMode,
   FundScreenerTaskResult,
+  FundScreenerValidation,
   FundStockHolding,
   FundTheme,
   HoldingCreateRequest,
@@ -211,6 +212,12 @@ export const quantApi = {
   },
   refreshFundScreenerFull(): Promise<FundScreenerTaskResult> {
     return USE_MOCK ? mockApi.refreshFundScreenerFull() : http.post('/fund-screener/refresh-full', undefined, { timeout: 1800000 })
+  },
+  runFundScreenerBacktest(): Promise<FundScreenerTaskResult> {
+    return USE_MOCK ? mockApi.runFundScreenerBacktest() : http.post('/fund-screener/backtest', undefined, { timeout: 600000 })
+  },
+  fundScreenerValidation(): Promise<FundScreenerValidation> {
+    return USE_MOCK ? mockApi.fundScreenerValidation() : http.get('/fund-screener/backtest/validation', { timeout: 60000 })
   },
   refreshEstimate(fundCode: string): Promise<FundEstimate> {
     return USE_MOCK ? mockApi.refreshEstimate(fundCode) : http.post(`/funds/${fundCode}/refresh-estimate`)

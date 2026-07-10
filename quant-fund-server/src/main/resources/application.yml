@@ -48,6 +48,14 @@ sa-token:
   is-log: false
 
 quantfund:
+  screener-strategy:
+    strong-min-score: ${QUANTFUND_SCREENER_STRONG_MIN_SCORE:82}
+    strong-top-percent: ${QUANTFUND_SCREENER_STRONG_TOP_PERCENT:8}
+    watch-min-score: ${QUANTFUND_SCREENER_WATCH_MIN_SCORE:72}
+    watch-top-percent: ${QUANTFUND_SCREENER_WATCH_TOP_PERCENT:20}
+    neutral-min-score: ${QUANTFUND_SCREENER_NEUTRAL_MIN_SCORE:58}
+    min-validation-samples: ${QUANTFUND_SCREENER_MIN_VALIDATION_SAMPLES:30}
+    min-validation-score-dates: ${QUANTFUND_SCREENER_MIN_VALIDATION_SCORE_DATES:3}
   ai:
     enabled: ${DEEPSEEK_ENABLED:true}
     mock-enabled: ${DEEPSEEK_MOCK_ENABLED:false}

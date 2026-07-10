@@ -788,6 +788,41 @@ export interface FundScreenerTaskResult {
   finishTime: string
 }
 
+export type FundScreenerValidationStatus = 'EFFECTIVE' | 'NEUTRAL' | 'FAILED' | 'INSUFFICIENT'
+
+export interface FundScreenerBacktestMetric {
+  bucketName: 'TOP_5' | 'TOP_10' | 'WATCH' | 'NEUTRAL' | 'AVOID'
+  horizonDays: 20 | 60 | 120
+  sampleCount: number
+  scoreDateCount: number
+  avgForwardReturn: number
+  winRate: number
+  avgExcessReturn: number
+  maxDrawdown: number
+  statisticallySignificant: boolean
+}
+
+export interface FundScreenerStrategyPolicy {
+  strongMinScore: number
+  strongTopPercent: number
+  watchMinScore: number
+  watchTopPercent: number
+  neutralMinScore: number
+  minValidationSamples: number
+  minValidationScoreDates: number
+}
+
+export interface FundScreenerValidation {
+  latestRunDate: string | null
+  earliestScoreDate: string | null
+  latestScoreDate: string | null
+  status: FundScreenerValidationStatus
+  conclusion: string
+  calibrationAdvice: string[]
+  policy: FundScreenerStrategyPolicy
+  metrics: FundScreenerBacktestMetric[]
+}
+
 export interface DataSourceConfig {
   id: number
   userId?: number

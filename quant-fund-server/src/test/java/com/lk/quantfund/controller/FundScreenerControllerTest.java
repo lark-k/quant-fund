@@ -18,6 +18,9 @@ import com.lk.quantfund.service.FundUniverseService;
 import com.lk.quantfund.vo.screener.FundScreenerExplainVO;
 import com.lk.quantfund.vo.screener.FundScreenerRankItemVO;
 import com.lk.quantfund.vo.screener.FundScreenerTaskResultVO;
+import com.lk.quantfund.vo.screener.FundScreenerStrategyPolicyVO;
+import com.lk.quantfund.vo.screener.FundScreenerValidationVO;
+import java.math.BigDecimal;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -134,6 +137,30 @@ class FundScreenerControllerTest {
         assertThat(controller.syncNav().data().taskName()).isEqualTo("SYNC_NAV");
         assertThat(controller.refreshFactors().data().taskName()).isEqualTo("REFRESH_FACTORS");
         assertThat(controller.backtest().data().taskName()).isEqualTo("SCREENER_BACKTEST");
+    }
+
+    @Test
+    void shouldExposeManualIncrementalRunAndCachedValidation() {
+        FundScreenerBacktestService backtestService = mock(FundScreenerBacktestService.class);
+        FundScreenerTaskResultVO task = taskResult("SCREENER_BACKTEST", "SUCCESS", 12, 0);
+        FundScreenerValidationVO validation = new FundScreenerValidationVO(
+                "2026-07-10", "2026-01-02", "2026-04-02", "EFFECTIVE", "策略当前有效",
+                List.of("保持当前阈值"),
+                new FundScreenerStrategyPolicyVO(new BigDecimal("82"), 8, new BigDecimal("72"),
+                        20, new BigDecimal("58"), 30, 3),
+                List.of()
+        );
+        when(backtestService.runIncremental()).thenReturn(task);
+        when(backtestService.getValidation()).thenReturn(validation);
+        FundScreenerController controller = new FundScreenerController(
+                mock(FundUniverseService.class), mock(FundScreenerNavService.class),
+                mock(FundFactorService.class), mock(FundQualityScoreService.class), backtestService
+        );
+
+        assertThat(controller.runBacktest().data().successCount()).isEqualTo(12);
+        assertThat(controller.validation().data().status()).isEqualTo("EFFECTIVE");
+        verify(backtestService).runIncremental();
+        verify(backtestService).getValidation();
     }
 
     private FundScreenerController controller(FundQualityScoreService service) {

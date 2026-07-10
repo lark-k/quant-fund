@@ -18,6 +18,7 @@ import type {
   FundScreenerRankItem,
   FundScreenerRankQuery,
   FundScreenerTaskResult,
+  FundScreenerValidation,
   FundSearchResult,
   FundSearchMode,
   FundStockHolding,
@@ -1511,6 +1512,61 @@ export const mockApi = {
       errorSummaries: [],
       message: 'mock 模式下未执行完整同步路径',
       finishTime: now
+    }
+  },
+  async runFundScreenerBacktest(): Promise<FundScreenerTaskResult> {
+    return {
+      taskName: 'SCREENER_BACKTEST',
+      status: 'SUCCESS',
+      successCount: 6,
+      failureCount: 0,
+      skippedCount: 39,
+      costTimeMs: 86,
+      errorSummaries: [],
+      message: '增量回测完成：新增6条，跳过39条，失败0条',
+      finishTime: now
+    }
+  },
+  async fundScreenerValidation(): Promise<FundScreenerValidation> {
+    const buckets: FundScreenerValidation['metrics'][number]['bucketName'][] = ['TOP_5', 'TOP_10', 'WATCH', 'NEUTRAL', 'AVOID']
+    const horizons: FundScreenerValidation['metrics'][number]['horizonDays'][] = [20, 60, 120]
+    const baseReturn: Record<FundScreenerValidation['metrics'][number]['bucketName'], number> = {
+      TOP_5: 7.4,
+      TOP_10: 6.2,
+      WATCH: 4.1,
+      NEUTRAL: 2.8,
+      AVOID: -0.6
+    }
+    return {
+      latestRunDate: today,
+      earliestScoreDate: '2026-01-05',
+      latestScoreDate: '2026-04-08',
+      status: 'EFFECTIVE',
+      conclusion: 'TOP_10 在60日维度跑赢全样本 2.30%，胜率 61.00%，且 AVOID 未跑赢 NEUTRAL，策略当前有效。',
+      calibrationAdvice: [
+        '保持当前推荐阈值，持续观察20/60/120日分层稳定性。',
+        '在引入新评分因子前，先确认多个市场阶段仍保持正超额收益。'
+      ],
+      policy: {
+        strongMinScore: 82,
+        strongTopPercent: 8,
+        watchMinScore: 72,
+        watchTopPercent: 20,
+        neutralMinScore: 58,
+        minValidationSamples: 30,
+        minValidationScoreDates: 3
+      },
+      metrics: buckets.flatMap((bucketName, bucketIndex) => horizons.map((horizonDays, horizonIndex) => ({
+        bucketName,
+        horizonDays,
+        sampleCount: 48 - bucketIndex * 3,
+        scoreDateCount: 4,
+        avgForwardReturn: baseReturn[bucketName] * (0.55 + horizonIndex * 0.25),
+        winRate: 64 - bucketIndex * 5 + horizonIndex,
+        avgExcessReturn: (2.8 - bucketIndex * 0.9) * (0.65 + horizonIndex * 0.2),
+        maxDrawdown: -5.8 - bucketIndex * 1.3 - horizonIndex * 1.1,
+        statisticallySignificant: true
+      })))
     }
   },
   async refreshEstimate(fundCode: string) {

@@ -8,17 +8,23 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import DisclaimerBar from '@/components/common/DisclaimerBar.vue'
 import { quantApi } from '@/api/quant'
-import { percent } from '@/utils/format'
-import type { FundScreenerExplain, FundScreenerRankItem, FundScreenerRankQuery, FundScreenerRecommendLevel, PageResponse } from '@/types/domain'
+import { percent, percentUnsigned } from '@/utils/format'
+import { buildValidationRows, significanceText, taskResultMessageLevel } from '@/utils/fundScreenerValidation'
+import type { ValidationBucketRow } from '@/utils/fundScreenerValidation'
+import type { FundScreenerExplain, FundScreenerRankItem, FundScreenerRankQuery, FundScreenerRecommendLevel, FundScreenerValidation, PageResponse } from '@/types/domain'
 
 const router = useRouter()
 const loading = ref(false)
 const refreshing = ref(false)
 const fullRefreshing = ref(false)
+const validationLoading = ref(false)
+const backtestRunning = ref(false)
 const detailLoading = ref(false)
 const drawerVisible = ref(false)
 const rankPage = ref<PageResponse<FundScreenerRankItem>>({ pageNo: 1, pageSize: 20, total: 0, records: [] })
 const selectedExplain = ref<FundScreenerExplain | null>(null)
+const validation = ref<FundScreenerValidation | null>(null)
+const validationRows = computed(() => buildValidationRows(validation.value?.metrics || []))
 const latestScoreDate = computed(() => rankPage.value.records[0]?.scoreDate || '--')
 const scoredCount = computed(() => rankPage.value.total)
 const includedCount = computed(() => Math.max(rankPage.value.total, rankPage.value.records.length))
@@ -47,6 +53,7 @@ const recommendOptions: Array<{ label: string; value: FundScreenerRecommendLevel
   { label: '中性', value: 'NEUTRAL' },
   { label: '回避', value: 'AVOID' }
 ]
+const validationHorizons = [20, 60, 120] as const
 
 function levelText(level: string) {
   const map: Record<string, string> = {
@@ -89,6 +96,32 @@ function signedPercent(value?: number | null, digits = 2) {
   return percent(value, digits)
 }
 
+function unsignedPercent(value?: number | null, digits = 2) {
+  if (value === null || value === undefined || Number.isNaN(value)) return '--'
+  return percentUnsigned(value, digits)
+}
+
+function validationStatusText(status?: FundScreenerValidation['status']) {
+  const labels: Record<FundScreenerValidation['status'], string> = {
+    EFFECTIVE: '策略有效',
+    NEUTRAL: '策略中性',
+    FAILED: '策略失效',
+    INSUFFICIENT: '样本不足'
+  }
+  return status ? labels[status] : '尚未验证'
+}
+
+function validationStatusType(status?: FundScreenerValidation['status']) {
+  if (status === 'EFFECTIVE') return 'success'
+  if (status === 'FAILED') return 'danger'
+  if (status === 'NEUTRAL') return 'warning'
+  return 'info'
+}
+
+function metricAt(row: ValidationBucketRow, horizon: 20 | 60 | 120) {
+  return row.horizons[horizon]
+}
+
 function queryParams(): FundScreenerRankQuery {
   return {
     ...filters,
@@ -106,6 +139,34 @@ async function loadRank() {
     rankPage.value = { pageNo: filters.pageNo || 1, pageSize: filters.pageSize || 20, total: 0, records: [] }
   } finally {
     loading.value = false
+  }
+}
+
+async function loadValidation() {
+  validationLoading.value = true
+  try {
+    validation.value = await quantApi.fundScreenerValidation()
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '策略验证结果加载失败')
+  } finally {
+    validationLoading.value = false
+  }
+}
+
+async function runBacktest() {
+  backtestRunning.value = true
+  try {
+    const result = await quantApi.runFundScreenerBacktest()
+    const message = [result.message || '增量回测执行完成', ...result.errorSummaries.slice(0, 2)].join('；')
+    const level = taskResultMessageLevel(result.status)
+    if (level === 'error') ElMessage.error(message)
+    else if (level === 'warning') ElMessage.warning(message)
+    else ElMessage.success(message)
+    await loadValidation()
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '增量回测执行失败')
+  } finally {
+    backtestRunning.value = false
   }
 }
 
@@ -168,7 +229,10 @@ function resetPageAndLoad() {
   void loadRank()
 }
 
-onMounted(loadRank)
+onMounted(() => {
+  void loadRank()
+  void loadValidation()
+})
 </script>
 
 <template>
@@ -210,6 +274,82 @@ onMounted(loadRank)
       <MetricTile label="已评分" :value="`${scoredCount} 只`" sub-label="最新榜单样本" tone="rise" />
       <MetricTile label="评分日期" :value="latestScoreDate" sub-label="最近一次评分" tone="info" />
     </div>
+
+    <section class="validation-section">
+      <div class="validation-head">
+        <div>
+          <div class="section-title validation-title">
+            <span>策略验证</span>
+            <el-tag :type="validationStatusType(validation?.status)" effect="dark">
+              {{ validationStatusText(validation?.status) }}
+            </el-tag>
+          </div>
+          <p>用历史评分后的真实净值检验分层效果；只做验证与调参建议，不会自动修改生产阈值。</p>
+        </div>
+        <el-button type="success" :loading="backtestRunning" @click="runBacktest">
+          <el-icon><Histogram /></el-icon>
+          <span>运行增量回测</span>
+        </el-button>
+      </div>
+
+      <LoadingState v-if="validationLoading && !validation" title="正在加载策略验证" description="读取已缓存的历史分层回测结果。" />
+      <template v-else-if="validation">
+        <div class="validation-meta">
+          <span>最新运行：<strong>{{ validation.latestRunDate || '--' }}</strong></span>
+          <span>可用评分日期：<strong>{{ validation.earliestScoreDate || '--' }} 至 {{ validation.latestScoreDate || '--' }}</strong></span>
+          <span>统计门槛：<strong>样本 ≥ {{ validation.policy.minValidationSamples }}，评分日 ≥ {{ validation.policy.minValidationScoreDates }}</strong></span>
+        </div>
+
+        <div class="validation-conclusion" :class="`validation-${validation.status.toLowerCase()}`">
+          <strong>{{ validationStatusText(validation.status) }}</strong>
+          <span>{{ validation.conclusion }}</span>
+        </div>
+
+        <el-table :data="validationRows" class="validation-table" stripe>
+          <el-table-column prop="label" label="分层" width="100" fixed />
+          <el-table-column v-for="horizon in validationHorizons" :key="horizon" :label="`${horizon}日`" min-width="255">
+            <template #default="{ row }">
+              <div v-if="metricAt(row, horizon)" class="validation-cell">
+                <div class="validation-return">
+                  <strong>{{ signedPercent(metricAt(row, horizon)?.avgForwardReturn) }}</strong>
+                  <span>平均收益</span>
+                </div>
+                <div class="validation-details">
+                  <span>胜率 {{ unsignedPercent(metricAt(row, horizon)?.winRate) }}</span>
+                  <span>超额 {{ signedPercent(metricAt(row, horizon)?.avgExcessReturn) }}</span>
+                  <span>最大回撤 {{ signedPercent(metricAt(row, horizon)?.maxDrawdown) }}</span>
+                </div>
+                <div class="validation-sample">
+                  <span>{{ metricAt(row, horizon)?.sampleCount }} 个样本 / {{ metricAt(row, horizon)?.scoreDateCount }} 个评分日</span>
+                  <el-tag
+                    size="small"
+                    :type="metricAt(row, horizon)?.statisticallySignificant ? 'success' : 'warning'"
+                    effect="plain"
+                  >
+                    {{ significanceText(metricAt(row, horizon)) }}
+                  </el-tag>
+                </div>
+              </div>
+              <span v-else class="validation-empty">暂无到期样本</span>
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <div class="calibration-grid">
+          <div class="policy-card">
+            <strong>当前生产阈值</strong>
+            <span>强烈关注：评分 ≥ {{ validation.policy.strongMinScore }} 且前 {{ validation.policy.strongTopPercent }}%</span>
+            <span>观察：评分 ≥ {{ validation.policy.watchMinScore }} 或前 {{ validation.policy.watchTopPercent }}%</span>
+            <span>中性：评分 ≥ {{ validation.policy.neutralMinScore }}；其余回避</span>
+          </div>
+          <div class="advice-card">
+            <strong>算法校准建议</strong>
+            <span v-for="item in validation.calibrationAdvice" :key="item">{{ item }}</span>
+          </div>
+        </div>
+      </template>
+      <EmptyState v-else title="暂无策略验证结果" description="点击“运行增量回测”，系统会计算已经具备未来净值窗口的历史评分日。" />
+    </section>
 
     <section class="rank-section">
       <div class="section-title">
@@ -293,7 +433,7 @@ onMounted(loadRank)
       </template>
     </section>
 
-    <DisclaimerBar text="基金优选结果仅供参考，不构成投资建议，不承诺收益；评分模型将在后续批次逐步接入真实同步、因子和排名。" />
+    <DisclaimerBar text="基金优选和历史回测结果仅供参考，不构成投资建议，不承诺未来收益；历史表现不代表未来表现。" />
 
     <el-drawer
       v-model="drawerVisible"
@@ -355,10 +495,167 @@ onMounted(loadRank)
 
 .workspace-head,
 .filter-band,
+.validation-section,
 .rank-section {
   border: 1px solid var(--line-soft);
   background: var(--surface);
   border-radius: var(--radius);
+}
+
+.validation-section {
+  min-width: 0;
+  padding: 18px;
+}
+
+.validation-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.validation-head p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.validation-title {
+  justify-content: flex-start;
+  margin: 0;
+}
+
+.validation-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(117, 144, 158, 0.16);
+  border-radius: 8px;
+  background: rgba(9, 22, 29, 0.78);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.validation-meta strong {
+  color: var(--text);
+}
+
+.validation-conclusion {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(96, 165, 250, 0.2);
+  border-radius: 8px;
+  background: rgba(37, 99, 235, 0.1);
+  color: #cbd9e2;
+  line-height: 1.5;
+}
+
+.validation-conclusion strong {
+  flex: 0 0 auto;
+  color: #dbeafe;
+}
+
+.validation-effective {
+  border-color: rgba(34, 197, 94, 0.25);
+  background: rgba(34, 197, 94, 0.1);
+}
+
+.validation-failed {
+  border-color: rgba(239, 68, 68, 0.25);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.validation-neutral,
+.validation-insufficient {
+  border-color: rgba(245, 158, 11, 0.25);
+  background: rgba(245, 158, 11, 0.09);
+}
+
+.validation-table {
+  width: 100%;
+  --el-table-bg-color: transparent;
+  --el-table-tr-bg-color: transparent;
+  --el-table-header-bg-color: #0b171f;
+  --el-table-header-text-color: #b6c7d2;
+  --el-table-text-color: #d9e6ed;
+  --el-table-row-hover-bg-color: rgba(61, 142, 255, 0.1);
+  --el-table-border-color: rgba(117, 144, 158, 0.16);
+  --el-fill-color-lighter: rgba(19, 35, 45, 0.72);
+  border: 1px solid rgba(117, 144, 158, 0.16);
+  border-radius: 8px;
+  background: #0b151c;
+}
+
+.validation-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 5px 0;
+}
+
+.validation-return,
+.validation-sample {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.validation-return strong {
+  color: #7dd3fc;
+  font-size: 16px;
+}
+
+.validation-return span,
+.validation-sample,
+.validation-empty {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.validation-details {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  color: #b7c7d1;
+  font-size: 11px;
+}
+
+.validation-details span {
+  white-space: nowrap;
+}
+
+.calibration-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.policy-card,
+.advice-card {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 12px 14px;
+  border: 1px solid rgba(117, 144, 158, 0.16);
+  border-radius: 8px;
+  background: rgba(9, 22, 29, 0.78);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.policy-card strong,
+.advice-card strong {
+  color: var(--text);
+  font-size: 13px;
 }
 
 .workspace-head {
@@ -862,8 +1159,15 @@ onMounted(loadRank)
   }
 
   .filter-band,
-  .metric-row {
+  .metric-row,
+  .calibration-grid {
     grid-template-columns: 1fr;
+  }
+
+  .validation-head,
+  .validation-conclusion {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .factor-strip {

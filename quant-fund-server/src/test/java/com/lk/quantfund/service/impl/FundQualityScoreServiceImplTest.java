@@ -9,6 +9,7 @@ import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lk.quantfund.config.QuantFundProperties;
 import com.lk.quantfund.dto.screener.FundScreenerQueryRequest;
 import com.lk.quantfund.entity.ScreenerFactorSnapshot;
 import com.lk.quantfund.entity.ScreenerFundUniverse;
@@ -163,6 +164,29 @@ class FundQualityScoreServiceImplTest {
         assertThat(score.getConsistencyScore()).isBetween(BigDecimal.ZERO, new BigDecimal("100.0000"));
         assertThat(score.getInvestabilityScore()).isBetween(BigDecimal.ZERO, new BigDecimal("100.0000"));
         assertThat(score.getRecommendLevel()).isEqualTo("STRONG");
+    }
+
+    @Test
+    void shouldUseConfiguredRecommendationThresholds() {
+        QuantFundProperties properties = new QuantFundProperties();
+        properties.getScreenerStrategy().setStrongMinScore(new BigDecimal("95.0000"));
+        FundQualityScoreServiceImpl configuredService = new FundQualityScoreServiceImpl(
+                factorMapper,
+                scoreMapper,
+                universeMapper,
+                new ObjectMapper(),
+                properties
+        );
+        when(factorMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(factor("000001")));
+        when(universeMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(universe("000001", "MIXED")));
+        when(scoreMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
+
+        configuredService.refreshScore();
+
+        ArgumentCaptor<ScreenerQualityScore> captor = ArgumentCaptor.forClass(ScreenerQualityScore.class);
+        verify(scoreMapper).insert(captor.capture());
+        assertThat(captor.getValue().getQualityScore()).isLessThan(new BigDecimal("95.0000"));
+        assertThat(captor.getValue().getRecommendLevel()).isEqualTo("WATCH");
     }
 
     @Test

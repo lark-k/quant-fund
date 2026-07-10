@@ -33,7 +33,7 @@ public class SchedulerTaskLogService {
             entity.setCostTimeMs(Duration.between(startTime, now).toMillis());
             entity.setSuccessCount(result.getSuccessCount());
             entity.setFailureCount(result.getFailureCount());
-            entity.setErrorMessage(result.errorSummary());
+            entity.setErrorMessage(result.logSummary());
             entity.setCreateTime(now);
             entity.setUpdateTime(now);
             entity.setDeleted(0);

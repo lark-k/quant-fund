@@ -36,3 +36,5 @@ quant-engine/.cache/
 quant-engine/models/artifacts/
 # codegraph
 .codegraph
+# isolated feature worktrees
+.worktrees/

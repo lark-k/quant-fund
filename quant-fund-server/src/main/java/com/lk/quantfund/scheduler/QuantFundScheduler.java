@@ -120,6 +120,11 @@ public class QuantFundScheduler {
         runScreenerTask("SCREENER_REFRESH_QUALITY_SCORE", scheduledFundScreenerTaskService::refreshQualityScore);
     }
 
+    @Scheduled(cron = "0 50 23 ? * MON-FRI", zone = ZONE)
+    public void runScreenerIncrementalBacktest() {
+        runScreenerTask("SCREENER_INCREMENTAL_BACKTEST", scheduledFundScreenerTaskService::runIncrementalBacktest);
+    }
+
     private void runTradingTask(String taskName, Supplier<SchedulerTaskResult> task) {
         runTask(taskName, true, task);
     }

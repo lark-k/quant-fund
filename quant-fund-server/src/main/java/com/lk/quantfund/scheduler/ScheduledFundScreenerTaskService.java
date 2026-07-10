@@ -2,6 +2,7 @@ package com.lk.quantfund.scheduler;
 
 import com.lk.quantfund.service.FundFactorService;
 import com.lk.quantfund.service.FundQualityScoreService;
+import com.lk.quantfund.service.FundScreenerBacktestService;
 import com.lk.quantfund.service.FundScreenerNavService;
 import com.lk.quantfund.service.FundUniverseService;
 import com.lk.quantfund.vo.screener.FundScreenerTaskResultVO;
@@ -14,15 +15,18 @@ public class ScheduledFundScreenerTaskService {
     private final FundScreenerNavService fundScreenerNavService;
     private final FundFactorService fundFactorService;
     private final FundQualityScoreService fundQualityScoreService;
+    private final FundScreenerBacktestService fundScreenerBacktestService;
 
     public ScheduledFundScreenerTaskService(FundUniverseService fundUniverseService,
                                             FundScreenerNavService fundScreenerNavService,
                                             FundFactorService fundFactorService,
-                                            FundQualityScoreService fundQualityScoreService) {
+                                            FundQualityScoreService fundQualityScoreService,
+                                            FundScreenerBacktestService fundScreenerBacktestService) {
         this.fundUniverseService = fundUniverseService;
         this.fundScreenerNavService = fundScreenerNavService;
         this.fundFactorService = fundFactorService;
         this.fundQualityScoreService = fundQualityScoreService;
+        this.fundScreenerBacktestService = fundScreenerBacktestService;
     }
 
     public SchedulerTaskResult syncUniverse() {
@@ -45,6 +49,10 @@ public class ScheduledFundScreenerTaskService {
         return adapt(fundQualityScoreService.refreshScore());
     }
 
+    public SchedulerTaskResult runIncrementalBacktest() {
+        return adapt(fundScreenerBacktestService.runIncremental());
+    }
+
     private SchedulerTaskResult adapt(FundScreenerTaskResultVO taskResult) {
         SchedulerTaskResult result = new SchedulerTaskResult();
         if ("SKIPPED".equals(taskResult.status())) {
@@ -58,6 +66,9 @@ public class ScheduledFundScreenerTaskService {
                     ? taskResult.errorSummaries().get(index)
                     : taskResult.message();
             result.failure(message);
+        }
+        for (int index = 0; index < taskResult.skippedCount(); index++) {
+            result.skipped();
         }
         return result;
     }

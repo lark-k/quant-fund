@@ -14,6 +14,7 @@ public class QuantFundProperties {
     private final FundDataSource fundDataSource = new FundDataSource();
     private final QuantEngine quantEngine = new QuantEngine();
     private final Scheduler scheduler = new Scheduler();
+    private final ScreenerStrategy screenerStrategy = new ScreenerStrategy();
 
     public Ai getAi() {
         return ai;
@@ -29,6 +30,80 @@ public class QuantFundProperties {
 
     public Scheduler getScheduler() {
         return scheduler;
+    }
+
+    public ScreenerStrategy getScreenerStrategy() {
+        return screenerStrategy;
+    }
+
+    public static class ScreenerStrategy {
+        private BigDecimal strongMinScore = new BigDecimal("82.0000");
+        @Min(1)
+        private int strongTopPercent = 8;
+        private BigDecimal watchMinScore = new BigDecimal("72.0000");
+        @Min(1)
+        private int watchTopPercent = 20;
+        private BigDecimal neutralMinScore = new BigDecimal("58.0000");
+        @Min(1)
+        private int minValidationSamples = 30;
+        @Min(1)
+        private int minValidationScoreDates = 3;
+
+        public BigDecimal getStrongMinScore() {
+            return strongMinScore;
+        }
+
+        public void setStrongMinScore(BigDecimal strongMinScore) {
+            this.strongMinScore = strongMinScore;
+        }
+
+        public int getStrongTopPercent() {
+            return strongTopPercent;
+        }
+
+        public void setStrongTopPercent(int strongTopPercent) {
+            this.strongTopPercent = strongTopPercent;
+        }
+
+        public BigDecimal getWatchMinScore() {
+            return watchMinScore;
+        }
+
+        public void setWatchMinScore(BigDecimal watchMinScore) {
+            this.watchMinScore = watchMinScore;
+        }
+
+        public int getWatchTopPercent() {
+            return watchTopPercent;
+        }
+
+        public void setWatchTopPercent(int watchTopPercent) {
+            this.watchTopPercent = watchTopPercent;
+        }
+
+        public BigDecimal getNeutralMinScore() {
+            return neutralMinScore;
+        }
+
+        public void setNeutralMinScore(BigDecimal neutralMinScore) {
+            this.neutralMinScore = neutralMinScore;
+        }
+
+        public int getMinValidationSamples() {
+            return minValidationSamples;
+        }
+
+        public void setMinValidationSamples(int minValidationSamples) {
+            this.minValidationSamples = minValidationSamples;
+        }
+
+        public int getMinValidationScoreDates() {
+            return minValidationScoreDates;
+        }
+
+        public void setMinValidationScoreDates(int minValidationScoreDates) {
+            this.minValidationScoreDates = minValidationScoreDates;
+        }
     }
 
     public static class Ai {

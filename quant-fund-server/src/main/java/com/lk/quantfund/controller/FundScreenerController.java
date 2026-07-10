@@ -14,6 +14,7 @@ import com.lk.quantfund.service.FundUniverseService;
 import com.lk.quantfund.vo.screener.FundScreenerExplainVO;
 import com.lk.quantfund.vo.screener.FundScreenerRankItemVO;
 import com.lk.quantfund.vo.screener.FundScreenerTaskResultVO;
+import com.lk.quantfund.vo.screener.FundScreenerValidationVO;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -136,6 +137,18 @@ public class FundScreenerController {
     @RateLimit(key = "fund-screener:backtest", windowSeconds = 60, maxRequests = 5)
     public ApiResponse<FundScreenerTaskResultVO> backtest() {
         return ApiResponse.success(fundScreenerBacktestService.backtest());
+    }
+
+    @PostMapping("/backtest")
+    @RateLimit(key = "fund-screener:backtest-run", windowSeconds = 60, maxRequests = 5)
+    public ApiResponse<FundScreenerTaskResultVO> runBacktest() {
+        return ApiResponse.success(fundScreenerBacktestService.runIncremental());
+    }
+
+    @GetMapping("/backtest/validation")
+    @RateLimit(key = "fund-screener:backtest-validation", windowSeconds = 60, maxRequests = 120)
+    public ApiResponse<FundScreenerValidationVO> validation() {
+        return ApiResponse.success(fundScreenerBacktestService.getValidation());
     }
 
     private FundScreenerTaskResultVO combine(String taskName, long started, List<FundScreenerTaskResultVO> steps) {

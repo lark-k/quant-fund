@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lk.quantfund.common.PageResponse;
+import com.lk.quantfund.config.QuantFundProperties;
 import com.lk.quantfund.constants.SystemConstants;
 import com.lk.quantfund.dto.screener.FundScreenerQueryRequest;
 import com.lk.quantfund.entity.ScreenerFactorSnapshot;
@@ -29,6 +30,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -49,15 +51,27 @@ public class FundQualityScoreServiceImpl implements FundQualityScoreService {
     private final ScreenerQualityScoreMapper screenerQualityScoreMapper;
     private final ScreenerFundUniverseMapper screenerFundUniverseMapper;
     private final ObjectMapper objectMapper;
+    private final QuantFundProperties.ScreenerStrategy screenerStrategy;
 
+    @Autowired
     public FundQualityScoreServiceImpl(ScreenerFactorSnapshotMapper screenerFactorSnapshotMapper,
                                        ScreenerQualityScoreMapper screenerQualityScoreMapper,
                                        ScreenerFundUniverseMapper screenerFundUniverseMapper,
-                                       ObjectMapper objectMapper) {
+                                       ObjectMapper objectMapper,
+                                       QuantFundProperties properties) {
         this.screenerFactorSnapshotMapper = screenerFactorSnapshotMapper;
         this.screenerQualityScoreMapper = screenerQualityScoreMapper;
         this.screenerFundUniverseMapper = screenerFundUniverseMapper;
         this.objectMapper = objectMapper;
+        this.screenerStrategy = properties.getScreenerStrategy();
+    }
+
+    FundQualityScoreServiceImpl(ScreenerFactorSnapshotMapper screenerFactorSnapshotMapper,
+                                ScreenerQualityScoreMapper screenerQualityScoreMapper,
+                                ScreenerFundUniverseMapper screenerFundUniverseMapper,
+                                ObjectMapper objectMapper) {
+        this(screenerFactorSnapshotMapper, screenerQualityScoreMapper, screenerFundUniverseMapper,
+                objectMapper, new QuantFundProperties());
     }
 
     @Override
@@ -505,18 +519,22 @@ public class FundQualityScoreServiceImpl implements FundQualityScoreService {
     }
 
     private String recommendLevel(BigDecimal qualityScore, int rankNo, int total) {
-        int strongCutoff = Math.max(1, (int) Math.ceil(total * 0.08));
-        int watchCutoff = Math.max(strongCutoff, (int) Math.ceil(total * 0.20));
-        if (qualityScore.compareTo(new BigDecimal("82.0000")) >= 0 && rankNo <= strongCutoff) {
+        int strongCutoff = percentileCutoff(total, screenerStrategy.getStrongTopPercent());
+        int watchCutoff = Math.max(strongCutoff, percentileCutoff(total, screenerStrategy.getWatchTopPercent()));
+        if (qualityScore.compareTo(screenerStrategy.getStrongMinScore()) >= 0 && rankNo <= strongCutoff) {
             return "STRONG";
         }
-        if (qualityScore.compareTo(new BigDecimal("72.0000")) >= 0 || rankNo <= watchCutoff) {
+        if (qualityScore.compareTo(screenerStrategy.getWatchMinScore()) >= 0 || rankNo <= watchCutoff) {
             return "WATCH";
         }
-        if (qualityScore.compareTo(new BigDecimal("58.0000")) >= 0) {
+        if (qualityScore.compareTo(screenerStrategy.getNeutralMinScore()) >= 0) {
             return "NEUTRAL";
         }
         return "AVOID";
+    }
+
+    private int percentileCutoff(int total, int percent) {
+        return Math.max(1, (int) Math.ceil(total * (percent / 100.0)));
     }
 
     private BigDecimal scoreFromReturn(BigDecimal value) {
