@@ -1,6 +1,6 @@
 # QuantFund Fund Datasource Module
 
-第五批实现基金数据源模块。
+基金数据源模块为基金详情、持仓、市场读数、回测净值缓存和基金优选提供统一的外部数据入口。
 
 ## Capabilities
 

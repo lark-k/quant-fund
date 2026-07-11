@@ -1,6 +1,6 @@
 # QuantFund AOP Cross-Cutting Capabilities
 
-第四批实现以下横切能力：
+后端通过注解和 AOP 统一实现以下横切能力：
 
 - `@RequireLogin`：登录校验。
 - `@DataScope`：用户数据归属校验。
@@ -54,6 +54,8 @@ class FundHoldingOwnerLookup implements ResourceOwnerLookup {
 
 This keeps AOP responsible for ownership enforcement only. It does not hide holding, trade, strategy, or AI business logic inside aspects.
 
+当前已注册账户、持仓、交易、定投计划、策略配置、策略信号、风险偏好和 AI 报告的所有者查询。
+
 ## Logging Safety
 
 `OperationLogAspect` masks sensitive request and response fields before persistence.
@@ -71,4 +73,3 @@ Masked keys include:
 - apiKey
 
 Operation log persistence failure is caught and logged as a warning so it does not affect the main business flow.
-

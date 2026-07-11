@@ -29,6 +29,9 @@ dist/
 tmp/
 .cache/
 qa-artifacts/
+!quant-fund-web/qa-artifacts/
+quant-fund-web/qa-artifacts/*
+!quant-fund-web/qa-artifacts/readme-dashboard.png
 __pycache__/
 .pytest_cache/
 quant-engine/.venv/

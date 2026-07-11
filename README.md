@@ -1,195 +1,242 @@
+<div align="center">
+
 # QuantFund
 
-QuantFund 是一个基金量化交易辅助工具，中文展示名为 **QuantFund 基金量化驾驶舱**，前端系统标题统一为 **QuantFund - AI Fund Quant Dashboard**。
+**基金数据、持仓管理、规则量化、历史回测、基金优选与 AI 解读的一体化研究驾驶舱**
 
-本项目目标是帮助用户基于基金历史数据、当天估值、持仓收益、账户仓位、量化规则和 AI 分析，在每天 15:00 前获得买入、卖出、持有、转换等参考建议。系统不直接自动下单，不接入真实交易下单接口，所有买卖操作仍由用户在支付宝、天天基金、券商等原平台完成。
+![Java 21](https://img.shields.io/badge/Java-21-ED8B00?logo=openjdk&logoColor=white)
+![Spring Boot 3.5](https://img.shields.io/badge/Spring%20Boot-3.5-6DB33F?logo=springboot&logoColor=white)
+![Vue 3](https://img.shields.io/badge/Vue-3-42B883?logo=vuedotjs&logoColor=white)
+![Python 3.11+](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
+![License](https://img.shields.io/badge/License-Apache%202.0-blue)
 
-所有买卖建议必须展示：
+[核心能力](#核心能力) · [系统架构](#系统架构) · [快速开始](#快速开始) · [使用流程](#使用流程) · [文档导航](#文档导航)
 
-> 仅供参考，不构成投资建议，不承诺收益。
+![QuantFund 基金量化驾驶舱](quant-fund-web/qa-artifacts/readme-dashboard.png)
 
-所有买卖相关页面还必须展示：
+QuantFund 是一个面向个人基金研究和模拟管理的全栈项目。系统从真实基金数据出发，将账户持仓、盘中估值、模拟交易、确定性规则、Python 量化模型、历史回测、基金优选和 DeepSeek 结构化解读串成完整工作流，帮助用户在交易日下午 15:00 前形成可解释、可复核的操作参考。
 
-> 仅为模拟操作，并非真实交易。
+> [!IMPORTANT]
+> QuantFund 不连接券商、支付宝、天天基金等真实下单接口，不会自动交易。所有信号、回测和 AI 内容仅供研究参考，不构成投资建议，不承诺收益。
 
-## 项目命名
+## 为什么做 QuantFund
 
-| 类型 | 名称 |
+基金投资数据常分散在行情平台、交易平台和个人表格中，策略判断也容易停留在一次性的主观结论。QuantFund 尝试解决三个问题：
+
+- **统一数据和持仓**：基金净值、盘中估值、账户、持仓、交易流水和收益复盘集中管理。
+- **让建议可解释**：规则引擎给出评分、动作、理由和风险项，AI 只负责结构化解读，不覆盖确定性动作。
+- **让策略可验证**：使用历史净值回测、同仓位基准和基金优选前瞻验证检查策略，而不是只看一次信号。
+
+## 核心能力
+
+| 能力 | 说明 |
 | --- | --- |
-| 项目名称 | QuantFund |
-| 项目根目录 | quant-fund |
-| 后端模块 | quant-fund-server |
-| 前端模块 | quant-fund-web |
-| 数据库 | quant_fund |
-| Java 基础包名 | com.lk.quantfund |
-| 前端标题 | QuantFund - AI Fund Quant Dashboard |
+| 基金数据 | 基金搜索、基础资料、历史净值、盘中估值、重仓股、主题、同类排名和缓存降级 |
+| 账户与持仓 | 多账户、持仓维护、收益重算、正式净值同步、资产和仓位汇总 |
+| 模拟交易与定投 | 买入、卖出、定投、转入、转出、成对转换、在途结算和到期定投补偿 |
+| 规则与风控 | 止盈、低吸、仓位监控、风险提醒、个人风险偏好和策略参数 |
+| Python 量化引擎 | 多因子评分、单持仓/账户批量信号、基金画像、仓位与市场约束 |
+| 历史回测 | 批量回测、净值预热、收益/回撤/夏普/卡玛、逐笔诊断、同仓位基准 |
+| LightGBM 辅助 | 可选概率模型和未来收益模型，对规则分数做有限调整并支持 A/B 回测 |
+| 基金优选 | 全市场基金池、可投资池过滤、多维因子、质量评分、分级榜单和增量验证 |
+| AI 解读 | DeepSeek 结构化报告、历史记录、重新生成和异常时保守 `WATCH` 降级 |
+| 驾驶舱与复盘 | 市场状态、仓位分布、收益走势、盘中曲线、盈亏排行和收益日历 |
+| 工程安全 | Sa-Token、用户数据隔离、限流、防重复提交、操作日志和敏感字段脱敏 |
 
-## 当前已生成范围
+前端已经覆盖桌面、平板和手机布局，主要页面包括驾驶舱、持仓、基金详情、基金优选、智能分析、收益分析、收益日历、回测验证、交易流水和系统配置。
 
-当前项目已按分批方式生成到后端核心模块、前端核心页面、响应式适配、测试与文档补充阶段。
+## 系统架构
 
-当前已包含：
-
-- 项目架构设计
-- MySQL 初始化建表 SQL
-- Spring Boot 后端工程
-- 用户登录、注册、鉴权和用户数据隔离基础能力
-- 企业级注解与 AOP 横切能力
-- 基金数据源、账户、持仓、模拟交易、策略、AI、定时任务、系统管理、驾驶舱、盈亏分析等后端模块
-- Vue 3 + Vite + TypeScript 前端工程
-- Product Design 选定视觉方向的 PC 端基金量化驾驶舱
-- 登录、注册、基金详情、持仓、交易、AI 分析、盈亏分析、盈亏日历、策略配置、系统配置、个人资料等前端页面
-- 响应式移动端核心能力
-- 后端单元测试示例、AOP 测试示例、Mock 数据和启动说明
-- Docker Compose 本地 MySQL / Redis 依赖服务
-
-当前仍需继续完善：
-
-- 前后端真实接口联调
-- 生产部署脚本
-- 更多端到端测试和移动端截图复验
-
-## 设计与结构
-
-- 数据流设计
-- 核心业务流程
-- 模块边界说明
-- 技术选型说明
-
-## 顶层结构
-
-```text
-quant-fund/
-  README.md
-  docs/
-    01-project-overall-design.md
-  docs/
-    sql/
-      001_schema.sql
-  quant-fund-server/
-    pom.xml
-    README.md
-    src/
-  quant-fund-web/
-    README.md
+```mermaid
+flowchart LR
+    U["Vue 3 Web :5173"] -->|"/api + Sa-Token"| J["Spring Boot :8080"]
+    J --> M[("MySQL 8.4")]
+    J --> R[("Redis 7.4")]
+    J -->|"基金与指数数据"| E["东方财富公开接口"]
+    J -->|"信号 / 回测 / ML"| P["FastAPI Quant Engine :8091"]
+    J -->|"结构化解读"| D["DeepSeek API"]
+    P --> Q["规则模型 + 可选 LightGBM"]
 ```
 
-后续批次会继续补充：
-
-- `quant-fund-server`：Java 17/21 + Spring Boot 3.x 后端服务。
-- `quant-fund-web`：Vue 3 + Vite + TypeScript 前端应用。
-- `docs/sql`：MySQL 初始化脚本和测试数据。
-- `docs/api`：RESTful API 说明。
-- `docs/deploy`：本地启动、Docker、联调说明。
+- **`quant-fund-web`**：负责页面、图表、登录态和业务交互；默认连接真实后端，可切换前端 Mock。
+- **`quant-fund-server`**：业务核心，负责鉴权、数据隔离、持久化、外部数据、交易闭环、调度、AI 编排和量化调用。
+- **`quant-engine`**：独立计算服务，只基于 Java 提供的数据生成信号、回测和 ML 推理，不访问业务数据库或外部基金源。
 
 ## 技术栈
 
-后端：
+| 层 | 技术 |
+| --- | --- |
+| Web | Vue 3.5、TypeScript、Vite 6、Pinia、Vue Router、Element Plus、ECharts、Vitest、Playwright |
+| Server | Java 21、Spring Boot 3.5、MyBatis-Plus、Sa-Token、WebClient、Spring Scheduler、Knife4j |
+| Quant | Python 3.11+、FastAPI、Pydantic、NumPy、Pandas、LightGBM、pytest |
+| Data | MySQL 8.4、Redis 7.4 |
 
-- Java 17 或 Java 21
-- Spring Boot 3.x
-- MySQL 8.x
-- MyBatis Plus
-- Redis
-- Sa-Token
-- BCrypt
-- Spring Scheduler 或 Quartz
-- WebClient 或 OkHttp
-- Maven
-- Knife4j / Swagger OpenAPI
-- Lombok
-- MapStruct 可选
-- Hutool 可选
+## 快速开始
 
-前端：
+### 环境要求
 
-- Vue 3
-- Vite
-- TypeScript
-- Pinia
-- Vue Router
-- Axios
-- Element Plus
-- ECharts
-- 响应式 CSS
+- JDK 21、Maven 3.9+
+- Python 3.11+
+- Node.js 与 npm
+- Docker Desktop / Docker Compose
 
-## 架构文档
+以下命令以 Windows PowerShell 为例。
 
-总体设计见 [docs/01-project-overall-design.md](docs/01-project-overall-design.md)。
+### 1. 启动数据服务
 
-后端模块设计见 [quant-fund-server/README.md](quant-fund-server/README.md)。
-
-前端模块设计见 [quant-fund-web/README.md](quant-fund-web/README.md)。
-
-本地前后端联调见 [docs/deploy/local-integration.md](docs/deploy/local-integration.md)。
-
-## 分批计划
-
-1. 项目总体设计
-2. 数据库和后端基础工程
-3. 用户登录、注册与鉴权模块
-4. 企业级注解与 AOP 横切能力
-5. 基金数据源模块
-6. 持仓、账户、交易模块
-7. 策略引擎模块
-8. AI 分析模块
-9. 定时任务模块
-10. 前端基础工程
-11. PC 端核心页面
-12. 响应式和手机端兼容
-13. 测试数据、联调和文档
-
-## 本地启动说明
-
-第二批已生成后端基础工程。需要先准备 MySQL 8.x 和 Redis。
-
-推荐使用项目自带 Compose 依赖服务：
-
-```bash
+```powershell
 docker compose up -d mysql redis
-cd quant-fund-server
-copy .env.docker.example .env
 ```
 
-初始化数据库：
+Compose 首次创建数据卷时只会自动执行 `001_schema.sql`。新环境还需按顺序执行 `003`–`010`：
 
-```bash
-mysql -uroot -p < docs/sql/001_schema.sql
+```powershell
+$scripts = Get-ChildItem .\docs\sql\*.sql |
+  Where-Object Name -NotIn @('001_schema.sql', '002_seed_demo.sql') |
+  Sort-Object Name
+
+foreach ($script in $scripts) {
+  Get-Content -Raw -Encoding UTF8 $script.FullName |
+    docker compose exec -T mysql mysql -uroot -pquantfund_root_password quant_fund
+}
 ```
 
-启动后端：
+需要演示账号时再导入可重复执行的 `002_seed_demo.sql`：
 
-```bash
-cd quant-fund-server
+```powershell
+Get-Content -Raw -Encoding UTF8 .\docs\sql\002_seed_demo.sql |
+  docker compose exec -T mysql mysql -uroot -pquantfund_root_password quant_fund
+```
+
+演示登录：`quantdemo` / `QuantFund2026`。
+
+以下三个应用服务请分别在新的 PowerShell 中从仓库根目录启动。
+
+### 2. 启动量化引擎
+
+```powershell
+cd .\quant-engine
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+uvicorn app.main:app --host 127.0.0.1 --port 8091 --reload
+```
+
+### 3. 启动后端
+
+```powershell
+cd .\quant-fund-server
+Copy-Item .env.docker.example .env
 mvn spring-boot:run
 ```
 
-如果当前机器的用户级 Maven 仓库不可写，可使用项目内本地仓库运行验证：
+### 4. 启动前端
 
-```bash
-cd quant-fund-server
-mvn "-Dmaven.repo.local=.m2/repository" test
+```powershell
+cd .\quant-fund-web
+Copy-Item .env.example .env
+npm install
+npm run dev
 ```
 
-后端环境变量示例见 [quant-fund-server/.env.example](quant-fund-server/.env.example)，不要把真实密钥写入代码或提交到仓库。
+打开 <http://127.0.0.1:5173>。完整的数据库、本机依赖、环境变量、真实 DeepSeek 和排障说明见[本地开发与联调指南](docs/deploy/local-integration.md)。
 
-认证接口文档见 [docs/api/auth.md](docs/api/auth.md)。
+### 服务地址
 
-AOP 横切能力说明见 [docs/api/aop.md](docs/api/aop.md)。
+| 服务 | 地址 |
+| --- | --- |
+| Web | <http://127.0.0.1:5173> |
+| Server Health | <http://127.0.0.1:8080/api/health> |
+| Server Dependencies | <http://127.0.0.1:8080/api/health/dependencies> |
+| Knife4j | <http://127.0.0.1:8080/doc.html> |
+| Quant Engine Health | <http://127.0.0.1:8091/api/v1/health> |
+| Quant Engine Swagger | <http://127.0.0.1:8091/docs> |
 
-基金数据源模块说明见 [docs/api/fund-datasource.md](docs/api/fund-datasource.md)。
-账户、持仓和模拟交易接口说明见 [docs/api/portfolio-trade.md](docs/api/portfolio-trade.md)。
-策略引擎接口说明见 [docs/api/strategy.md](docs/api/strategy.md)。
-AI 分析接口说明见 [docs/api/ai-analysis.md](docs/api/ai-analysis.md)。
-定时任务模块说明见 [docs/api/scheduler.md](docs/api/scheduler.md)。
-系统配置与日志接口说明见 [docs/api/system-management.md](docs/api/system-management.md)。
-基金量化驾驶舱接口说明见 [docs/api/dashboard.md](docs/api/dashboard.md)。
-盈亏分析与盈亏日历接口说明见 [docs/api/analytics.md](docs/api/analytics.md)。
+## 使用流程
 
-健康检查：
+```mermaid
+flowchart LR
+    A["创建账户和持仓"] --> B["同步净值与盘中估值"]
+    B --> C["生成规则 / 量化信号"]
+    C --> D["AI 结构化解读"]
+    D --> E["用户在原平台自行操作"]
+    E --> F["登记模拟交易"]
+    F --> G["收益复盘与历史回测"]
+    G --> C
+```
+
+推荐从以下路径开始：
+
+1. 登录后创建账户，通过基金代码或名称搜索基金并加入持仓。
+2. 在驾驶舱和基金详情查看估值、净值、仓位、收益、重仓股与市场状态。
+3. 对单持仓或账户运行规则/量化分析，再用 AI 页面阅读结构化解释。
+4. 在交易流水中登记模拟买卖、定投或转换；系统根据状态更新持仓和账户。
+5. 在回测页先拉取本地净值，再验证参数、导出 ML 样本或进行规则/ML 对比。
+6. 在基金优选页同步基金池、计算因子与评分，并通过 20/60/120 样本窗口检查分层效果。
+
+## 项目结构
 
 ```text
-GET http://localhost:8080/api/health
+quant-fund/
+├─ quant-fund-web/       # Vue 3 前端
+├─ quant-fund-server/    # Spring Boot 业务服务
+├─ quant-engine/         # FastAPI 量化、回测与 ML
+├─ docs/
+│  ├─ api/               # API 与模块说明
+│  ├─ deploy/            # 本地开发和联调
+│  ├─ sql/               # 001~010 数据库脚本
+│  ├─ qa/                # QA 记录
+│  └─ superpowers/       # 历史设计规格和实施计划
+├─ quant-fund-web/qa-artifacts/ # 已纳入版本管理的视觉 QA 证据
+├─ tools/                # 真实基金数据 smoke 脚本
+└─ compose.yaml          # MySQL / Redis
 ```
 
-DeepSeek 和外部基金数据源已经按可配置适配器接入。基金数据默认走东方财富等真实数据源，mock fallback 默认关闭；只有开发演示或外部接口故障演练时才显式开启。AI 分析默认走真实 DeepSeek 配置，未配置 Key 或调用失败时返回明确的保守兜底结果，不再把 mock 当作真实分析。
+## 测试
+
+```powershell
+# Java
+cd quant-fund-server
+mvn test
+
+# Python
+cd ..\quant-engine
+pytest
+
+# Web
+cd ..\quant-fund-web
+npm run typecheck
+npm run test -- --run
+npm run build
+```
+
+真实基金数据链路 smoke：
+
+```powershell
+node .\tools\real-fund-detail-smoke.mjs
+node .\tools\real-fund-holding-smoke.mjs
+```
+
+## 文档导航
+
+完整文档索引见 **[docs/README.md](docs/README.md)**。
+
+- [本地开发与联调](docs/deploy/local-integration.md)
+- [项目总体设计](docs/01-project-overall-design.md)
+- [后端模块](quant-fund-server/README.md)
+- [前端模块](quant-fund-web/README.md)
+- [量化引擎](quant-engine/README.md)
+- [API 文档](docs/README.md#api-与模块文档)
+- [基金优选设计与实施记录](docs/README.md#历史设计与实施记录)
+
+## 当前边界
+
+- 不提供真实交易、资金托管或自动下单。
+- 外部基金数据来自公开接口，可能存在延迟、缺失或接口变化。
+- LightGBM 默认关闭，规则模型始终是主决策引擎。
+- AI 只解释结构化上下文，失败或输出不合法时降级为 `WATCH`。
+- 当前 Compose 只覆盖本地 MySQL/Redis，尚未提供生产级部署编排。
+
+## License
+
+本项目采用 [Apache License 2.0](LICENSE)。

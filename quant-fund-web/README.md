@@ -1,121 +1,107 @@
-# quant-fund-web
+# QuantFund Web
 
-QuantFund 前端模块，系统标题统一为 **QuantFund - AI Fund Quant Dashboard**。
+`quant-fund-web` 是 QuantFund 的 Vue 3 单页应用，采用深色 Trading Terminal 风格，负责登录态、业务页面、数据可视化和用户操作。界面以桌面端为主，同时适配平板和手机。
 
-本批已生成 Vue 3 + Vite + TypeScript 前端工程，并按 Product Design 选定的第 2 个视觉方向 **Trading Terminal** 实现深色专业基金量化驾驶舱。
+![QuantFund Dashboard](qa-artifacts/readme-dashboard.png)
 
 ## 技术栈
 
-- Vue 3
-- Vite
-- TypeScript
-- Pinia
-- Vue Router
-- Axios
-- Element Plus
-- ECharts
-- 响应式 CSS
+- Vue 3 Composition API、TypeScript
+- Vite、Vue Router、Pinia、Pinia persisted state
+- Axios、Element Plus、ECharts
+- Vitest、Playwright
 
-## 启动
+## 页面与路由
 
-```bash
+| 路由 | 页面 | 主要能力 |
+| --- | --- | --- |
+| `/login`、`/register` | 登录与注册 | 用户认证、登录态初始化 |
+| `/dashboard` | 首页总览 | 资产、市场状态、持仓、收益、风险和建议 |
+| `/holdings` | 持仓列表 | 估值、收益、清仓、重算和净值同步 |
+| `/holding-edit` | 持仓编辑 | 账户、基金搜索、持仓和模拟交易录入 |
+| `/fund-detail` | 基金详情 | 净值、估值、重仓股、主题、排名和量化分析 |
+| `/fund-screener` | 基金优选 | 因子排名、评分解释、全量刷新和验证闭环 |
+| `/ai-analysis` | 智能分析 | 单持仓/账户 AI 报告和历史记录 |
+| `/profit-analysis` | 收益分析 | 区间、盘中、指数对比和基金排行 |
+| `/profit-calendar` | 收益日历 | 月度收益和每日热力图 |
+| `/backtest-validation` | 回测验证 | 净值缓存、规则回测、ML 样本与 A/B 对比 |
+| `/trades` | 交易流水 | 模拟交易、定投计划、在途记录和结算 |
+| `/strategy-config` | 策略配置 | Java 策略参数和个人风险偏好 |
+| `/system-config` | 系统配置 | 数据源、运行状态和日志 |
+| `/profile` | 个人中心 | 资料和密码维护 |
+
+所有业务页面都使用 `meta.requiresAuth`。未登录访问时跳转 `/login`，已登录用户访问登录/注册页时跳转驾驶舱。
+
+## 本地启动
+
+先启动 Spring Boot 后端；完整流程见[本地开发与联调](../docs/deploy/local-integration.md)。
+
+```powershell
+Copy-Item .env.example .env
 npm install
 npm run dev
 ```
 
-默认使用后端真实接口：
+默认地址：<http://127.0.0.1:5173>。
+
+Vite 将 `/api` 代理到 `http://127.0.0.1:8080`：
 
 ```env
 VITE_USE_MOCK=false
 VITE_API_BASE_URL=/api
 ```
 
-请求会走 Vite 代理到 `http://127.0.0.1:8080/api`，由后端接入东方财富等真实基金数据源。只有开发演示或后端不可用时，才显式设置 `VITE_USE_MOCK=true` 使用前端 mock。
+## 真实接口与 Mock
 
-完整本地联调流程见 `../docs/deploy/local-integration.md`。
+- `VITE_USE_MOCK=false`：默认模式，使用 Spring Boot、真实基金数据源和登录态。
+- `VITE_USE_MOCK=true`：前端演示模式，主要页面读取 `src/api/mock.ts`；回测等部分功能仍要求真实后端。
+- `src/api/http.ts` 统一处理请求、响应解包、错误消息和 401 跳转。
+- `src/api/auth.ts`、`src/api/quant.ts` 分别封装认证和业务 API。
 
-## 已生成目录结构
+Axios 会把登录返回的 token 写入 `Authorization` 头。HTTP 401 或业务码 401 都会清理本地登录态并跳转登录页。
+
+## 目录结构
 
 ```text
-src
-  api
-  assets
-  components
-    charts
-    common
-  layouts
-  router
-  stores
-  styles
-  types
-  utils
-  views
-    analysis
-    auth
-    dashboard
-    fund
-    portfolio
-    profile
-    trade
+src/
+├─ api/          # Axios、认证 API、业务 API 和 Mock
+├─ components/   # 图表、指标卡、状态和风险提示组件
+├─ layouts/      # 桌面/移动导航布局
+├─ router/       # 路由与登录守卫
+├─ stores/       # 登录态和驾驶舱状态
+├─ styles/       # 全局主题与响应式样式
+├─ types/        # 领域模型与 API 类型
+├─ utils/        # 格式化、交易和验证工具
+└─ views/        # 页面组件
 ```
 
-## 页面规划
+## 交互和安全约束
 
-PC 端核心页面已生成：
+- API 请求统一封装，不在页面散落服务地址。
+- 页面统一处理 loading、空数据和错误状态。
+- 图表通过通用 `BaseChart` 组件封装。
+- 所有建议页显示“仅供参考，不构成投资建议，不承诺收益”。
+- 交易相关页面显示“仅为模拟操作，并非真实交易”。
+- 前端只负责交互，用户数据归属和资源权限由后端强制校验。
 
-- 基金量化驾驶舱
-- 基金详情页
-- AI 量化分析页
-- 盈亏分析页
-- 盈亏日历页
-- 持仓编辑页
-- 交易记录页
-- 系统配置页
-- 登录页
-- 注册页
-- 个人资料页
-- 修改密码页
+## 脚本
 
-移动端核心能力：
+```powershell
+npm run dev             # 开发服务器
+npm run typecheck       # TypeScript / Vue 类型检查
+npm run test -- --run   # Vitest 单次运行
+npm run build           # 类型检查并构建 dist
+npm run preview         # 预览生产构建
+```
 
-- 查看总资产和当日收益
-- 查看持仓列表
-- 查看基金详情
-- 查看 AI 今日建议
-- 手动刷新估值
-- 添加交易记录
-- 同步加仓 / 减仓 / 定投 / 转换
+## 视觉 QA
 
-## 已实现交互
+`qa-artifacts/visual-qa` 保存桌面、平板和手机页面截图，`scripts/visual-qa.mjs` 用于自动捕获页面。历史截图是特定版本的视觉证据，不替代当前功能测试。
 
-- 路由守卫：业务页需要登录，已登录访问登录页会跳转驾驶舱。
-- Axios 拦截器：自动携带 token，遇到 401 清理登录态并跳转登录页。
-- Mock API：仅作为开发演示兜底；最终交付默认使用后端真实接口和真实基金数据源。
-- 图表：收益走势、仓位分布、盈亏日历柱状图。
-- 状态：loading、空状态、提示消息、模拟交易弹窗。
-- 响应式：桌面优先，移动端可折叠导航和双列日历。
+如果 Windows 环境执行 `npm run build` 时在 Vite/esbuild 子进程阶段出现 `spawn EPERM`，先运行 `npm run typecheck` 排除类型问题，再在允许启动子进程的终端执行构建。
 
-## 前端工程约束
+## 延伸阅读
 
-- 使用 Vue 3 Composition API。
-- 页面、组件、API、状态管理分层清晰。
-- API 请求必须统一封装。
-- 401 自动清理登录态并跳转登录页。
-- 路由使用 `meta.requiresAuth`。
-- 登录后访问登录页自动跳转基金量化驾驶舱。
-- 图表组件可复用。
-- 表格、卡片、筛选器、弹窗模块化。
-- 统一 loading、空数据、错误状态。
-- 不写大而全单文件组件。
-- PC 端优先，响应式兼容移动端。
-- 买卖相关页面必须展示“仅为模拟操作，并非真实交易”。
-
-## 风险提示
-
-所有买卖建议均展示：
-
-> 仅供参考，不构成投资建议，不承诺收益
-
-所有交易相关页面均展示：
-
-> 仅为模拟操作，并非真实交易
+- [项目 README](../README.md)
+- [文档中心](../docs/README.md)
+- [后端模块](../quant-fund-server/README.md)

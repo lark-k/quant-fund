@@ -2,8 +2,9 @@ import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 import { chromium } from 'playwright'
 
-const outputDir = path.resolve('qa-artifacts')
-const outputPath = path.join(outputDir, 'dashboard-1440x1024.png')
+const baseUrl = process.env.QA_BASE_URL || 'http://127.0.0.1:5173'
+const outputPath = path.resolve(process.env.QA_OUTPUT_PATH || path.join('qa-artifacts', 'dashboard-1440x1024.png'))
+const outputDir = path.dirname(outputPath)
 
 await mkdir(outputDir, { recursive: true })
 
@@ -18,7 +19,7 @@ page.on('console', (message) => {
   if (message.type() === 'error') consoleErrors.push(message.text())
 })
 
-await page.goto('http://127.0.0.1:5173/login', { waitUntil: 'networkidle' })
+await page.goto(`${baseUrl}/login`, { waitUntil: 'networkidle' })
 await page.evaluate(() => {
   localStorage.setItem('auth', JSON.stringify({
     token: 'mock-quantfund-token',
@@ -31,7 +32,7 @@ await page.evaluate(() => {
     }
   }))
 })
-await page.goto('http://127.0.0.1:5173/dashboard', { waitUntil: 'networkidle' })
+await page.goto(`${baseUrl}/dashboard`, { waitUntil: 'networkidle' })
 await page.waitForLoadState('networkidle')
 await page.locator('.dashboard-grid').waitFor({ state: 'visible', timeout: 10000 })
 await page.screenshot({ path: outputPath, fullPage: false })

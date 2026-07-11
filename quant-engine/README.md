@@ -1,11 +1,13 @@
 # QuantFund Quant Engine
 
-Python FastAPI service for QuantFund intraday rule-based quant decisions.
+`quant-engine` is the Python FastAPI compute service for QuantFund. It provides
+deterministic multi-factor signals, batch inference, historical backtests and an
+optional LightGBM helper.
 
-Phase 1 only implements a deterministic multi-factor rule model. It does not
-connect to real trading APIs, does not place orders, and does not use deep
-learning. Java remains responsible for business permissions, persistence, and
-workflow closure; Python only calculates quant signals.
+The service does not connect to real trading APIs or place orders. Java remains
+responsible for authentication, business permissions, persistence, external
+fund data and workflow closure; Python only performs feature calculation,
+signal generation, backtesting and optional ML inference.
 
 ## Local Setup
 
@@ -113,7 +115,7 @@ Minimal request body shape:
 }
 ```
 
-Response action is one of `BUY`, `SELL`, `HOLD`, or `WATCH` in Phase 1. The
+Response action is one of `BUY`, `SELL`, `HOLD`, or `WATCH`. The
 response includes score breakdown, metrics, reasons, risks, model version, and
 the standard investment disclaimer.
 
@@ -224,10 +226,10 @@ Use that registry when a fund's trading vehicle and management style differ,
 for example an active QDII fund that should keep overseas risk controls but use
 active-fund trend and re-entry rules.
 
-## Phase 6 Optional LightGBM Helper
+## Optional LightGBM Helper
 
-The rule engine remains the primary decision engine. Phase 6 adds an optional
-LightGBM helper with two outputs:
+The rule engine remains the primary decision engine. The optional ML layer adds
+two LightGBM outputs:
 
 - a binary probability model for capped rule-score adjustment;
 - a regression model that predicts the forward return over the training

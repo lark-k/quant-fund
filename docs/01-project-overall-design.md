@@ -1,331 +1,229 @@
 # QuantFund 项目总体设计
 
-## 1. 设计目标
+本文描述当前代码中的系统边界、服务协作、核心数据流和安全约束。启动步骤见[本地开发与联调](deploy/local-integration.md)，具体接口见[文档中心](README.md#api-与模块文档)。
 
-QuantFund 是一个 PC Web 优先、移动端兼容的基金量化交易辅助工具。系统核心不是后台管理，而是面向个人投资复盘和 15:00 前决策辅助的基金量化驾驶舱。
+## 1. 目标与边界
 
-系统只提供参考建议，不做真实自动交易，不接入真实下单接口，不承诺收益。
+QuantFund 是一个 PC Web 优先、移动端兼容的个人基金研究与模拟管理系统，围绕“数据 → 持仓 → 信号 → 解释 → 模拟记录 → 回测复盘”形成闭环。
 
-核心能力：
+系统负责：
 
-- 多用户注册、登录、鉴权和数据隔离
-- 账户、持仓、模拟交易记录管理
-- 基金基础信息、历史净值、当天估值同步
-- 量化策略信号生成
-- DeepSeek AI 辅助分析
-- 收益复盘和风险提示
-- PC 端完整工作台体验，移动端完成核心操作
+- 用户、账户、持仓、模拟交易和定投计划；
+- 基金、指数、估值、净值和快照数据；
+- Java 业务规则和 Python 多因子量化信号；
+- 历史回测、训练样本导出和可选 LightGBM 辅助；
+- 基金优选、质量评分和前瞻验证；
+- DeepSeek 结构化解读；
+- 驾驶舱、收益分析、收益日历和后台任务。
 
-## 2. 总体架构
+系统不负责：
 
-```text
-用户浏览器
-  |
-  | Vue 3 + Vite + TypeScript + Element Plus + ECharts
-  v
-quant-fund-web
-  |
-  | Axios, token, RESTful API
-  v
-quant-fund-server
-  |
-  | Controller
-  | Service
-  | Strategy Engine
-  | Fund Datasource Adapter
-  | AI Analysis
-  | Scheduler
-  | AOP
-  v
-MySQL 8.x + Redis
-  |
-  | 外部只读数据源
-  v
-天天基金 / 东方财富公开数据源 / 备用 mock 数据源
+- 真实资金、交易账户托管或真实下单；
+- 对收益、信号准确率或外部公开数据完整性作保证；
+- 让大语言模型覆盖仓位、市场或风险硬约束。
 
-DeepSeek API 作为可配置 AI 能力接入，默认允许关闭或使用 mock。
+## 2. 服务架构
+
+```mermaid
+flowchart TB
+    W["quant-fund-web<br/>Vue 3 :5173"] -->|"REST /api<br/>Authorization Token"| S["quant-fund-server<br/>Spring Boot :8080"]
+    S --> DB[("MySQL 8.4")]
+    S --> RC[("Redis 7.4")]
+    S -->|"公开基金/指数数据"| EM["EastMoney APIs"]
+    S -->|"结构化上下文"| QE["quant-engine<br/>FastAPI :8091"]
+    S -->|"chat/completions"| DS["DeepSeek API"]
+    QE --> RM["Rule Model"]
+    QE --> ML["Optional LightGBM"]
 ```
 
-## 3. 后端架构
+### 2.1 Web
 
-后端采用清晰分层结构，Controller 不承载复杂业务逻辑，核心业务由 Service、Strategy、Datasource、AI、Scheduler 等模块协作完成。
+`quant-fund-web` 负责页面、图表、登录态和用户交互：
 
-建议包结构：
+- Vue Router 定义公开页和需要登录的业务页；
+- Pinia 保存 token、用户和驾驶舱状态；
+- Axios 统一添加 `Authorization`、解包 `ApiResponse` 并处理 401；
+- `quant.ts` 封装后端业务接口，Mock 只作为显式启用的前端演示路径；
+- 响应式样式覆盖桌面、平板和手机。
 
-```text
-com.lk.quantfund
-  annotation
-  ai
-  aspect
-  auth
-  common
-  config
-  constants
-  controller
-  datasource
-  datasource.impl
-  dto
-  entity
-  enums
-  exception
-  mapper
-  scheduler
-  service
-  service.impl
-  strategy
-  strategy.context
-  strategy.impl
-  util
-  vo
+前端不决定数据归属，也不承担业务权限校验。
+
+### 2.2 Server
+
+`quant-fund-server` 是系统业务边界：
+
+- Controller：接收参数、校验并返回统一响应；
+- Service：事务、业务编排、当前用户和资源归属；
+- Mapper/Entity：MyBatis-Plus 持久化；
+- Datasource：外部基金/市场数据、缓存、冷却和日志；
+- Strategy：Java 业务规则与风险提醒；
+- Quant Client：构造上下文并调用 Python 分析/回测；
+- AI：构造 Prompt、调用 DeepSeek、验证 JSON 和降级；
+- Scheduler：交易日判断、批处理和任务日志；
+- AOP：登录、数据范围、操作日志、限流和防重复提交。
+
+### 2.3 Quant Engine
+
+`quant-engine` 是无业务状态的计算服务：
+
+- 基于净值、市场、仓位和风险数据生成特征；
+- 确定性规则模型输出 `BUY`、`SELL`、`HOLD` 或 `WATCH`；
+- 批量接口用于账户分析和回测，避免 Java 对大量基金逐只调用；
+- 回测只使用请求中的历史净值，不访问外部行情源；
+- 可选 LightGBM 输出概率和未来收益参考，并在上限内调整规则分数。
+
+Python 不直接访问业务数据库，不处理用户权限，也不保存最终业务记录。
+
+## 3. 核心数据流
+
+### 3.1 登录与用户数据
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant W as Web
+    participant S as Server
+    participant DB as MySQL
+    U->>W: 用户名/密码
+    W->>S: POST /api/auth/login
+    S->>DB: 查询用户并 BCrypt 校验
+    S-->>W: Sa-Token + 用户摘要
+    W->>S: Authorization + 业务请求
+    S->>S: UserContext / DataScope
+    S->>DB: 只查询当前用户数据
 ```
 
-后端边界：
+后端业务服务始终从登录上下文获取 `userId`。前端请求体不能决定数据所有者。
 
-- Controller：参数接收、参数校验、统一响应。
-- Service：业务编排、事务控制、数据归属校验入口。
-- Mapper：数据库访问，不写业务决策。
-- Strategy：量化策略计算和信号解释。
-- Datasource：外部基金数据源适配、缓存、限流、降级。
-- AI：DeepSeek 请求、JSON 解析、字段校验、失败兜底。
-- Scheduler：交易日定时任务、净值同步、快照、复盘。
-- AOP：登录校验、数据范围、操作日志、限流、防重复提交。
-- Common / Exception：统一响应、错误码、全局异常处理。
-
-## 4. 前端架构
-
-前端 PC 端优先，使用 Vue 3 Composition API 和 TypeScript，页面、组件、API、状态管理分层清晰。
-
-建议目录结构：
+### 3.2 基金估值与正式净值
 
 ```text
-src
-  api
-  assets
-  components
-    charts
-    common
-  layouts
-  router
-  stores
-  styles
-  types
-  utils
-  views
-    analysis
-    auth
-    dashboard
-    fund
-    portfolio
-    profile
-    trade
+手动刷新 / 定时任务
+  → 查询需要更新的持仓基金
+  → Redis 缓存与手动刷新冷却
+  → 东方财富适配器获取估值、净值或指数数据
+  → 写入 fund_estimate_intraday / fund_nav_daily / market_index_daily
+  → 重算持仓、账户和盘中快照
+  → 记录 api_call_log
 ```
 
-前端边界：
+盘中估值只用于当日参考，晚间正式净值同步后重新结算持仓表现。
 
-- `api`：统一封装 Axios 请求，不在页面中散落 URL。
-- `stores`：登录态、用户信息、系统配置、页面缓存状态。
-- `router`：路由定义和 `meta.requiresAuth` 守卫。
-- `components/charts`：收益走势、回撤走势、仓位分布等 ECharts 组件。
-- `components/common`：空状态、加载状态、错误状态、业务提示。
-- `layouts`：PC 侧边导航、顶部用户菜单、移动端底部导航。
-- `views`：页面级业务编排，不写成大而全单文件组件。
-- `styles`：全局变量、响应式断点、Element Plus 覆盖样式。
+### 3.3 量化信号与 AI 解读
 
-## 5. 核心数据流
+```mermaid
+flowchart LR
+    C["账户、持仓、净值、市场、风险"] --> J["Java 上下文组装"]
+    J --> P["Python 特征与规则模型"]
+    P --> Q["quant_signal / strategy_signal"]
+    Q --> A["DeepSeek 结构化解读"]
+    A --> R["ai_analysis_report"]
+```
 
-### 5.1 登录数据流
+量化动作由规则和硬约束决定。AI 收到结构化事实、量化结果和近期交易，只负责生成理由、风险和结论；无 Key、超时或 JSON 不合法时保存保守 `WATCH` 降级结果。
+
+### 3.4 模拟交易闭环
 
 ```text
-用户提交登录表单
-  -> 前端校验
-  -> POST /api/auth/login
-  -> Sa-Token 校验账号密码
-  -> BCrypt 验证密码
-  -> 返回 token 和用户摘要
-  -> Pinia 保存登录态
-  -> Axios 后续请求自动携带 token
+用户创建模拟买入/卖出/定投/转换
+  → 校验账户、持仓、份额和状态
+  → PROCESSING 记录等待确认或到期结算
+  → COMPLETED 记录更新持仓份额与成本
+  → 重算持仓和账户
+  → 写操作日志与页面风险提示
 ```
 
-未登录或 token 过期：
+定投计划在交易日生成到期记录；异常或停机后可通过补偿接口重新生成和结算。
+
+### 3.5 历史回测
 
 ```text
-业务 API 返回 401
-  -> Axios 响应拦截器清理登录态
-  -> 跳转登录页
+Web 选择账户、区间和参数
+  → Java 从本地 fund_nav_daily 组装净值与预热数据
+  → Python 批量回测规则模型（可选 ML 对比）
+  → Java 保存 quant_backtest_result
+  → Web 展示收益、回撤、基准、曲线和逐笔诊断
 ```
 
-### 5.2 持仓估值刷新流
+回测同时给出满仓买入持有基准和相同仓位上限基准，后者更适合评价带仓位约束的策略。
 
-```text
-手动刷新或定时任务触发
-  -> 查询当前用户持仓基金
-  -> Datasource 选择可用数据源
-  -> Redis 检查 10 秒重复刷新限制
-  -> 外部 API 获取当天估值
-  -> 失败时读取最近缓存
-  -> 写入 fund_estimate_intraday
-  -> 记录 api_call_log
-  -> 前端显示估值状态
+### 3.6 基金优选与验证
+
+```mermaid
+flowchart LR
+    A["同步基金全集"] --> B["同步筛选净值"]
+    B --> C["重建可投资池"]
+    C --> D["计算因子"]
+    D --> E["质量评分与分级"]
+    E --> F["榜单与解释"]
+    E --> G["20/60/120 样本前瞻验证"]
 ```
 
-当天估值仅作参考，最终净值以晚间正式净值为准。
+基金优选使用独立的 screener 表，避免影响用户持仓数据。验证按评分桶聚合未来收益、胜率和显著性，用于判断评分是否具有区分度。
 
-### 5.3 策略信号生成流
-
-```text
-用户触发单基金分析 / 系统定时触发
-  -> 聚合基金、持仓、账户、历史净值、估值数据
-  -> 计算收益率、回撤、波动率、仓位占比
-  -> 识别基金分类
-  -> Strategy Engine 执行匹配策略
-  -> 生成可解释信号
-  -> 保存 strategy_signal
-  -> 前端展示信号和触发原因
-```
-
-策略只生成参考信号，不承诺收益。
-
-### 5.4 AI 分析流
-
-```text
-用户点击生成 AI 分析 / 定时任务触发
-  -> 后端先计算量化指标
-  -> 组织结构化 JSON 输入
-  -> 调用 DeepSeek 或 mock AI
-  -> 要求 AI 返回固定 JSON
-  -> 后端解析、字段校验
-  -> 非法返回降级 WATCH
-  -> 保存 ai_analysis_report
-  -> 前端展示建议、理由、风险提示
-```
-
-AI 不允许自由编造数据。数据不足时必须返回 WATCH。
-
-## 6. 核心业务流程
-
-### 6.1 用户首次使用
-
-1. 注册账号。
-2. 登录系统。
-3. 创建账户，例如支付宝、天天基金、券商或手动账户。
-4. 添加持仓基金。
-5. 同步或手动录入交易记录。
-6. 刷新当天估值。
-7. 查看策略信号和 AI 建议。
-
-### 6.2 每日 15:00 前决策
-
-1. 系统在交易时间自动刷新持仓估值。
-2. 用户打开基金量化驾驶舱。
-3. 查看总资产、当日收益、仓位分布、风险预警。
-4. 对重点基金生成 AI 分析。
-5. 查看 BUY / SELL / HOLD / CONVERT / WATCH 建议。
-6. 用户自行前往原交易平台操作。
-7. 回到系统记录模拟交易。
-
-### 6.3 晚间净值同步和复盘
-
-1. 20:00 后同步正式净值。
-2. 更新持仓收益和收益率。
-3. 23:00 生成账户持仓快照。
-4. 每周生成复盘报告。
-5. 前端盈亏分析页展示收益走势、指数对比和日历热力图。
-
-## 7. 模块边界
+## 4. 模块边界
 
 | 模块 | 负责 | 不负责 |
 | --- | --- | --- |
-| Auth | 注册、登录、退出、token、当前用户 | 基金业务计算 |
-| User Data Scope | 用户级数据归属校验 | 前端传入 user_id 决定归属 |
-| Portfolio | 账户、持仓、持仓收益 | 外部基金 API 细节 |
-| Trade | 加仓、减仓、定投、转换模拟记录 | 真实下单 |
-| Fund Datasource | 基金搜索、净值、估值、缓存、降级 | 持仓决策 |
-| Strategy | 策略参数、信号生成、解释 | AI 自由判断 |
-| AI Analysis | 结构化 AI 请求、JSON 校验、报告保存 | 直接替代策略引擎 |
-| Risk | 仓位、回撤、连续亏损、数据延迟提示 | 承诺收益 |
-| Scheduler | 定时刷新、同步、快照、复盘 | 页面展示 |
-| Frontend | 用户工作台、页面状态、交互 | 业务安全边界 |
+| Auth | 登录、token、用户资料 | 基金业务 |
+| Portfolio/Holding | 账户、持仓和收益重算 | 外部行情实现 |
+| Trade/Plan | 模拟流水、定投和结算 | 真实下单 |
+| Fund Datasource | 外部数据、缓存和日志 | 投资动作 |
+| Java Strategy | 业务规则、风险提醒 | 历史批量计算 |
+| Quant Engine | 特征、信号、回测和 ML | 权限、业务持久化 |
+| Fund Screener | 全市场筛选和验证 | 用户持仓决策替代 |
+| AI | 结构化解释和报告 | 覆盖硬约束 |
+| Scheduler | 定时同步和批处理 | 页面交互 |
+| Web | 展示、输入和图表 | 数据安全边界 |
 
-## 8. 数据库总体设计
+## 5. 数据设计
 
-第二批将生成完整 MySQL SQL。本批先确定表清单：
+数据库按职责分组：
 
-- `user_account`
-- `portfolio_account`
-- `fund_info`
-- `fund_nav_daily`
-- `fund_estimate_intraday`
-- `fund_holding`
-- `holding_snapshot`
-- `trade_record`
-- `investment_plan`
-- `strategy_config`
-- `strategy_signal`
-- `ai_analysis_report`
-- `api_call_log`
-- `operation_log`
-- `data_source_config`
-- `risk_profile`
+| 分组 | 主要表 |
+| --- | --- |
+| 用户与权限 | `user_account`、`risk_profile` |
+| 账户与交易 | `portfolio_account`、`fund_holding`、`trade_record`、`investment_plan` |
+| 基金与市场 | `fund_info`、`fund_nav_daily`、`fund_estimate_intraday`、`market_index_daily` |
+| 快照与分析 | `holding_snapshot`、`portfolio_intraday_snapshot` |
+| 策略与量化 | `strategy_config`、`strategy_signal`、`quant_signal`、`quant_backtest_result` |
+| AI 与日志 | `ai_analysis_report`、`api_call_log`、`operation_log`、`scheduler_task_log` |
+| 基金优选 | `screener_fund_universe`、`screener_fund_nav_daily`、`screener_universe_filter`、`screener_factor_snapshot`、`screener_quality_score`、`screener_backtest_result` |
 
-所有表包含：
+约束：
 
-- `id`
-- `create_time`
-- `update_time`
-- `deleted`
+- 用户级业务表包含 `user_id` 和对应索引；
+- 金额、净值、比例使用 `DECIMAL` / Java `BigDecimal`；
+- 使用逻辑删除字段 `deleted`；
+- 关键快照和验证单元使用唯一索引保证幂等；
+- `docs/sql` 按编号维护，当前未使用 Flyway/Liquibase。
 
-所有用户级业务表包含：
+## 6. API 设计
 
-- `user_id`
-- user_id 相关索引
+- 业务 API 统一以 `/api` 开头，使用 `ApiResponse<T>`；
+- 健康、注册、登录和文档是公开路径，其余业务接口默认需要登录；
+- HTTP/业务错误由全局异常处理统一转换；
+- 写操作按风险使用 `@OperationLog`、`@RepeatSubmit`、`@RateLimit` 和 `@DataScope`；
+- API 的实时字段定义以 Knife4j/OpenAPI 为准。
 
-金额字段使用 `decimal`，不使用 `float` 或 `double`。
+完整分组见[文档中心](README.md#api-与模块文档)。
 
-时间字段统一使用 `datetime`，精确时间使用 `datetime(3)`。
+## 7. 调度设计
 
-## 9. API 总体设计
+Spring Scheduler 使用 `Asia/Shanghai` 时区。总开关控制全部任务，基金优选有独立开关。交易类任务先检查交易日历，所有执行结果写入 `scheduler_task_log`。
 
-API 统一以 `/api` 开头，返回统一响应结构。
+任务覆盖定投生成/结算、盘中估值、量化信号、AI 分析、正式净值、持仓快照和基金优选流水线。准确时间见[定时任务文档](api/scheduler.md)。
 
-主要分组：
+## 8. 安全与可靠性
 
-- `/api/auth/**`
-- `/api/accounts/**`
-- `/api/funds/**`
-- `/api/holdings/**`
-- `/api/trades/**`
-- `/api/strategies/**`
-- `/api/ai-analysis/**`
-- `/api/system/**`
-- `/api/admin/**`
+- 密码使用 BCrypt，Token 使用 Sa-Token；
+- 用户数据由登录上下文和资源归属双重约束；
+- 敏感字段在操作日志和外部调用日志中脱敏；
+- 外部调用设置超时、缓存、限流或降级；
+- Mock 数据必须显式启用，默认不伪装真实基金或 AI 结果；
+- 任务失败记录摘要，不因单个基金失败终止整批；
+- 所有交易和建议页面显示模拟交易与投资风险提示。
 
-后端业务接口默认要求登录。未登录返回 401，数据不归属返回 403，资源不存在返回 404。
+## 9. 部署边界
 
-## 10. 风险与安全约束
-
-- 不生成真实自动交易功能。
-- 不接入真实下单接口。
-- 不承诺收益。
-- 所有买卖建议必须加风险提示。
-- AI 建议不能作为绝对指令。
-- 账号密码使用 BCrypt。
-- API Key、密码、token 不写死到代码。
-- 日志必须脱敏。
-- 用户级业务数据必须基于登录上下文过滤。
-- 前端传入的 `user_id` 不作为数据归属依据。
-
-## 11. 后续批次衔接
-
-第二批建议生成：
-
-- MySQL 建表 SQL
-- Spring Boot 项目骨架
-- 通用响应结构
-- 全局异常处理
-- 基础枚举
-- 基础配置
-- Swagger / Knife4j 配置
-- MyBatis Plus 配置
-
-第三批再实现登录、注册、鉴权和前端登录注册流程。
-
+仓库内 `compose.yaml` 仅启动本地 MySQL 和 Redis。Web、Server 和 Quant Engine 当前以本地开发进程运行；生产部署需要自行补充反向代理、服务守护、密钥管理、数据库备份、监控和多实例调度互斥。

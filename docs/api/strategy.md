@@ -1,6 +1,6 @@
 # QuantFund Strategy API
 
-This batch implements the first backend strategy engine for `QuantFund`.
+This document describes the Java business-rule strategy engine used by `QuantFund`.
 
 Important safety boundary:
 
@@ -37,7 +37,7 @@ Supported `strategyType` values:
 - `BUY_DIP`
 - `RISK_ALERT`
 
-The first version validates and saves `paramsJson`, and uses `enabled` to decide whether a rule participates in analysis. Rule-specific custom thresholds can be expanded on top of this config model.
+The service validates and saves `paramsJson`, and uses `enabled` to decide whether a rule participates in analysis. Rule-specific thresholds can be stored on top of this config model.
 
 ## Risk Profile
 
@@ -82,7 +82,7 @@ For active equity and mixed funds:
 - Drawdown over 5%: medium sell reference.
 - Drawdown over 8%: heavier sell reference.
 
-The first version uses 90-day NAV drawdown as an approximation for profit drawdown. It is saved as an explainable signal and remains a manual reference.
+The rule uses 90-day NAV drawdown as an approximation for profit drawdown. It is saved as an explainable signal and remains a manual reference.
 
 ### Dynamic Ladder Stop Profit
 
@@ -128,4 +128,3 @@ Checks:
 - Daily estimated rise over threshold: avoid chasing.
 - Daily estimated fall over threshold: caution.
 - NAV drawdown over threshold: risk warning.
-

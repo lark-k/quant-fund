@@ -1,311 +1,151 @@
-# quant-fund-server
+# QuantFund Server
 
-QuantFund 后端模块，基础包名统一为 `com.lk.quantfund`。
-
-本模块已在第二批生成 Spring Boot 3.x 基础工程。当前包含启动类、基础配置、统一响应结构、全局异常处理、基础枚举、MyBatis Plus 配置和 OpenAPI 配置。
+`quant-fund-server` 是 QuantFund 的业务核心服务，负责用户鉴权和数据隔离、基金数据接入、账户/持仓/模拟交易、策略与风险、任务调度、AI 编排，以及 Python 量化引擎的调用和结果持久化。
 
 ## 技术栈
 
-- Java 17 或 Java 21
-- Spring Boot 3.x
-- Maven
-- MySQL 8.x
-- MyBatis Plus
-- Redis
-- Sa-Token
-- BCrypt
-- Spring Scheduler 或 Quartz
-- WebClient 或 OkHttp
-- Knife4j / Swagger OpenAPI
-- Lombok
-- MapStruct 可选
-- Hutool 可选
+- Java 21、Spring Boot 3.5、Maven
+- MyBatis-Plus、MySQL 8.4
+- Sa-Token、BCrypt、Spring AOP
+- Spring Data Redis、Spring Scheduler
+- WebClient、Knife4j / OpenAPI
 
-## 目标包结构
+## 模块结构
 
 ```text
-src/main/java/com/lk/quantfund
-  QuantFundServerApplication.java
-  annotation
-  ai
-  aspect
-  auth
-  common
-  config
-  constants
-  controller
-  datasource
-  datasource/impl
-  dto
-  entity
-  enums
-  exception
-  mapper
-  scheduler
-  service
-  service/impl
-  strategy
-  strategy/context
-  strategy/impl
-  util
-  vo
-src/main/resources
-  application.yml
-  application-dev.yml
-  mapper
+src/main/java/com/lk/quantfund/
+├─ controller/    # REST API、参数校验和统一响应
+├─ service/       # 业务接口、事务编排和实现
+├─ entity/        # MySQL 实体
+├─ mapper/        # MyBatis-Plus 数据访问
+├─ datasource/    # 东方财富与 Mock 基金数据适配器
+├─ strategy/      # Java 规则策略与基金分类
+├─ quant/         # FastAPI 量化引擎客户端
+├─ ai/            # DeepSeek 请求、Prompt、JSON 校验和降级
+├─ scheduler/     # 交易日历、定时任务和任务日志
+├─ auth/          # 当前用户上下文
+├─ aspect/        # 鉴权、数据范围、日志、限流和防重
+├─ dto/           # 请求和跨服务数据结构
+├─ vo/            # API 响应视图
+├─ config/        # Spring、Sa-Token、WebClient 和业务配置
+└─ exception/     # 业务异常与统一异常处理
 ```
 
-## 分层职责
+## 业务能力
 
-| 层 | 职责 |
+| 模块 | 能力 |
 | --- | --- |
-| controller | 参数接收、参数校验、统一响应 |
-| service | 业务编排、事务控制、用户数据隔离 |
-| mapper | MyBatis Plus 数据访问 |
-| entity | 数据库实体 |
-| dto | 请求入参 |
-| vo | 响应视图对象 |
-| enums | 业务枚举、错误码、策略动作 |
-| constants | Redis key、系统常量、配置 key |
-| auth | Sa-Token 登录态、UserContext |
-| annotation | 自定义注解 |
-| aspect | 登录校验、数据范围、日志、限流、防重复提交 |
-| datasource | 基金数据源统一接口 |
-| strategy | 量化策略接口和上下文 |
-| ai | DeepSeek 客户端、Prompt、JSON 校验和降级 |
-| scheduler | 交易日定时任务 |
-| exception | 全局异常和业务异常 |
-| util | 脱敏、指纹、金额、时间等工具 |
+| Auth | 注册、登录、退出、资料、修改密码、Sa-Token 登录态 |
+| Fund | 搜索、资料、净值、估值、重仓股、主题、同类排名和缓存 |
+| Portfolio | 多账户、持仓、正式净值同步、收益与仓位重算 |
+| Trade | 模拟买卖、定投、转换、在途结算、到期交易补偿 |
+| Investment Plan | 定投计划创建、更新、启停、删除和自动生成 |
+| Strategy | Java 规则分析、策略配置和个人风险偏好 |
+| Quant | Python 单持仓/账户分析、信号持久化和批量回测 |
+| Fund Screener | 基金池、净值、因子、评分、榜单、解释和验证回测 |
+| AI | DeepSeek 结构化分析、历史报告、重生成和保守降级 |
+| Analytics | 驾驶舱、市场状态、区间/盘中收益、指数对比和收益日历 |
+| System | 数据源配置、健康状态、AI 运行配置和日志查询 |
 
-## 关键工程约束
+## 关键边界
 
-- Controller 不写复杂业务逻辑。
-- Service 从登录上下文获取当前用户 id。
-- 创建用户级数据时自动写入 user_id。
-- 查询、修改、删除时必须校验 user_id。
-- 所有金额使用 `BigDecimal`。
-- 所有时间使用 `java.time`。
-- 所有异常交给全局异常处理。
-- 外部 API 调用必须有超时、重试、降级、限流。
-- 日志不得打印密码、token、authorization、secret、apiKey 等敏感信息。
-- AI 返回不合法时降级为 WATCH。
+- Controller 只做参数和响应处理，业务逻辑放在 Service。
+- 用户级数据归属来自 `UserContext`，不信任前端传入的 `user_id`。
+- `@DataScope` 对账户、持仓、交易、策略、风险偏好和 AI 报告等资源做所有权校验。
+- 所有金额使用 `BigDecimal`，时间使用 `java.time`。
+- 外部接口调用设置超时并记录 `api_call_log`；日志对密码、Token、Secret 和 API Key 脱敏。
+- AI 只能解释结构化上下文，异常时降级为 `WATCH`；量化硬约束不能被 AI 或 ML 覆盖。
+- 交易记录只用于模拟记账，系统不提供真实下单能力。
 
-## 第二批已生成
+## 本地启动
 
-第二批已在本目录生成：
+先按[本地开发与联调指南](../docs/deploy/local-integration.md)启动 MySQL、Redis、量化引擎并完成 `001`–`010` 数据库结构初始化。
 
-- Maven `pom.xml`
-- Spring Boot 启动类
-- `application.yml` 配置
-- `.env.example` 配置示例
-- 通用响应结构
-- 错误码和基础枚举
-- 全局异常处理
-- MyBatis Plus 配置
-- Knife4j / Swagger 配置
-
-## 当前启动方式
-
-先初始化数据库：
-
-```bash
-mysql -uroot -p < ../docs/sql/001_schema.sql
-```
-
-再启动后端：
-
-```bash
+```powershell
+Copy-Item .env.docker.example .env
 mvn spring-boot:run
 ```
 
-本地测试：
+如果用户 Maven 仓库不可写：
 
-```bash
-mvn "-Dmaven.repo.local=.m2/repository" test
+```powershell
+mvn "-Dmaven.repo.local=.m2/repository" spring-boot:run
 ```
 
-当用户级 Maven 仓库不可写时，上面的命令会把依赖缓存放在当前模块的 `.m2/repository`，该目录已被仓库忽略。
+常用地址：
 
-本地配置可参考 `.env.example`。示例文件不包含真实密钥。
+| 地址 | 用途 |
+| --- | --- |
+| <http://127.0.0.1:8080/api/health> | 服务健康检查 |
+| <http://127.0.0.1:8080/api/health/dependencies> | MySQL / Redis 依赖检查 |
+| <http://127.0.0.1:8080/doc.html> | Knife4j |
+| <http://127.0.0.1:8080/swagger-ui.html> | Swagger UI |
+| <http://127.0.0.1:8080/v3/api-docs> | OpenAPI JSON |
 
-健康检查：
+## 配置
 
-```text
-GET http://localhost:8080/api/health
+Spring 会从模块目录、仓库根目录等位置加载 `quant-fund-server/.env`。不要提交真实密钥。
+
+| 配置组 | 主要变量 |
+| --- | --- |
+| MySQL | `QUANTFUND_DB_URL`、`QUANTFUND_DB_USERNAME`、`QUANTFUND_DB_PASSWORD` |
+| Redis | `QUANTFUND_REDIS_HOST`、`QUANTFUND_REDIS_PORT`、`QUANTFUND_REDIS_PASSWORD` |
+| DeepSeek | `DEEPSEEK_ENABLED`、`DEEPSEEK_MOCK_ENABLED`、`DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL` |
+| 基金数据 | `QUANTFUND_FUND_MOCK_FALLBACK_ENABLED` |
+| Quant Engine | `QUANT_ENGINE_ENABLED`、`QUANT_ENGINE_BASE_URL`、`QUANT_ENGINE_MODEL_VERSION`、各类阈值与超时 |
+| Scheduler | `QUANTFUND_SCHEDULER_ENABLED`、`QUANTFUND_SCHEDULER_SCREENER_ENABLED`、各市场节假日 |
+| Screener | `QUANTFUND_SCREENER_*` 推荐等级和验证样本阈值 |
+
+完整默认值见 [`application.yml`](src/main/resources/application.yml)，Compose 环境示例见 [`.env.docker.example`](.env.docker.example)。
+
+默认行为：
+
+- 基金数据优先使用东方财富真实数据源，Mock fallback 关闭。
+- Python 量化引擎启用，地址为 `http://127.0.0.1:8091`，Java fallback 关闭。
+- DeepSeek 路径启用但 Mock 关闭；没有 Key 或调用失败时返回保守结果。
+- 定时任务和基金优选定时流水线启用，可分别通过环境变量关闭。
+
+## API 分组
+
+| 前缀 | 模块 |
+| --- | --- |
+| `/api/auth` | 用户与登录 |
+| `/api/funds` | 基金数据 |
+| `/api/portfolios`、`/api/holdings` | 账户与持仓 |
+| `/api/trades`、`/api/investment-plans` | 模拟交易与定投 |
+| `/api/strategies` | Java 策略与风险偏好 |
+| `/api/quant`、`/api/backtests` | Python 量化与回测 |
+| `/api/fund-screener` | 基金优选 |
+| `/api/ai-analysis` | AI 分析 |
+| `/api/dashboard`、`/api/analytics` | 驾驶舱与收益分析 |
+| `/api/system` | 配置和日志 |
+
+详细说明见 [文档中心](../docs/README.md#api-与模块文档)，实时请求/响应结构以 Knife4j/OpenAPI 为准。
+
+## 定时任务
+
+定时任务使用 `Asia/Shanghai` 时区，主要覆盖：
+
+- 09:05 到期定投生成、09:10 到期在途交易结算；
+- A 股交易时段每 2 分钟刷新盘中估值；
+- 日内多个检查点生成量化信号，14:50/14:55 生成重点 AI 分析；
+- 15:30–22:00 尝试同步正式净值；
+- 23:00 持仓快照、周五 23:30 周复盘检查点；
+- 21:30–23:50 基金优选同步、因子、评分和增量验证。
+
+完整时间表见[定时任务文档](../docs/api/scheduler.md)。
+
+## 测试
+
+```powershell
+mvn test
 ```
 
-OpenAPI 页面：
+测试覆盖 Controller、Service、策略规则、数据源、AI 校验、AOP、调度、交易日历、基金优选、量化分析和回测编排。
 
-```text
-http://localhost:8080/swagger-ui.html
-```
+## 延伸阅读
 
-Knife4j 页面：
-
-```text
-http://localhost:8080/doc.html
-```
-
-## 后续待完善
-
-- 前后端真实接口联调
-- Docker / 部署脚本
-- 更多集成测试和端到端测试
-
-## 第三批后端已生成
-
-第三批后端部分已生成：
-
-- 用户登录、注册、退出、当前用户、资料修改、改密接口
-- 重置密码预留接口
-- Sa-Token 统一登录拦截配置
-- BCrypt 密码加密
-- `UserContext` 当前用户上下文
-- `user_account` 实体、Mapper、DTO、VO、Service
-- 登录鉴权相关测试示例
-
-## 第四批已生成
-
-第四批已生成企业级注解与 AOP 横切能力：
-
-- `@RequireLogin`
-- `@DataScope`
-- `@OperationLog`
-- `@RateLimit`
-- `@RepeatSubmit`
-- `RequireLoginAspect`
-- `DataScopeAspect`
-- `OperationLogAspect`
-- `RateLimitAspect`
-- `RepeatSubmitAspect`
-- `OperationLogEntity`
-- `OperationLogMapper`
-- `OperationLogService`
-- `ResourceOwnerService`
-- `ResourceOwnerLookup`
-- `RedisKeyConstants`
-- `SensitiveDataMaskUtil`
-- `RequestFingerprintUtil`
-
-说明文档见 `../docs/api/aop.md`。
-
-## 第五批已生成
-
-第五批已生成基金数据源模块：
-
-- `FundDataSourceAdapter`
-- `EastMoneyFundDataSourceAdapter`
-- `MockFundDataSourceAdapter`
-- 基金搜索、基础信息、历史净值、当天估值、手动刷新接口
-- 重仓股票、关联主题、同类排名接口
-- Redis 缓存和手动刷新冷却
-- 外部 API 调用日志 `api_call_log`
-- `fund_info`、`fund_nav_daily`、`fund_estimate_intraday` 实体和 Mapper
-
-说明文档见 `../docs/api/fund-datasource.md`。
-
-## 第六批已生成
-
-第六批已生成账户、持仓和模拟交易模块：
-
-- `PortfolioAccount`、`FundHolding`、`TradeRecord` 实体和 Mapper
-- 账户创建、更新、列表、详情、汇总、重算接口
-- 持仓创建、更新、删除、列表、详情、收益重算接口
-- 加仓、减仓、定投、转入、转出模拟交易记录接口
-- 完成状态的模拟交易会同步更新持仓，并重算账户汇总
-- `PORTFOLIO_ACCOUNT`、`FUND_HOLDING`、`TRADE_RECORD` 数据归属查询已接入 `@DataScope`
-- 买卖相关响应包含“仅为模拟操作，并非真实交易”和“仅供参考，不构成投资建议，不承诺收益”
-
-说明文档见 `../docs/api/portfolio-trade.md`。
-
-## 第七批已生成
-
-第七批已生成策略引擎模块：
-
-- `StrategyConfig`、`StrategySignal`、`RiskProfile` 实体和 Mapper
-- 基金分类服务、策略上下文和策略规则接口
-- 回撤止盈、动态梯度止盈、固定分批止盈、仓位监控、回撤低吸、风险提示规则
-- 单持仓策略分析、账户整体策略分析、策略信号查询接口
-- 策略配置和风险偏好接口
-- `STRATEGY_CONFIG`、`STRATEGY_SIGNAL`、`RISK_PROFILE` 数据归属查询已接入 `@DataScope`
-- 策略信号响应包含“仅供参考，不构成投资建议，不承诺收益”
-
-说明文档见 `../docs/api/strategy.md`。
-
-## 第八批已生成
-
-第八批已生成 AI 分析模块：
-
-- DeepSeek OpenAI-compatible `/chat/completions` 客户端
-- `response_format: {"type": "json_object"}` JSON 输出约束
-- AI Prompt 模板、结构化输入、JSON 校验和 WATCH 降级
-- `AiAnalysisReport` 实体和 Mapper
-- 单持仓 AI 分析、账户持仓批量 AI 分析、历史报告、重新生成接口
-- 默认 AI 关闭、mock 兜底开启，无真实 Key 也能本地启动
-- `AI_ANALYSIS_REPORT` 数据归属查询已接入 `@DataScope`
-- AI 响应包含“仅供参考，不构成投资建议，不承诺收益”
-
-说明文档见 `../docs/api/ai-analysis.md`。
-
-## 第九批已生成
-
-第九批已生成定时任务模块：
-
-- `@EnableScheduling` 已接入 Spring Scheduler
-- 交易日判断服务，支持周末跳过和环境变量配置节假日
-- 盘中估值刷新任务：09:30-11:30、13:00-15:00 交易时段
-- 14:30、14:45、14:55 重点持仓 AI 分析任务
-- 20:00 官方净值同步任务
-- 23:00 持仓快照任务
-- 周五 23:30 周复盘检查点任务
-- `HoldingSnapshot`、`SchedulerTaskLog` 实体和 Mapper
-- `scheduler_task_log` 任务执行日志表
-- 批量任务随机延迟，降低外部数据源压力
-- 定时任务不接入真实交易接口，只生成模拟分析和数据同步
-
-说明文档见 `../docs/api/scheduler.md`。
-
-## 第十批后端补充已生成
-
-本批补齐系统配置与日志查询接口：
-
-- `DataSourceConfig` 实体和 Mapper
-- 数据源配置查询、新增/保存、更新接口
-- 全局数据源配置 + 用户覆盖配置合并规则
-- 操作日志分页查询接口
-- API 调用日志分页查询接口
-- 日志查询按当前用户隔离，避免跨用户泄露
-
-说明文档见 `../docs/api/system-management.md`。
-
-## 第十一批后端补充已生成
-
-本批补齐基金量化驾驶舱聚合接口：
-
-- `/api/dashboard/overview` 首页总览接口
-- 账户资产总览聚合
-- Top 10 持仓基金
-- 仓位分布数据
-- 近 30 天收益走势
-- 最新策略信号
-- 今日 AI 操作建议
-- 今日估值刷新状态
-- 风险预警数量和 AI 建议数量
-- 响应统一包含投资建议免责声明
-
-说明文档见 `../docs/api/dashboard.md`。
-
-## 第十二批后端补充已生成
-
-本批补齐盈亏分析与盈亏日历接口：
-
-- `/api/analytics/profit` 盈亏分析接口
-- `/api/analytics/profit-calendar` 盈亏日历接口
-- 当日、本周、本月、今年、全部收益统计
-- 选定区间收益走势
-- 每日收益热力等级
-- 盈利 TOP5 和亏损 TOP5
-- 指数对比、盈利用户占比、跑赢指数统计预留状态说明
-- 接口只读，不触发真实交易或买卖建议
-
-说明文档见 `../docs/api/analytics.md`。
+- [项目总体设计](../docs/01-project-overall-design.md)
+- [本地开发与联调](../docs/deploy/local-integration.md)
+- [API 与模块文档](../docs/README.md#api-与模块文档)
+- [Python 量化引擎](../quant-engine/README.md)

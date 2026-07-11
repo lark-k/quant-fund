@@ -1,6 +1,6 @@
 # QuantFund AI Analysis API
 
-This batch implements the DeepSeek-backed AI analysis module for `QuantFund`.
+This document describes the DeepSeek-backed AI analysis module for `QuantFund`.
 
 Important safety boundary:
 
@@ -31,6 +31,7 @@ Configuration keys:
 - `quantfund.ai.timeout-ms`
 - `quantfund.ai.max-tokens`
 - `quantfund.ai.reasoning-enabled`
+- `quantfund.ai.account-analysis-concurrency`
 
 Environment variables:
 
@@ -42,6 +43,7 @@ Environment variables:
 - `DEEPSEEK_TIMEOUT_MS`
 - `DEEPSEEK_MAX_TOKENS`
 - `DEEPSEEK_REASONING_ENABLED`
+- `DEEPSEEK_ACCOUNT_ANALYSIS_CONCURRENCY`
 
 Default local behavior enables the DeepSeek integration path and disables mock fallback. The backend can still start without a real DeepSeek key, but analysis calls will return a conservative `WATCH` fallback with `fallbackUsed=true` instead of mock content.
 
@@ -84,6 +86,11 @@ The input includes:
 - Single fund position rate
 - User risk level
 - Recent strategy signals
+- Latest deterministic quant action, score breakdown, metrics, reasons and risks when available
+
+For account analysis, the backend limits concurrent AI calls with
+`DEEPSEEK_ACCOUNT_ANALYSIS_CONCURRENCY` (default `5`) so one large account does
+not create an unbounded request burst.
 
 ## Required AI JSON Shape
 

@@ -1,52 +1,65 @@
-# QuantFund 本地联调说明
+# QuantFund 本地开发与联调
 
-本文档用于把 `quant-fund-server` 和 `quant-fund-web` 从 mock 浏览切换到本地真实接口联调。
+本文从空环境启动完整 QuantFund：MySQL、Redis、Python 量化引擎、Spring Boot 后端和 Vue 前端。命令默认从仓库根目录执行，并以 Windows PowerShell 为例。
 
-## 1. 准备 MySQL 和 Redis
+## 1. 环境要求
 
-- MySQL 8.x：创建数据库 `quant_fund`。
-- Redis：本地默认 `localhost:6379`。
-
-### 方式 A：使用 Docker Compose 依赖服务
-
-如果本机已有 MySQL / Redis 或不想使用本机 root 账号，可以直接启动项目专用依赖：
-
-```bash
-docker compose up -d mysql redis
-```
-
-Compose 会启动：
-
-| 服务 | 容器 | 本机端口 | 说明 |
-| --- | --- | --- | --- |
-| MySQL 8.x | `quantfund-mysql` | `3307` | 自动初始化 `docs/sql/001_schema.sql` |
-| Redis 7.x | `quantfund-redis` | `6380` | 开启 AOF 持久化 |
-
-后端联调配置：
-
-```bash
-cd quant-fund-server
-copy .env.docker.example .env
-```
-
-如果使用 PowerShell，也可以执行：
+| 工具 | 要求/用途 |
+| --- | --- |
+| JDK | 21 |
+| Maven | 3.9+ |
+| Python | 3.11+ |
+| Node.js / npm | 前端和 smoke 脚本 |
+| Docker Compose | 推荐用于 MySQL 8.4 和 Redis 7.4 |
 
 ```powershell
-Copy-Item .env.docker.example .env
+java -version
+mvn -version
+python --version
+node --version
+docker compose version
 ```
 
-### 方式 B：使用本机已有 MySQL / Redis
+## 2. 初始化数据库结构
 
-初始化数据库：
+### 2.1 启动 Compose 依赖
 
-```bash
-mysql -uroot -p < docs/sql/001_schema.sql
+```powershell
+docker compose up -d mysql redis
+docker compose ps
 ```
 
-如需导入本地联调用的演示组合数据，可继续执行：
+| 服务 | 本机地址 | 凭据 |
+| --- | --- | --- |
+| MySQL | `127.0.0.1:3307/quant_fund` | `quantfund_app` / `quantfund_app_password` |
+| MySQL root | `127.0.0.1:3307` | `root` / `quantfund_root_password` |
+| Redis | `127.0.0.1:6380` | 无密码，DB 0 |
 
-```bash
-mysql -uroot -p < docs/sql/002_seed_demo.sql
+等待两个容器变为 healthy 后再执行后续步骤。
+
+### 2.2 执行 SQL
+
+Compose 仅在**首次创建空 MySQL 数据卷**时自动执行 `001_schema.sql`。当前代码还依赖 `003`–`010`，新环境必须按编号执行一次：
+
+```powershell
+$schemaScripts = Get-ChildItem .\docs\sql\*.sql |
+  Where-Object Name -NotIn @('001_schema.sql', '002_seed_demo.sql') |
+  Sort-Object Name
+
+foreach ($script in $schemaScripts) {
+  Write-Host "Applying $($script.Name)"
+  Get-Content -Raw -Encoding UTF8 $script.FullName |
+    docker compose exec -T mysql mysql -uroot -pquantfund_root_password quant_fund
+}
+```
+
+> `003`–`010` 是编号增量脚本，不是完整的幂等迁移框架，部分脚本不可重复运行。
+
+需要本地演示数据时再执行：
+
+```powershell
+Get-Content -Raw -Encoding UTF8 .\docs\sql\002_seed_demo.sql |
+  docker compose exec -T mysql mysql -uroot -pquantfund_root_password quant_fund
 ```
 
 演示账号：
@@ -56,123 +69,178 @@ username: quantdemo
 password: QuantFund2026
 ```
 
-`002_seed_demo.sql` 可重复执行。脚本只会重置 `quantdemo` 演示用户下的账户、持仓、模拟交易、策略信号、AI 报告和相关配置，不会写入任何本机数据库密码。
+`002_seed_demo.sql` 可重复执行，只重置 `quantdemo` 用户的演示业务数据。
 
-后端环境变量示例见 `quant-fund-server/.env.example`。可以复制为 `quant-fund-server/.env` 并填写本机 MySQL / Redis 配置；`.env` 已被仓库忽略，不要把真实密码、Token、API Key 提交到仓库。
+### 2.3 使用已有 MySQL / Redis
 
-如果需要启用真实 DeepSeek 调用，在 `quant-fund-server/.env` 中设置：
+不使用 Compose 时，在 MySQL 8.x 中按 `001`、`003`–`010` 的顺序执行脚本，再按需执行 `002`。将连接信息写入 `quant-fund-server/.env`：
 
 ```properties
-DEEPSEEK_ENABLED=true
-DEEPSEEK_MOCK_ENABLED=false
-DEEPSEEK_API_KEY=your_deepseek_api_key
+QUANTFUND_DB_URL=jdbc:mysql://localhost:3306/quant_fund?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+QUANTFUND_DB_USERNAME=root
+QUANTFUND_DB_PASSWORD=your_password
+QUANTFUND_REDIS_HOST=localhost
+QUANTFUND_REDIS_PORT=6379
 ```
 
-`DEEPSEEK_MOCK_ENABLED=false` 表示智能分析优先调用真实 DeepSeek；缺少 Key、调用失败或返回格式异常时会返回带 `fallbackUsed=true` 的保守 `WATCH` 兜底结果，不再伪装为 mock 分析。真实 API Key 只放在 `.env` 或系统环境变量中，不要写入源码、SQL、README 或提交记录。
+## 3. 启动 Quant Engine
 
-## 2. 启动后端
+```powershell
+cd .\quant-engine
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+uvicorn app.main:app --host 127.0.0.1 --port 8091 --reload
+```
 
-```bash
-cd quant-fund-server
+不创建 `.env` 时会使用 `app/core/config.py` 的本地默认值。仓库 `quant-engine/.env.example` 中的早期模型版本值需要在复制后改为当前 `rule-v1.36.0`。
+
+检查：
+
+```powershell
+curl.exe http://127.0.0.1:8091/api/v1/health
+```
+
+预期 `status` 为 `UP`，模型版本为 `rule-v1.36.0`。LightGBM 默认关闭，不影响普通量化和回测功能。
+
+## 4. 启动 Server
+
+打开新的 PowerShell，回到仓库根目录：
+
+```powershell
+cd .\quant-fund-server
+Copy-Item .env.docker.example .env
 mvn spring-boot:run
 ```
 
-如果用户级 Maven 仓库不可写，可使用项目内仓库：
+如果用户 Maven 仓库不可写：
 
-```bash
-cd quant-fund-server
+```powershell
 mvn "-Dmaven.repo.local=.m2/repository" spring-boot:run
 ```
 
-健康检查：
+检查：
 
-```text
-GET http://localhost:8080/api/health
+```powershell
+curl.exe http://127.0.0.1:8080/api/health
+curl.exe http://127.0.0.1:8080/api/health/dependencies
 ```
 
-依赖检查：
-
-```text
-GET http://localhost:8080/api/health/dependencies
-```
-
-如果注册或登录接口返回 500，优先查看依赖检查中的 `database.status` 和错误信息，确认 `.env` 中的 `QUANTFUND_DB_USERNAME` / `QUANTFUND_DB_PASSWORD` 是否匹配本机 MySQL。
-
-当使用 Compose 依赖时，依赖检查应显示：
-
-```json
-{
-  "database": { "status": "UP" },
-  "redis": { "status": "UP" }
-}
-```
+依赖结果中的 `database.status` 和 `redis.status` 应为 `UP`。
 
 接口文档：
 
-```text
-http://localhost:8080/doc.html
-http://localhost:8080/swagger-ui.html
+- Knife4j：<http://127.0.0.1:8080/doc.html>
+- Swagger UI：<http://127.0.0.1:8080/swagger-ui.html>
+- OpenAPI JSON：<http://127.0.0.1:8080/v3/api-docs>
+
+## 5. 启动 Web
+
+打开新的 PowerShell，回到仓库根目录：
+
+```powershell
+cd .\quant-fund-web
+Copy-Item .env.example .env
+npm install
+npm run dev
 ```
 
-## 3. 启动前端
-
-前端默认使用后端真实接口和真实基金数据源。复制或调整 `quant-fund-web/.env.example`：
+打开 <http://127.0.0.1:5173>。默认配置：
 
 ```env
 VITE_USE_MOCK=false
 VITE_API_BASE_URL=/api
 ```
 
-只有在开发演示或后端不可用时，才显式设置 `VITE_USE_MOCK=true` 使用前端 mock 数据。
+Vite 会把 `/api` 代理到 `http://127.0.0.1:8080`。只有前端演示或后端不可用时才设置 `VITE_USE_MOCK=true`；回测等部分功能仍需要真实后端。
 
-启动前端：
+## 6. DeepSeek 配置
 
-```bash
-cd quant-fund-web
-npm install
-npm run dev
+`.env.docker.example` 默认使用本地 Mock AI，方便没有密钥时启动。使用真实 DeepSeek 时修改 `quant-fund-server/.env`：
+
+```properties
+DEEPSEEK_ENABLED=true
+DEEPSEEK_MOCK_ENABLED=false
+DEEPSEEK_API_KEY=your_deepseek_api_key
+DEEPSEEK_MODEL=deepseek-v4-flash
 ```
 
-Vite 会把 `/api` 代理到 `http://127.0.0.1:8080`。
+真实 Key 只能放在 `.env` 或系统环境变量中。缺少 Key、超时或返回格式不合法时，后端返回带 `fallbackUsed=true` 的保守 `WATCH`，不会把 Mock 内容伪装成真实分析。
 
-## 4. 联调检查点
+## 7. 联调检查
 
-- 登录、注册接口应返回后端 `ApiResponse.data` 中的 token 和用户信息。
-- 前端 Axios 会自动携带 `Authorization` token。
-- HTTP 401 或业务码 `401` 都会清理前端登录态并跳转登录页。
-- 后端业务接口必须基于 `UserContext` 获取当前用户，不允许由前端传入 `user_id` 决定归属。
-- 所有买卖建议继续展示：`仅供参考，不构成投资建议，不承诺收益`。
-- 所有交易相关页面继续展示：`仅为模拟操作，并非真实交易`。
+### 7.1 基础闭环
 
-### 真实基金搜索入持仓 smoke
+- 注册/登录后能获取 token 和用户信息；
+- 后续请求自动携带 `Authorization`；
+- 创建账户、搜索基金、加入持仓并回读；
+- `GET /api/quant/health` 能访问 8091 量化引擎；
+- 基金详情能获取真实净值、估值或明确的外部数据错误；
+- 模拟交易完成后持仓和账户汇总同步变化；
+- 回测页能够先刷新本地净值再运行批量回测。
 
-后端启动后，可以运行真实数据源联调脚本，验证“东方财富基金搜索 -> 新人账户创建 -> 加入持仓 -> 持仓回读”完整链路：
+### 7.2 真实数据 smoke
 
-```bash
-node tools/real-fund-holding-smoke.mjs
+在仓库根目录运行：
+
+```powershell
+node .\tools\real-fund-detail-smoke.mjs
+node .\tools\real-fund-holding-smoke.mjs
 ```
 
-也可以指定后端地址和搜索词：
+指定后端和搜索词：
 
-```bash
-node tools/real-fund-holding-smoke.mjs --base-url=http://127.0.0.1:8080 --exact-keyword=161725 --fuzzy-keyword=白酒
+```powershell
+node .\tools\real-fund-holding-smoke.mjs `
+  --base-url=http://127.0.0.1:8080 `
+  --exact-keyword=161725 `
+  --fuzzy-keyword=白酒
 ```
 
-脚本会创建一个临时 smoke 用户，不依赖前端 mock 数据，不写入真实密钥；如需覆盖用户名、密码、昵称或搜索词，可使用 `QUANTFUND_SMOKE_*` 环境变量或同名命令行参数。
+脚本创建临时 smoke 用户，不依赖前端 Mock，也不需要真实密钥。
 
-## 5. 当前环境备注
+## 8. 常见问题
 
-当前机器上 `npm run build` 可能因为 Node 子进程权限返回 `spawn EPERM`，该问题发生在 Vite / esbuild 启动子进程阶段。`npm run typecheck` 可用于先验证 TypeScript 类型正确性。
-如果直接运行 `node_modules/@esbuild/win32-x64/esbuild.exe --version` 成功，而普通沙箱内 `npm run build` 失败，可在允许子进程执行的终端中重新运行构建。
+### 后端提示表或字段不存在
 
-停止 Compose 依赖服务：
+确认 `003`–`010` 已按编号执行一次。基金优选依赖 `008`–`010`，量化信号和回测依赖 `006`。
 
-```bash
+### 修改 SQL 后重启 MySQL 未生效
+
+`/docker-entrypoint-initdb.d` 只在空数据卷初始化时执行。已有环境应手动执行新增脚本。仅在确认可以丢弃本地数据时运行 `docker compose down -v`。
+
+### 注册或登录返回 500
+
+先查看 `/api/health/dependencies`，确认 `.env` 中的数据库用户名、密码、端口与实际环境一致。
+
+### 量化分析或回测失败
+
+确认 `http://127.0.0.1:8091/api/v1/health` 可访问，并检查后端 `QUANT_ENGINE_BASE_URL`。默认 `QUANT_ENGINE_FALLBACK_TO_JAVA_RULES=false`。
+
+### 基金数据为空
+
+真实模式依赖东方财富公开接口和当前网络。查看系统配置页的数据源健康状态、`api_call_log` 和后端日志。基金 Mock fallback 默认关闭。
+
+### 前端 401
+
+重新登录并检查本地 token。前端遇到 HTTP 401 或业务码 401 会自动清理登录态并跳转登录页。
+
+### `npm run build` 出现 `spawn EPERM`
+
+先执行 `npm run typecheck` 排除类型错误，再在允许 Vite/esbuild 创建子进程的终端运行构建。
+
+## 9. 停止与清理
+
+停止依赖但保留数据：
+
+```powershell
 docker compose down
 ```
 
-如果需要清空本地联调数据：
+删除本地 MySQL/Redis 数据卷：
 
-```bash
+```powershell
 docker compose down -v
 ```
+
+> `down -v` 会永久删除 Compose 中的本地数据库和缓存数据。

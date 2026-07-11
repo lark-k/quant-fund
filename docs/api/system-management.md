@@ -2,6 +2,17 @@
 
 系统配置接口用于前端“系统配置页”，日志接口用于排查数据源、AI、策略和操作问题。所有接口都需要登录。
 
+## 运行状态
+
+```http
+GET /api/system/data-source-health
+GET /api/system/ai-runtime-config
+```
+
+- `data-source-health` 返回各数据源的启用状态、优先级、最近调用和健康说明；
+- `ai-runtime-config` 返回当前 AI 是否启用、是否为 Mock、provider、model、base URL、超时和推理开关等非敏感运行配置；
+- 任何接口都不会返回真实 API Key、密码或 Token。
+
 ## 数据源配置
 
 ### 查询数据源配置
