@@ -21,6 +21,7 @@ import com.lk.quantfund.vo.screener.FundScreenerRankItemVO;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -29,12 +30,20 @@ class FundQualityScoreServiceImplTest {
     private final ScreenerFactorSnapshotMapper factorMapper = mock(ScreenerFactorSnapshotMapper.class);
     private final ScreenerQualityScoreMapper scoreMapper = mock(ScreenerQualityScoreMapper.class);
     private final ScreenerFundUniverseMapper universeMapper = mock(ScreenerFundUniverseMapper.class);
+    private final FundScreenerFreshnessPolicy freshnessPolicy = mock(FundScreenerFreshnessPolicy.class);
     private final FundQualityScoreServiceImpl service = new FundQualityScoreServiceImpl(
             factorMapper,
             scoreMapper,
             universeMapper,
-            new ObjectMapper()
+            new ObjectMapper(),
+            freshnessPolicy
     );
+
+    @BeforeEach
+    void setUpFreshness() {
+        when(freshnessPolicy.isFresh(any())).thenReturn(true);
+        when(freshnessPolicy.requiredNavDate()).thenReturn(LocalDate.of(2026, 7, 21));
+    }
 
     @Test
     void shouldGenerateQualityScoreWithReasonsAndRisks() {
@@ -80,6 +89,7 @@ class FundQualityScoreServiceImplTest {
         ScreenerQualityScore score = score("000001");
         when(scoreMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(score));
         when(universeMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(universe("000001", "MIXED"));
+        when(factorMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(factor("000001")));
         when(factorMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(factor("000001"));
 
         var page = service.rank(new FundScreenerQueryRequest(null, "120d", null, null, null, true, false, null, 1, 20, "qualityScore"));
@@ -143,6 +153,46 @@ class FundQualityScoreServiceImplTest {
     }
 
     @Test
+    void shouldJoinRankMetricsToTheSameScoreDate() {
+        ScreenerQualityScore score = score("000001");
+        ScreenerFactorSnapshot oldFactor = factor("000001");
+        oldFactor.setFactorDate(LocalDate.of(2026, 7, 20));
+        oldFactor.setReturn120d(new BigDecimal("99.0000"));
+        ScreenerFactorSnapshot batchFactor = factor("000001");
+        when(scoreMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(score));
+        when(universeMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(universe("000001", "MIXED")));
+        when(factorMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(oldFactor, batchFactor));
+
+        var page = service.rank(new FundScreenerQueryRequest(null, "120d", null, null, null, true, false, null, 1, 20, "qualityScore"));
+
+        assertThat(page.total()).isEqualTo(1);
+        assertThat(page.records().getFirst().return120d()).isEqualTo(16.0);
+        assertThat(page.records().getFirst().scoreDate()).isEqualTo("2026-07-21");
+    }
+
+    @Test
+    void shouldScoreOnlyTheLatestFactorBatch() {
+        ScreenerFactorSnapshot current = factor("000001");
+        ScreenerFactorSnapshot stale = factor("000002");
+        stale.setFactorDate(LocalDate.of(2026, 7, 20));
+        when(factorMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(current, stale));
+        when(universeMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(
+                universe("000001", "MIXED"),
+                universe("000002", "MIXED")
+        ));
+        when(scoreMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
+
+        var result = service.refreshScore();
+
+        ArgumentCaptor<ScreenerQualityScore> captor = ArgumentCaptor.forClass(ScreenerQualityScore.class);
+        verify(scoreMapper).insert(captor.capture());
+        assertThat(captor.getValue().getFundCode()).isEqualTo("000001");
+        assertThat(result.status()).isEqualTo("PARTIAL_SUCCESS");
+        assertThat(result.successCount()).isEqualTo(1);
+        assertThat(result.skippedCount()).isEqualTo(1);
+    }
+
+    @Test
     void shouldGenerateV2ScoreDimensionsAndRankBasedRecommendation() {
         ScreenerFactorSnapshot factor = factor("000001");
         factor.setReturnDrawdownRatio120d(new BigDecimal("2.5000"));
@@ -175,7 +225,8 @@ class FundQualityScoreServiceImplTest {
                 scoreMapper,
                 universeMapper,
                 new ObjectMapper(),
-                properties
+                properties,
+                freshnessPolicy
         );
         when(factorMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(factor("000001")));
         when(universeMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(universe("000001", "MIXED")));

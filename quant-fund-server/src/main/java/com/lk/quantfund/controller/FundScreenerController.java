@@ -113,9 +113,16 @@ public class FundScreenerController {
     @RateLimit(key = "fund-screener:refresh-score", windowSeconds = 60, maxRequests = 10)
     public ApiResponse<FundScreenerTaskResultVO> refreshScore() {
         long started = System.currentTimeMillis();
-        List<FundScreenerTaskResultVO> steps = List.of(
-                fundQualityScoreService.refreshScore()
-        );
+        List<FundScreenerTaskResultVO> steps = new ArrayList<>();
+        FundScreenerTaskResultVO navResult = fundScreenerNavService.syncNav();
+        steps.add(navResult);
+        if (!"FAILED".equals(navResult.status())) {
+            FundScreenerTaskResultVO factorResult = fundFactorService.refreshFactors();
+            steps.add(factorResult);
+            if ("SUCCESS".equals(factorResult.status()) || "PARTIAL_SUCCESS".equals(factorResult.status())) {
+                steps.add(fundQualityScoreService.refreshScore());
+            }
+        }
         return ApiResponse.success(combine("REFRESH_SCORE", started, steps));
     }
 
@@ -123,13 +130,18 @@ public class FundScreenerController {
     @RateLimit(key = "fund-screener:refresh-full", windowSeconds = 60, maxRequests = 3)
     public ApiResponse<FundScreenerTaskResultVO> refreshFull() {
         long started = System.currentTimeMillis();
-        List<FundScreenerTaskResultVO> steps = List.of(
-                fundUniverseService.syncUniverse(),
-                fundScreenerNavService.syncNav(),
-                fundUniverseService.rebuildUniverse(),
-                fundFactorService.refreshFactors(),
-                fundQualityScoreService.refreshScore()
-        );
+        List<FundScreenerTaskResultVO> steps = new ArrayList<>();
+        steps.add(fundUniverseService.syncUniverse());
+        steps.add(fundUniverseService.rebuildUniverse());
+        FundScreenerTaskResultVO navResult = fundScreenerNavService.syncNav();
+        steps.add(navResult);
+        if (!"FAILED".equals(navResult.status())) {
+            FundScreenerTaskResultVO factorResult = fundFactorService.refreshFactors();
+            steps.add(factorResult);
+            if ("SUCCESS".equals(factorResult.status()) || "PARTIAL_SUCCESS".equals(factorResult.status())) {
+                steps.add(fundQualityScoreService.refreshScore());
+            }
+        }
         return ApiResponse.success(combine("REFRESH_FULL", started, steps));
     }
 
@@ -159,9 +171,15 @@ public class FundScreenerController {
         for (FundScreenerTaskResultVO step : steps) {
             errors.addAll(step.errorSummaries());
         }
-        String status = failure == 0 ? "SUCCESS" : success > 0 ? "PARTIAL_SUCCESS" : "FAILED";
+        boolean hasFailedStep = steps.stream().anyMatch(step -> "FAILED".equals(step.status()));
+        boolean hasPartialStep = steps.stream().anyMatch(step -> "PARTIAL_SUCCESS".equals(step.status()));
+        boolean allSkipped = !steps.isEmpty() && steps.stream().allMatch(step -> "SKIPPED".equals(step.status()));
+        String status = hasFailedStep
+                ? success > 0 ? "PARTIAL_SUCCESS" : "FAILED"
+                : hasPartialStep ? "PARTIAL_SUCCESS" : allSkipped ? "SKIPPED" : "SUCCESS";
         String message = steps.stream()
-                .map(step -> step.taskName() + "=" + step.status() + "(" + step.successCount() + "/" + step.failureCount() + ")")
+                .map(step -> step.taskName() + "=" + step.status() + "(成功" + step.successCount()
+                        + "/失败" + step.failureCount() + "/跳过" + step.skippedCount() + ")：" + step.message())
                 .reduce((left, right) -> left + "; " + right)
                 .orElse("no steps");
         return new FundScreenerTaskResultVO(

@@ -166,7 +166,11 @@ async function refreshScore() {
   refreshing.value = true
   try {
     const result = await quantApi.refreshFundScreenerScore()
-    ElMessage.info(result.message || '评分刷新任务已提交')
+    const message = result.message || '净值、因子与评分刷新完成'
+    const level = taskResultMessageLevel(result.status)
+    if (level === 'error') ElMessage.error(message)
+    else if (level === 'warning') ElMessage.warning(message)
+    else ElMessage.success(message)
     await loadRank()
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '评分刷新失败')
@@ -179,7 +183,11 @@ async function refreshFullPath() {
   fullRefreshing.value = true
   try {
     const result = await quantApi.refreshFundScreenerFull()
-    ElMessage.success(result.message || '完整同步路径执行完成')
+    const message = result.message || '完整同步路径执行完成'
+    const level = taskResultMessageLevel(result.status)
+    if (level === 'error') ElMessage.error(message)
+    else if (level === 'warning') ElMessage.warning(message)
+    else ElMessage.success(message)
     await loadRank()
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '完整同步路径执行失败')
@@ -424,13 +432,13 @@ onMounted(() => {
           <el-table-column label="近6月" width="100" align="right">
             <template #default="{ row }">{{ signedPercent(row.return120d) }}</template>
           </el-table-column>
-          <el-table-column label="近1年" width="100" align="right">
+          <el-table-column label="近1年" width="130" align="right">
             <template #default="{ row }">{{ signedPercent(row.return250d) }}</template>
           </el-table-column>
-          <el-table-column label="最大回撤" width="110" align="right">
+          <el-table-column label="近120日最大回撤" width="140" align="right">
             <template #default="{ row }">{{ signedPercent(row.maxDrawdown120d) }}</template>
           </el-table-column>
-          <el-table-column label="波动率" width="100" align="right">
+          <el-table-column label="近120日年化波动率" width="150" align="right">
             <template #default="{ row }">{{ signedPercent(row.volatility120d) }}</template>
           </el-table-column>
           <el-table-column label="同类百分位" width="120" align="right">

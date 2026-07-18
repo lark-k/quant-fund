@@ -21,6 +21,7 @@ import com.lk.quantfund.vo.screener.FundScreenerScoreBreakdownVO;
 import com.lk.quantfund.vo.screener.FundScreenerTaskResultVO;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -52,37 +53,48 @@ public class FundQualityScoreServiceImpl implements FundQualityScoreService {
     private final ScreenerFundUniverseMapper screenerFundUniverseMapper;
     private final ObjectMapper objectMapper;
     private final QuantFundProperties.ScreenerStrategy screenerStrategy;
+    private final FundScreenerFreshnessPolicy freshnessPolicy;
 
     @Autowired
     public FundQualityScoreServiceImpl(ScreenerFactorSnapshotMapper screenerFactorSnapshotMapper,
                                        ScreenerQualityScoreMapper screenerQualityScoreMapper,
                                        ScreenerFundUniverseMapper screenerFundUniverseMapper,
                                        ObjectMapper objectMapper,
-                                       QuantFundProperties properties) {
+                                       QuantFundProperties properties,
+                                       FundScreenerFreshnessPolicy freshnessPolicy) {
         this.screenerFactorSnapshotMapper = screenerFactorSnapshotMapper;
         this.screenerQualityScoreMapper = screenerQualityScoreMapper;
         this.screenerFundUniverseMapper = screenerFundUniverseMapper;
         this.objectMapper = objectMapper;
         this.screenerStrategy = properties.getScreenerStrategy();
+        this.freshnessPolicy = freshnessPolicy;
     }
 
     FundQualityScoreServiceImpl(ScreenerFactorSnapshotMapper screenerFactorSnapshotMapper,
                                 ScreenerQualityScoreMapper screenerQualityScoreMapper,
                                 ScreenerFundUniverseMapper screenerFundUniverseMapper,
-                                ObjectMapper objectMapper) {
+                                ObjectMapper objectMapper,
+                                FundScreenerFreshnessPolicy freshnessPolicy) {
         this(screenerFactorSnapshotMapper, screenerQualityScoreMapper, screenerFundUniverseMapper,
-                objectMapper, new QuantFundProperties());
+                objectMapper, new QuantFundProperties(), freshnessPolicy);
     }
 
     @Override
     public PageResponse<FundScreenerRankItemVO> rank(FundScreenerQueryRequest request) {
         List<ScreenerQualityScore> scores = screenerQualityScoreMapper.selectList(new LambdaQueryWrapper<ScreenerQualityScore>()
                 .orderByDesc(ScreenerQualityScore::getQualityScore));
-        List<ScreenerQualityScore> latestScores = latestScoresByCode(scores).values().stream().toList();
+        LocalDate batchDate = latestScoreBatchDate(scores);
+        if (batchDate == null) {
+            return PageResponse.of(request.pageNo(), request.pageSize(), 0, List.of());
+        }
+        List<ScreenerQualityScore> batchScores = scores.stream()
+                .filter(score -> batchDate.equals(score.getScoreDate()))
+                .toList();
         Map<String, ScreenerFundUniverse> universeByCode = universesByCode();
-        Map<String, ScreenerFactorSnapshot> latestFactorByCode = latestFactorsByCode();
-        List<FundScreenerRankItemVO> records = latestScores.stream()
-                .map(score -> new RankSource(score, universeByCode.get(score.getFundCode()), latestFactorByCode.get(score.getFundCode())))
+        Map<String, ScreenerFactorSnapshot> factorByCode = factorsByCode(batchDate);
+        List<FundScreenerRankItemVO> records = batchScores.stream()
+                .map(score -> new RankSource(score, universeByCode.get(score.getFundCode()), factorByCode.get(score.getFundCode())))
+                .filter(source -> source.factor() != null)
                 .filter(source -> matches(request, source))
                 .map(source -> toRankItem(source.score(), source.universe(), source.factor()))
                 .sorted(rankComparator(request.sortBy()))
@@ -99,38 +111,29 @@ public class FundQualityScoreServiceImpl implements FundQualityScoreService {
                 .collect(Collectors.toMap(ScreenerFundUniverse::getFundCode, Function.identity(), (left, right) -> left));
     }
 
-    private Map<String, ScreenerQualityScore> latestScoresByCode(List<ScreenerQualityScore> scores) {
-        Map<String, ScreenerQualityScore> latest = new LinkedHashMap<>();
-        for (ScreenerQualityScore score : scores) {
-            if (!StringUtils.hasText(score.getFundCode())) {
-                continue;
-            }
-            ScreenerQualityScore existing = latest.get(score.getFundCode());
-            if (existing == null || isAfter(score, existing)) {
-                latest.put(score.getFundCode(), score);
-            }
-        }
-        return latest;
-    }
-
-    private boolean isAfter(ScreenerQualityScore candidate, ScreenerQualityScore existing) {
-        if (candidate.getScoreDate() == null) {
-            return false;
-        }
-        if (existing.getScoreDate() == null) {
-            return true;
-        }
-        return candidate.getScoreDate().isAfter(existing.getScoreDate());
-    }
-
-    private Map<String, ScreenerFactorSnapshot> latestFactorsByCode() {
-        Map<String, ScreenerFactorSnapshot> factors = new LinkedHashMap<>();
-        screenerFactorSnapshotMapper.selectList(new LambdaQueryWrapper<ScreenerFactorSnapshot>()
-                        .orderByDesc(ScreenerFactorSnapshot::getFactorDate))
+    private Map<String, ScreenerFactorSnapshot> factorsByCode(LocalDate factorDate) {
+        return screenerFactorSnapshotMapper.selectList(new LambdaQueryWrapper<ScreenerFactorSnapshot>()
+                        .eq(ScreenerFactorSnapshot::getFactorDate, factorDate))
                 .stream()
-                .filter(factor -> StringUtils.hasText(factor.getFundCode()))
+                .filter(factor -> factorDate.equals(factor.getFactorDate()) && StringUtils.hasText(factor.getFundCode()))
+                .collect(Collectors.toMap(ScreenerFactorSnapshot::getFundCode, Function.identity(), (left, right) -> left));
+    }
+
+    private Map<String, ScreenerFactorSnapshot> latestFactorsByCode(List<ScreenerFactorSnapshot> factorRows) {
+        Map<String, ScreenerFactorSnapshot> factors = new LinkedHashMap<>();
+        factorRows.stream()
+                .filter(factor -> StringUtils.hasText(factor.getFundCode()) && factor.getFactorDate() != null)
+                .sorted(Comparator.comparing(ScreenerFactorSnapshot::getFactorDate).reversed())
                 .forEach(factor -> factors.putIfAbsent(factor.getFundCode(), factor));
         return factors;
+    }
+
+    private LocalDate latestScoreBatchDate(List<ScreenerQualityScore> scores) {
+        return scores.stream()
+                .map(ScreenerQualityScore::getScoreDate)
+                .filter(Objects::nonNull)
+                .max(LocalDate::compareTo)
+                .orElse(null);
     }
 
     @Override
@@ -140,7 +143,7 @@ public class FundQualityScoreServiceImpl implements FundQualityScoreService {
             return FundScreenerExplainVO.empty(fundCode);
         }
         ScreenerFundUniverse universe = findUniverse(fundCode);
-        ScreenerFactorSnapshot factor = findFactor(fundCode);
+        ScreenerFactorSnapshot factor = findFactor(fundCode, score.getScoreDate());
         return new FundScreenerExplainVO(
                 fundCode,
                 universe == null ? null : universe.getFundName(),
@@ -163,9 +166,26 @@ public class FundQualityScoreServiceImpl implements FundQualityScoreService {
         int success = 0;
         int failed = 0;
         List<String> errors = new ArrayList<>();
-        List<ScreenerFactorSnapshot> factors = latestFactorsByCode().values().stream()
+        List<ScreenerFactorSnapshot> factorRows = screenerFactorSnapshotMapper.selectList(new LambdaQueryWrapper<ScreenerFactorSnapshot>()
+                .orderByDesc(ScreenerFactorSnapshot::getFactorDate));
+        Map<String, ScreenerFactorSnapshot> latestFactorByCode = latestFactorsByCode(factorRows);
+        LocalDate batchDate = latestFactorByCode.values().stream()
+                .map(ScreenerFactorSnapshot::getFactorDate)
+                .filter(Objects::nonNull)
+                .max(LocalDate::compareTo)
+                .orElse(null);
+        if (batchDate == null) {
+            return scoreTaskResult(started, "SKIPPED", 0, 0, 0, errors, null);
+        }
+        if (!freshnessPolicy.isFresh(batchDate)) {
+            errors.add("最新因子批次日期" + batchDate + "早于要求日期" + freshnessPolicy.requiredNavDate());
+            return scoreTaskResult(started, "FAILED", 0, 1, latestFactorByCode.size(), errors, batchDate);
+        }
+        List<ScreenerFactorSnapshot> factors = latestFactorByCode.values().stream()
+                .filter(factor -> batchDate.equals(factor.getFactorDate()))
                 .sorted(Comparator.comparing(ScreenerFactorSnapshot::getFundCode))
                 .toList();
+        int skipped = latestFactorByCode.size() - factors.size();
         Map<String, ScreenerFundUniverse> universeByCode = universesByCode();
         Map<String, ScreenerQualityScore> existingScoreByKey = existingScoresByKey();
         List<ScreenerQualityScore> calculated = new ArrayList<>();
@@ -176,7 +196,9 @@ public class FundQualityScoreServiceImpl implements FundQualityScoreService {
                 success++;
             } catch (RuntimeException exception) {
                 failed++;
-                errors.add(factor.getFundCode() + ": " + exception.getMessage());
+                if (errors.size() < 20) {
+                    errors.add(factor.getFundCode() + ": " + exception.getMessage());
+                }
             }
         }
         calculated.sort(Comparator.comparing(ScreenerQualityScore::getQualityScore, Comparator.nullsLast(BigDecimal::compareTo)).reversed());
@@ -189,15 +211,27 @@ public class FundQualityScoreServiceImpl implements FundQualityScoreService {
             score.setRecommendLevel(recommendLevel(score.getQualityScore(), score.getRankNo(), calculated.size()));
             upsert(score, existingScoreByKey);
         }
+        String status = failed > 0 || skipped > 0 ? "PARTIAL_SUCCESS" : "SUCCESS";
+        return scoreTaskResult(started, status, success, failed, skipped, errors, batchDate);
+    }
+
+    private FundScreenerTaskResultVO scoreTaskResult(long started,
+                                                     String status,
+                                                     int success,
+                                                     int failed,
+                                                     int skipped,
+                                                     List<String> errors,
+                                                     LocalDate batchDate) {
         return new FundScreenerTaskResultVO(
                 "REFRESH_SCORE",
-                failed == 0 ? "SUCCESS" : success > 0 ? "PARTIAL_SUCCESS" : "FAILED",
+                status,
                 success,
                 failed,
-                0,
+                skipped,
                 System.currentTimeMillis() - started,
                 errors,
-                failed == 0 ? "\u57fa\u91d1\u4f18\u9009\u8bc4\u5206\u5237\u65b0\u5b8c\u6210" : "\u57fa\u91d1\u4f18\u9009\u8bc4\u5206\u90e8\u5206\u5931\u8d25",
+                "基金优选评分刷新：批次日期" + (batchDate == null ? "--" : batchDate)
+                        + "，成功" + success + "只，失败" + failed + "只，跳过旧日期" + skipped + "只",
                 LocalDateTime.now()
         );
     }
@@ -474,6 +508,7 @@ public class FundQualityScoreServiceImpl implements FundQualityScoreService {
         factors.put("return60d", factor.getReturn60d());
         factors.put("return120d", factor.getReturn120d());
         factors.put("return250d", factor.getReturn250d());
+        factors.put("return1y", factor.getReturn250d());
         factors.put("maxDrawdown120d", factor.getMaxDrawdown120d());
         factors.put("volatility120d", factor.getVolatility120d());
         factors.put("positiveDayRatio60d", factor.getPositiveDayRatio60d());
@@ -489,19 +524,14 @@ public class FundQualityScoreServiceImpl implements FundQualityScoreService {
     }
 
     private ScreenerQualityScore findScore(String fundCode) {
-        ScreenerQualityScore score = screenerQualityScoreMapper.selectOne(new LambdaQueryWrapper<ScreenerQualityScore>()
-                .eq(ScreenerQualityScore::getFundCode, fundCode)
-                .orderByDesc(ScreenerQualityScore::getScoreDate)
-                .last("LIMIT 1"));
-        if (score != null) {
-            return score;
+        List<ScreenerQualityScore> scores = screenerQualityScoreMapper.selectList(new LambdaQueryWrapper<ScreenerQualityScore>());
+        LocalDate batchDate = latestScoreBatchDate(scores);
+        if (batchDate == null) {
+            return null;
         }
-        return screenerQualityScoreMapper.selectList(new LambdaQueryWrapper<ScreenerQualityScore>()
-                        .eq(ScreenerQualityScore::getFundCode, fundCode)
-                        .orderByDesc(ScreenerQualityScore::getScoreDate))
-                .stream()
-                .filter(item -> Objects.equals(fundCode, item.getFundCode()))
-                .max(Comparator.comparing(ScreenerQualityScore::getScoreDate, Comparator.nullsLast(Comparator.naturalOrder())))
+        return scores.stream()
+                .filter(item -> Objects.equals(fundCode, item.getFundCode()) && batchDate.equals(item.getScoreDate()))
+                .findFirst()
                 .orElse(null);
     }
 
@@ -511,10 +541,10 @@ public class FundQualityScoreServiceImpl implements FundQualityScoreService {
                 .last("LIMIT 1"));
     }
 
-    private ScreenerFactorSnapshot findFactor(String fundCode) {
+    private ScreenerFactorSnapshot findFactor(String fundCode, LocalDate factorDate) {
         return screenerFactorSnapshotMapper.selectOne(new LambdaQueryWrapper<ScreenerFactorSnapshot>()
                 .eq(ScreenerFactorSnapshot::getFundCode, fundCode)
-                .orderByDesc(ScreenerFactorSnapshot::getFactorDate)
+                .eq(ScreenerFactorSnapshot::getFactorDate, factorDate)
                 .last("LIMIT 1"));
     }
 

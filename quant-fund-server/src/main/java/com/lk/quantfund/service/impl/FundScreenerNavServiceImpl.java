@@ -33,17 +33,20 @@ public class FundScreenerNavServiceImpl implements FundScreenerNavService {
     private final ScreenerUniverseFilterMapper screenerUniverseFilterMapper;
     private final ScreenerFundUniverseMapper screenerFundUniverseMapper;
     private final ScreenerFundNavDailyMapper screenerFundNavDailyMapper;
+    private final FundScreenerFreshnessPolicy freshnessPolicy;
 
     public FundScreenerNavServiceImpl(List<FundDataSourceAdapter> adapters,
                                       ScreenerUniverseFilterMapper screenerUniverseFilterMapper,
                                       ScreenerFundUniverseMapper screenerFundUniverseMapper,
-                                      ScreenerFundNavDailyMapper screenerFundNavDailyMapper) {
+                                      ScreenerFundNavDailyMapper screenerFundNavDailyMapper,
+                                      FundScreenerFreshnessPolicy freshnessPolicy) {
         this.adapters = adapters.stream()
                 .sorted(Comparator.comparingInt(FundDataSourceAdapter::priority))
                 .toList();
         this.screenerUniverseFilterMapper = screenerUniverseFilterMapper;
         this.screenerFundUniverseMapper = screenerFundUniverseMapper;
         this.screenerFundNavDailyMapper = screenerFundNavDailyMapper;
+        this.freshnessPolicy = freshnessPolicy;
     }
 
     @Override
@@ -51,20 +54,30 @@ public class FundScreenerNavServiceImpl implements FundScreenerNavService {
         long started = System.currentTimeMillis();
         AtomicInteger savedCounter = new AtomicInteger();
         AtomicInteger failedCounter = new AtomicInteger();
+        AtomicInteger skippedCounter = new AtomicInteger();
         List<String> errors = Collections.synchronizedList(new ArrayList<>());
         List<String> fundCodes = navSyncFundCodes();
-        syncNavInParallel(fundCodes, savedCounter, failedCounter, errors);
+        if (fundCodes.isEmpty()) {
+            skippedCounter.incrementAndGet();
+        } else {
+            syncNavInParallel(fundCodes, savedCounter, failedCounter, skippedCounter, errors);
+        }
         int saved = savedCounter.get();
         int failed = failedCounter.get();
+        int skipped = skippedCounter.get();
+        String status = failed > 0
+                ? saved > 0 ? "PARTIAL_SUCCESS" : "FAILED"
+                : saved > 0 ? "SUCCESS" : "SKIPPED";
         return new FundScreenerTaskResultVO(
                 "SYNC_NAV",
-                failed == 0 ? "SUCCESS" : saved > 0 ? "PARTIAL_SUCCESS" : "FAILED",
+                status,
                 saved,
                 failed,
-                0,
+                skipped,
                 System.currentTimeMillis() - started,
                 errors,
-                failed == 0 ? "基金优选净值同步完成" : "基金优选净值同步部分失败，已保留历史数据",
+                "基金优选净值同步：新增" + saved + "条，失败" + failed + "只，已是最新" + skipped
+                        + "只，最低新鲜日期" + freshnessPolicy.requiredNavDate(),
                 LocalDateTime.now()
         );
     }
@@ -72,12 +85,13 @@ public class FundScreenerNavServiceImpl implements FundScreenerNavService {
     private void syncNavInParallel(List<String> fundCodes,
                                    AtomicInteger saved,
                                    AtomicInteger failed,
+                                   AtomicInteger skipped,
                                    List<String> errors) {
         ExecutorService executor = Executors.newFixedThreadPool(NAV_SYNC_PARALLELISM);
         try {
             List<Future<?>> futures = new ArrayList<>();
             for (String fundCode : fundCodes) {
-                futures.add(executor.submit(() -> syncOneFund(fundCode, saved, failed, errors)));
+                futures.add(executor.submit(() -> syncOneFund(fundCode, saved, failed, skipped, errors)));
             }
             for (Future<?> future : futures) {
                 try {
@@ -85,11 +99,11 @@ public class FundScreenerNavServiceImpl implements FundScreenerNavService {
                 } catch (InterruptedException exception) {
                     Thread.currentThread().interrupt();
                     failed.incrementAndGet();
-                    errors.add("sync interrupted");
+                    addError(errors, "sync interrupted");
                     break;
                 } catch (ExecutionException exception) {
                     failed.incrementAndGet();
-                    errors.add("sync worker failed: " + exception.getCause().getMessage());
+                    addError(errors, "sync worker failed: " + exception.getCause().getMessage());
                 }
             }
         } finally {
@@ -97,14 +111,38 @@ public class FundScreenerNavServiceImpl implements FundScreenerNavService {
         }
     }
 
-    private void syncOneFund(String fundCode, AtomicInteger saved, AtomicInteger failed, List<String> errors) {
+    private void syncOneFund(String fundCode,
+                             AtomicInteger saved,
+                             AtomicInteger failed,
+                             AtomicInteger skipped,
+                             List<String> errors) {
         try {
-            List<FundNavPointDTO> points = fetchNav(fundCode, startDate(fundCode), LocalDate.now());
+            LocalDate latestStoredDate = latestStoredNavDate(fundCode);
+            LocalDate startDate = latestStoredDate == null ? LocalDate.now().minusDays(420) : latestStoredDate.plusDays(1);
+            List<FundNavPointDTO> points = fetchNav(fundCode, startDate, LocalDate.now());
+            if (points.isEmpty()) {
+                if (freshnessPolicy.isFresh(latestStoredDate)) {
+                    skipped.incrementAndGet();
+                } else {
+                    failed.incrementAndGet();
+                    addError(errors, staleMessage(fundCode, latestStoredDate));
+                }
+                return;
+            }
             upsert(points);
             saved.addAndGet(points.size());
+            LocalDate latestSyncedDate = points.stream()
+                    .map(FundNavPointDTO::navDate)
+                    .filter(java.util.Objects::nonNull)
+                    .max(LocalDate::compareTo)
+                    .orElse(latestStoredDate);
+            if (!freshnessPolicy.isFresh(latestSyncedDate)) {
+                failed.incrementAndGet();
+                addError(errors, staleMessage(fundCode, latestSyncedDate));
+            }
         } catch (RuntimeException exception) {
             failed.incrementAndGet();
-            errors.add(fundCode + ": " + exception.getMessage());
+            addError(errors, fundCode + ": " + exception.getMessage());
         }
     }
 
@@ -160,15 +198,25 @@ public class FundScreenerNavServiceImpl implements FundScreenerNavService {
         return List.of();
     }
 
-    private LocalDate startDate(String fundCode) {
+    private LocalDate latestStoredNavDate(String fundCode) {
         List<ScreenerFundNavDaily> latest = screenerFundNavDailyMapper.selectList(new LambdaQueryWrapper<ScreenerFundNavDaily>()
                 .eq(ScreenerFundNavDaily::getFundCode, fundCode)
                 .orderByDesc(ScreenerFundNavDaily::getNavDate)
                 .last("LIMIT 1"));
-        if (!latest.isEmpty() && latest.getFirst().getNavDate() != null) {
-            return latest.getFirst().getNavDate().plusDays(1);
+        return latest.isEmpty() ? null : latest.getFirst().getNavDate();
+    }
+
+    private String staleMessage(String fundCode, LocalDate latestDate) {
+        return fundCode + ": 最新净值日期" + (latestDate == null ? "缺失" : latestDate)
+                + "，早于要求日期" + freshnessPolicy.requiredNavDate();
+    }
+
+    private void addError(List<String> errors, String message) {
+        synchronized (errors) {
+            if (errors.size() < 20) {
+                errors.add(message);
+            }
         }
-        return LocalDate.now().minusDays(420);
     }
 
     private void upsert(List<FundNavPointDTO> points) {

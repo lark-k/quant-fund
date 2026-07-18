@@ -13,6 +13,7 @@ import com.lk.quantfund.service.FundFactorService;
 import com.lk.quantfund.vo.screener.FundScreenerTaskResultVO;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -30,21 +31,23 @@ public class FundFactorServiceImpl implements FundFactorService {
     private final ScreenerFundNavDailyMapper screenerFundNavDailyMapper;
     private final ScreenerFactorSnapshotMapper screenerFactorSnapshotMapper;
     private final ScreenerFundUniverseMapper screenerFundUniverseMapper;
+    private final FundScreenerFreshnessPolicy freshnessPolicy;
 
     public FundFactorServiceImpl(ScreenerUniverseFilterMapper screenerUniverseFilterMapper,
                                  ScreenerFundNavDailyMapper screenerFundNavDailyMapper,
                                  ScreenerFactorSnapshotMapper screenerFactorSnapshotMapper,
-                                 ScreenerFundUniverseMapper screenerFundUniverseMapper) {
+                                 ScreenerFundUniverseMapper screenerFundUniverseMapper,
+                                 FundScreenerFreshnessPolicy freshnessPolicy) {
         this.screenerUniverseFilterMapper = screenerUniverseFilterMapper;
         this.screenerFundNavDailyMapper = screenerFundNavDailyMapper;
         this.screenerFactorSnapshotMapper = screenerFactorSnapshotMapper;
         this.screenerFundUniverseMapper = screenerFundUniverseMapper;
+        this.freshnessPolicy = freshnessPolicy;
     }
 
     @Override
     public FundScreenerTaskResultVO refreshFactors() {
         long started = System.currentTimeMillis();
-        int success = 0;
         int failed = 0;
         List<String> errors = new ArrayList<>();
         List<FactorCandidate> candidates = new ArrayList<>();
@@ -60,23 +63,52 @@ public class FundFactorServiceImpl implements FundFactorService {
                     throw new IllegalStateException("净值样本不足");
                 }
                 candidates.add(new FactorCandidate(filter.getUniverseType(), calculate(filter.getFundCode(), navPoints)));
-                success++;
             } catch (RuntimeException exception) {
                 failed++;
-                errors.add(filter.getFundCode() + ": " + exception.getMessage());
+                addError(errors, filter.getFundCode() + ": " + exception.getMessage());
             }
         }
-        applyPeerPercentiles(candidates);
-        candidates.forEach(candidate -> upsert(candidate.snapshot()));
+        if (candidates.isEmpty()) {
+            String status = failed > 0 ? "FAILED" : "SKIPPED";
+            return taskResult(started, status, 0, failed, 0, errors, null);
+        }
+        LocalDate batchDate = candidates.stream()
+                .map(candidate -> candidate.snapshot().getFactorDate())
+                .filter(java.util.Objects::nonNull)
+                .max(LocalDate::compareTo)
+                .orElse(null);
+        if (!freshnessPolicy.isFresh(batchDate)) {
+            addError(errors, "最新因子批次日期" + batchDate + "早于要求日期" + freshnessPolicy.requiredNavDate());
+            return taskResult(started, "FAILED", 0, failed + 1, candidates.size(), errors, batchDate);
+        }
+        List<FactorCandidate> batchCandidates = candidates.stream()
+                .filter(candidate -> batchDate.equals(candidate.snapshot().getFactorDate()))
+                .toList();
+        int skipped = candidates.size() - batchCandidates.size();
+        applyPeerPercentiles(batchCandidates);
+        batchCandidates.forEach(candidate -> upsert(candidate.snapshot()));
+        int success = batchCandidates.size();
+        String status = failed > 0 || skipped > 0 ? "PARTIAL_SUCCESS" : "SUCCESS";
+        return taskResult(started, status, success, failed, skipped, errors, batchDate);
+    }
+
+    private FundScreenerTaskResultVO taskResult(long started,
+                                                String status,
+                                                int success,
+                                                int failed,
+                                                int skipped,
+                                                List<String> errors,
+                                                LocalDate batchDate) {
         return new FundScreenerTaskResultVO(
                 "REFRESH_FACTORS",
-                failed == 0 ? "SUCCESS" : success > 0 ? "PARTIAL_SUCCESS" : "FAILED",
+                status,
                 success,
                 failed,
-                0,
+                skipped,
                 System.currentTimeMillis() - started,
                 errors,
-                failed == 0 ? "基金优选因子刷新完成" : "基金优选因子刷新部分失败",
+                "基金优选因子刷新：批次日期" + (batchDate == null ? "--" : batchDate)
+                        + "，成功" + success + "只，失败" + failed + "只，跳过旧日期" + skipped + "只",
                 LocalDateTime.now()
         );
     }
@@ -96,8 +128,9 @@ public class FundFactorServiceImpl implements FundFactorService {
         snapshot.setReturn20d(returnByWindow(points, 20));
         snapshot.setReturn60d(returnByWindow(points, 60));
         snapshot.setReturn120d(returnByWindow(points, 120));
-        snapshot.setReturn250d(returnByWindow(points, 250));
-        snapshot.setAnnualReturn250d(annualReturn(points, 250));
+        BigDecimal returnOneYear = returnByMonths(points, 12);
+        snapshot.setReturn250d(returnOneYear);
+        snapshot.setAnnualReturn250d(returnOneYear);
         snapshot.setVolatility60d(volatility(points, 60));
         snapshot.setVolatility120d(volatility(points, 120));
         snapshot.setMaxDrawdown60d(maxDrawdown(points, 60));
@@ -176,12 +209,19 @@ public class FundFactorServiceImpl implements FundFactorService {
         return rate(points.getLast().getUnitNav(), points.get(points.size() - days - 1).getUnitNav());
     }
 
-    private BigDecimal annualReturn(List<ScreenerFundNavDaily> points, int days) {
-        BigDecimal periodReturn = returnByWindow(points, days);
-        if (periodReturn == null) {
+    private BigDecimal returnByMonths(List<ScreenerFundNavDaily> points, int months) {
+        if (points.size() < 2) {
             return null;
         }
-        return periodReturn.multiply(new BigDecimal("250.0000")).divide(new BigDecimal(days), 4, RoundingMode.HALF_UP);
+        ScreenerFundNavDaily latest = points.getLast();
+        LocalDate startDate = latest.getNavDate().minusMonths(months);
+        ScreenerFundNavDaily base = points.stream()
+                .filter(point -> !point.getNavDate().isBefore(startDate))
+                .findFirst()
+                .orElse(points.getFirst());
+        return base.getNavDate().equals(latest.getNavDate())
+                ? null
+                : rate(latest.getUnitNav(), base.getUnitNav());
     }
 
     private BigDecimal maxDrawdown(List<ScreenerFundNavDaily> points, int days) {
@@ -304,6 +344,12 @@ public class FundFactorServiceImpl implements FundFactorService {
             return null;
         }
         return latest.subtract(base).multiply(HUNDRED).divide(base, 4, RoundingMode.HALF_UP);
+    }
+
+    private void addError(List<String> errors, String message) {
+        if (errors.size() < 20) {
+            errors.add(message);
+        }
     }
 
     private record FactorCandidate(String universeType, ScreenerFactorSnapshot snapshot) {

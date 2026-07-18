@@ -36,6 +36,7 @@ class FundScreenerNavServiceImplTest {
     private final ScreenerUniverseFilterMapper filterMapper = mock(ScreenerUniverseFilterMapper.class);
     private final ScreenerFundUniverseMapper universeMapper = mock(ScreenerFundUniverseMapper.class);
     private final ScreenerFundNavDailyMapper navMapper = mock(ScreenerFundNavDailyMapper.class);
+    private final FundScreenerFreshnessPolicy freshnessPolicy = mock(FundScreenerFreshnessPolicy.class);
 
     @Test
     void shouldSyncNavForIncludedFundsOnlyAndUpsertByCodeDate() {
@@ -46,7 +47,7 @@ class FundScreenerNavServiceImplTest {
         existing.setNavDate(LocalDate.of(2026, 7, 1));
         when(navMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
         when(navMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(null, existing);
-        FundScreenerNavServiceImpl service = new FundScreenerNavServiceImpl(List.of(adapter()), filterMapper, universeMapper, navMapper);
+        FundScreenerNavServiceImpl service = service(List.of(adapter()));
 
         var result = service.syncNav();
 
@@ -70,7 +71,7 @@ class FundScreenerNavServiceImplTest {
         when(failing.priority()).thenReturn(1);
         when(failing.sourceName()).thenReturn("FAIL");
         when(failing.getHistoricalNav(any(), any(), any())).thenThrow(new IllegalStateException("timeout"));
-        FundScreenerNavServiceImpl service = new FundScreenerNavServiceImpl(List.of(failing), filterMapper, universeMapper, navMapper);
+        FundScreenerNavServiceImpl service = service(List.of(failing));
 
         var result = service.syncNav();
 
@@ -93,7 +94,7 @@ class FundScreenerNavServiceImplTest {
         ));
         when(navMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
         when(navMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(null);
-        FundScreenerNavServiceImpl service = new FundScreenerNavServiceImpl(List.of(adapter()), filterMapper, universeMapper, navMapper);
+        FundScreenerNavServiceImpl service = service(List.of(adapter()));
 
         var result = service.syncNav();
 
@@ -103,6 +104,35 @@ class FundScreenerNavServiceImplTest {
                 .containsOnly("000001", "000004");
         assertThat(result.status()).isEqualTo("SUCCESS");
         assertThat(result.successCount()).isEqualTo(4);
+    }
+
+    @Test
+    void shouldFailWhenDatasourceReturnsEmptyAndStoredNavIsStale() {
+        when(filterMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(included("000001")));
+        ScreenerFundNavDaily stale = new ScreenerFundNavDaily();
+        stale.setFundCode("000001");
+        stale.setNavDate(LocalDate.of(2026, 7, 8));
+        when(navMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(stale));
+        FundDataSourceAdapter empty = mock(FundDataSourceAdapter.class);
+        when(empty.enabled()).thenReturn(true);
+        when(empty.priority()).thenReturn(1);
+        when(empty.getHistoricalNav(any(), any(), any())).thenReturn(List.of());
+        FundScreenerNavServiceImpl service = service(List.of(empty));
+        when(freshnessPolicy.isFresh(LocalDate.of(2026, 7, 8))).thenReturn(false);
+        when(freshnessPolicy.requiredNavDate()).thenReturn(LocalDate.of(2026, 7, 17));
+
+        var result = service.syncNav();
+
+        assertThat(result.status()).isEqualTo("FAILED");
+        assertThat(result.failureCount()).isEqualTo(1);
+        assertThat(result.errorSummaries()).anyMatch(message -> message.contains("2026-07-08") && message.contains("2026-07-17"));
+        verify(navMapper, never()).upsertBatch(any());
+    }
+
+    private FundScreenerNavServiceImpl service(List<FundDataSourceAdapter> adapters) {
+        when(freshnessPolicy.isFresh(any())).thenReturn(true);
+        when(freshnessPolicy.requiredNavDate()).thenReturn(LocalDate.of(2026, 7, 1));
+        return new FundScreenerNavServiceImpl(adapters, filterMapper, universeMapper, navMapper, freshnessPolicy);
     }
 
     private ScreenerUniverseFilter included(String fundCode) {

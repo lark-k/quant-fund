@@ -44,7 +44,7 @@ class FundScreenerControllerTest {
     }
 
     @Test
-    void shouldRefreshScoreOnlyRecalculateScores() {
+    void shouldRefreshNavFactorsAndScoresInOrder() {
         FundUniverseService universeService = mock(FundUniverseService.class);
         FundScreenerNavService navService = mock(FundScreenerNavService.class);
         FundFactorService factorService = mock(FundFactorService.class);
@@ -66,11 +66,29 @@ class FundScreenerControllerTest {
 
         assertThat(response.data().taskName()).isEqualTo("REFRESH_SCORE");
         assertThat(response.data().status()).isEqualTo("SUCCESS");
-        assertThat(response.data().successCount()).isEqualTo(8);
+        assertThat(response.data().successCount()).isEqualTo(26);
         verify(service).refreshScore();
-        verify(navService, never()).syncNav();
+        verify(navService).syncNav();
         verify(universeService, never()).rebuildUniverse();
+        verify(factorService).refreshFactors();
+    }
+
+    @Test
+    void shouldStopManualScoreRefreshWhenNavSyncFails() {
+        FundScreenerNavService navService = mock(FundScreenerNavService.class);
+        FundFactorService factorService = mock(FundFactorService.class);
+        FundQualityScoreService scoreService = mock(FundQualityScoreService.class);
+        when(navService.syncNav()).thenReturn(taskResult("SYNC_NAV", "FAILED", 0, 1));
+        FundScreenerController controller = new FundScreenerController(
+                mock(FundUniverseService.class), navService, factorService, scoreService,
+                mock(FundScreenerBacktestService.class)
+        );
+
+        var response = controller.refreshScore();
+
+        assertThat(response.data().status()).isEqualTo("FAILED");
         verify(factorService, never()).refreshFactors();
+        verify(scoreService, never()).refreshScore();
     }
 
     @Test

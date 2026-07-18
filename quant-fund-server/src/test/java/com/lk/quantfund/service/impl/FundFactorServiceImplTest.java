@@ -28,6 +28,7 @@ class FundFactorServiceImplTest {
     private final ScreenerFundNavDailyMapper navMapper = mock(ScreenerFundNavDailyMapper.class);
     private final ScreenerFactorSnapshotMapper factorMapper = mock(ScreenerFactorSnapshotMapper.class);
     private final ScreenerFundUniverseMapper universeMapper = mock(ScreenerFundUniverseMapper.class);
+    private final FundScreenerFreshnessPolicy freshnessPolicy = mock(FundScreenerFreshnessPolicy.class);
 
     @Test
     void shouldCalculateFactorSnapshotFromHistoricalNavOnly() {
@@ -35,7 +36,7 @@ class FundFactorServiceImplTest {
         when(navMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(navPoints());
         when(universeMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(universe());
         when(factorMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(null);
-        FundFactorServiceImpl service = new FundFactorServiceImpl(filterMapper, navMapper, factorMapper, universeMapper);
+        FundFactorServiceImpl service = service();
 
         var result = service.refreshFactors();
 
@@ -45,6 +46,7 @@ class FundFactorServiceImplTest {
         assertThat(snapshot.getFundCode()).isEqualTo("000001");
         assertThat(snapshot.getFactorDate()).isEqualTo(LocalDate.of(2026, 7, 21));
         assertThat(snapshot.getReturn20d()).isEqualByComparingTo("40.0000");
+        assertThat(snapshot.getReturn250d()).isEqualByComparingTo("40.0000");
         assertThat(snapshot.getMaxDrawdown60d()).isEqualByComparingTo("-10.0000");
         assertThat(snapshot.getNavSampleSize()).isEqualTo(21);
         assertThat(snapshot.getFundSize()).isEqualByComparingTo("25.0000");
@@ -72,7 +74,7 @@ class FundFactorServiceImplTest {
         );
         when(universeMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(universe());
         when(factorMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(null);
-        FundFactorServiceImpl service = new FundFactorServiceImpl(filterMapper, navMapper, factorMapper, universeMapper);
+        FundFactorServiceImpl service = service();
 
         var result = service.refreshFactors();
 
@@ -84,6 +86,54 @@ class FundFactorServiceImplTest {
         assertThat(peerPercentile(snapshots, "000002")).isEqualByComparingTo("100.0000");
         assertThat(peerPercentile(snapshots, "000004")).isEqualByComparingTo("100.0000");
         assertThat(result.status()).isEqualTo("SUCCESS");
+    }
+
+    @Test
+    void shouldUseNaturalTwelveMonthWindowForOneYearReturn() {
+        when(filterMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(included("000001")));
+        when(navMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(
+                navPoint("000001", LocalDate.of(2025, 7, 20), "1.0000"),
+                navPoint("000001", LocalDate.of(2025, 7, 22), "1.1000"),
+                navPoint("000001", LocalDate.of(2026, 7, 21), "2.0000")
+        ));
+        when(universeMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(universe());
+        when(factorMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(null);
+
+        service().refreshFactors();
+
+        ArgumentCaptor<ScreenerFactorSnapshot> captor = ArgumentCaptor.forClass(ScreenerFactorSnapshot.class);
+        verify(factorMapper).insert(captor.capture());
+        assertThat(captor.getValue().getReturn250d()).isEqualByComparingTo("81.8182");
+        assertThat(captor.getValue().getAnnualReturn250d()).isEqualByComparingTo("81.8182");
+    }
+
+    @Test
+    void shouldPersistOnlyLatestCommonFactorDateAndSkipOlderFunds() {
+        when(filterMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(
+                included("000001", "MIXED"),
+                included("000002", "MIXED")
+        ));
+        List<ScreenerFundNavDaily> current = navPoints("000001", "1.0000", "1.3000");
+        List<ScreenerFundNavDaily> stale = navPoints("000002", "1.0000", "1.2000");
+        stale.removeLast();
+        when(navMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(current, stale);
+        when(universeMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(universe());
+        when(factorMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(null);
+
+        var result = service().refreshFactors();
+
+        ArgumentCaptor<ScreenerFactorSnapshot> captor = ArgumentCaptor.forClass(ScreenerFactorSnapshot.class);
+        verify(factorMapper).insert(captor.capture());
+        assertThat(captor.getValue().getFundCode()).isEqualTo("000001");
+        assertThat(result.status()).isEqualTo("PARTIAL_SUCCESS");
+        assertThat(result.successCount()).isEqualTo(1);
+        assertThat(result.skippedCount()).isEqualTo(1);
+    }
+
+    private FundFactorServiceImpl service() {
+        when(freshnessPolicy.isFresh(any())).thenReturn(true);
+        when(freshnessPolicy.requiredNavDate()).thenReturn(LocalDate.of(2026, 7, 21));
+        return new FundFactorServiceImpl(filterMapper, navMapper, factorMapper, universeMapper, freshnessPolicy);
     }
 
     private ScreenerUniverseFilter included(String fundCode) {
@@ -144,6 +194,15 @@ class FundFactorServiceImplTest {
             points.add(point);
         }
         return points;
+    }
+
+    private ScreenerFundNavDaily navPoint(String fundCode, LocalDate date, String nav) {
+        ScreenerFundNavDaily point = new ScreenerFundNavDaily();
+        point.setFundCode(fundCode);
+        point.setNavDate(date);
+        point.setUnitNav(new BigDecimal(nav));
+        point.setAccumulatedNav(new BigDecimal(nav));
+        return point;
     }
 
     private BigDecimal peerPercentile(List<ScreenerFactorSnapshot> snapshots, String fundCode) {
