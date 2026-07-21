@@ -11,6 +11,7 @@ import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.lk.quantfund.auth.UserContext;
 import com.lk.quantfund.config.QuantFundProperties;
 import com.lk.quantfund.entity.FundHolding;
+import com.lk.quantfund.entity.FundEstimateIntraday;
 import com.lk.quantfund.entity.FundNavDaily;
 import com.lk.quantfund.entity.HoldingSnapshot;
 import com.lk.quantfund.entity.PortfolioIntradaySnapshot;
@@ -68,6 +69,14 @@ class AnalyticsServiceImplTest {
                 .thenReturn(List.of());
         when(marketDataService.intradayIndex(Mockito.anyString())).thenReturn(List.of());
         when(fundNavDailyMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
+        LocalDate estimateDate = LocalDate.of(2026, 6, 25);
+        when(fundEstimateIntradayMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(
+                estimate("510300", estimateDate.atTime(10, 0)),
+                estimate("510300", estimateDate.atTime(11, 30)),
+                estimate("510300", estimateDate.atTime(14, 30)),
+                estimate("510300", estimateDate.atTime(15, 0)),
+                estimate("013403", estimateDate.atTime(10, 0))
+        ));
         when(fundValuationService.estimate(Mockito.anyString(), Mockito.anyString(), Mockito.anyString(), Mockito.any()))
                 .thenAnswer(invocation -> new FundValuationResult("TEST", invocation.getArgument(3), "TEST", "TEST", "TRADING"));
     }
@@ -570,6 +579,16 @@ class AnalyticsServiceImplTest {
         nav.setUnitNav(BigDecimal.ONE);
         nav.setSourceName("EAST_MONEY");
         return nav;
+    }
+
+    private FundEstimateIntraday estimate(String fundCode, LocalDateTime estimateTime) {
+        FundEstimateIntraday estimate = new FundEstimateIntraday();
+        estimate.setFundCode(fundCode);
+        estimate.setEstimateDate(estimateTime.toLocalDate());
+        estimate.setEstimateTime(estimateTime);
+        estimate.setEstimateGrowthRate(BigDecimal.ONE);
+        estimate.setDelayed(0);
+        return estimate;
     }
 
     private MarketIndexVO hs300(String changeRate) {

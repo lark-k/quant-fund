@@ -19,6 +19,7 @@ import com.lk.quantfund.service.AnalyticsService;
 import com.lk.quantfund.service.MarketDataService;
 import com.lk.quantfund.service.PortfolioAccountService;
 import com.lk.quantfund.service.analytics.OfficialNavTiming;
+import com.lk.quantfund.service.analytics.IntradayEstimateFreshness;
 import com.lk.quantfund.service.analytics.SnapshotProfitStatusResolver;
 import com.lk.quantfund.service.analytics.SnapshotProfitStatusResolver.ProfitStatus;
 import com.lk.quantfund.service.valuation.FundValuationResult;
@@ -392,9 +393,11 @@ public class AnalyticsServiceImpl implements AnalyticsService {
     private BigDecimal displayDailyProfit(FundHolding holding, BigDecimal valuationRate) {
         BigDecimal storedDailyProfit = scale(holding.getDailyProfit());
         BigDecimal rate = scale(valuationRate);
-        if (rate.compareTo(BigDecimal.ZERO) == 0
-                || storedDailyProfit.compareTo(BigDecimal.ZERO) == 0
-                || storedDailyProfit.signum() == rate.signum()) {
+        if (rate.compareTo(BigDecimal.ZERO) == 0) {
+            return storedDailyProfit;
+        }
+        if (storedDailyProfit.compareTo(BigDecimal.ZERO) != 0
+                && storedDailyProfit.signum() == rate.signum()) {
             return storedDailyProfit;
         }
         return amountChangeByRate(effectiveHoldingAmount(holding), rate);
@@ -426,29 +429,19 @@ public class AnalyticsServiceImpl implements AnalyticsService {
         if (fundCodes.isEmpty()) {
             return Set.of();
         }
+        LocalDateTime currentTime = now();
         return fundEstimateIntradayMapper.selectList(new LambdaQueryWrapper<FundEstimateIntraday>()
                         .in(FundEstimateIntraday::getFundCode, fundCodes)
                         .eq(FundEstimateIntraday::getEstimateDate, today))
                 .stream()
+                .filter(estimate -> IntradayEstimateFreshness.isFresh(estimate, currentTime))
                 .map(FundEstimateIntraday::getFundCode)
                 .filter(code -> code != null && !code.isBlank())
                 .collect(Collectors.toSet());
     }
 
     private boolean intradayDataFreshToday(FundHolding holding, Set<String> todayEstimateFundCodes) {
-        if (todayEstimateFundCodes.contains(holding.getFundCode())) {
-            return true;
-        }
-        if (holding.getUpdateTime() != null) {
-            return today().equals(holding.getUpdateTime().toLocalDate());
-        }
-        if (holding.getCurrentEstimateNav() == null && holding.getLatestOfficialNav() == null) {
-            return true;
-        }
-        return holding.getCurrentEstimateNav() != null
-                && holding.getLatestOfficialNav() != null
-                && holding.getLatestOfficialNav().compareTo(BigDecimal.ZERO) > 0
-                && holding.getCurrentEstimateNav().compareTo(holding.getLatestOfficialNav()) != 0;
+        return todayEstimateFundCodes.contains(holding.getFundCode());
     }
 
     private BigDecimal periodProfit(Long userId, LocalDate startDate, LocalDate today, BigDecimal todayProfit) {

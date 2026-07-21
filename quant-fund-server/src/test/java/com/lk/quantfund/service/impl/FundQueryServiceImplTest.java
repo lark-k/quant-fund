@@ -17,8 +17,11 @@ import com.lk.quantfund.datasource.model.FundSearchResultDTO;
 import com.lk.quantfund.datasource.model.FundStockHoldingDTO;
 import com.lk.quantfund.datasource.model.FundThemeDTO;
 import com.lk.quantfund.entity.FundInfo;
+import com.lk.quantfund.entity.FundEstimateIntraday;
+import com.lk.quantfund.entity.FundNavDaily;
 import com.lk.quantfund.exception.BusinessException;
 import com.lk.quantfund.mapper.FundInfoMapper;
+import com.lk.quantfund.mapper.FundEstimateIntradayMapper;
 import com.lk.quantfund.mapper.FundNavDailyMapper;
 import com.lk.quantfund.scheduler.TradingCalendarService;
 import com.lk.quantfund.service.MarketDataService;
@@ -141,6 +144,45 @@ class FundQueryServiceImplTest {
         assertThat(nav.get(1).indexName()).isEqualTo("纳斯达克");
         assertThat(nav.get(1).indexReturnRate()).isEqualByComparingTo("1.0000");
         verify(marketDataService).historicalIndex("NDX", LocalDate.of(2026, 6, 24), LocalDate.of(2026, 6, 25));
+    }
+
+    @Test
+    void shouldBuildIntradayEstimateFromHeavyStockThemesWhenProviderHasNoEstimate() {
+        FundDataSourceAdapter adapter = mock(FundDataSourceAdapter.class);
+        when(adapter.priority()).thenReturn(1);
+        when(adapter.enabled()).thenReturn(true);
+        when(adapter.sourceName()).thenReturn("TEST");
+        when(adapter.getIntradayEstimate("021528")).thenReturn(Optional.empty());
+        when(adapter.getRelatedThemes("021528")).thenReturn(List.of(
+                new FundThemeDTO("021528", "PCB", "HEAVY_STOCK_WEIGHTED",
+                        new BigDecimal("40.0000"), new BigDecimal("2.0000"), "TEST"),
+                new FundThemeDTO("021528", "CPO", "HEAVY_STOCK_WEIGHTED",
+                        new BigDecimal("30.0000"), new BigDecimal("1.0000"), "TEST")
+        ));
+        FundNavDailyMapper navMapper = mock(FundNavDailyMapper.class);
+        FundNavDaily nav = new FundNavDaily();
+        nav.setFundCode("021528");
+        nav.setNavDate(LocalDate.now().minusDays(1));
+        nav.setUnitNav(new BigDecimal("1.0000"));
+        when(navMapper.selectOne(org.mockito.ArgumentMatchers.any())).thenReturn(nav);
+        FundInfoMapper infoMapper = mock(FundInfoMapper.class);
+        FundInfo info = new FundInfo();
+        info.setFundCode("021528");
+        info.setFundName("Active Fund");
+        when(infoMapper.selectOne(org.mockito.ArgumentMatchers.any())).thenReturn(info);
+        FundEstimateIntradayMapper estimateMapper = mock(FundEstimateIntradayMapper.class);
+        TradingCalendarService calendar = mock(TradingCalendarService.class);
+        when(calendar.isIntradayEstimateDisplayWindow(org.mockito.ArgumentMatchers.any())).thenReturn(true);
+        FundQueryServiceImpl service = new FundQueryServiceImpl(
+                List.of(adapter), redisTemplate(), new ObjectMapper(), new QuantFundProperties(),
+                infoMapper, navMapper, estimateMapper, calendar, mock(MarketDataService.class));
+
+        FundEstimateDTO estimate = service.getIntradayEstimate("021528", false);
+
+        assertThat(estimate.sourceName()).isEqualTo("HEAVY_STOCK_WEIGHTED");
+        assertThat(estimate.estimateGrowthRate()).isEqualByComparingTo("1.5714");
+        assertThat(estimate.estimateNav()).isEqualByComparingTo("1.0157");
+        verify(estimateMapper).insert(org.mockito.ArgumentMatchers.<FundEstimateIntraday>any());
     }
 
 

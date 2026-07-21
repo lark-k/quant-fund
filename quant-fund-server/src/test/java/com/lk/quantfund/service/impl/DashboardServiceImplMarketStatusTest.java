@@ -141,6 +141,8 @@ class DashboardServiceImplMarketStatusTest {
         when(holdingSnapshotMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(
                 snapshot(fixedToday.minusDays(1), "80.0000")
         ));
+        when(fundEstimateIntradayMapper.selectList(any(LambdaQueryWrapper.class)))
+                .thenReturn(List.of(todayEstimate("000001", fixedToday.atTime(10, 0))));
         when(fundNavDailyMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
         when(marketDataService.historicalIndex(Mockito.eq("000300"), any(LocalDate.class), any(LocalDate.class))).thenReturn(List.of());
         when(fundValuationService.estimate(any(), any(), any(), any())).thenReturn(new FundValuationResult("沪深300", BigDecimal.ZERO, "TEST", "TEST", "A股交易中"));
@@ -188,6 +190,8 @@ class DashboardServiceImplMarketStatusTest {
         when(holdingSnapshotMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(
                 snapshot(fixedToday.minusDays(1), "80.0000")
         ));
+        when(fundEstimateIntradayMapper.selectList(any(LambdaQueryWrapper.class)))
+                .thenReturn(List.of(todayEstimate("000001", fixedToday.atTime(10, 0))));
         when(fundNavDailyMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
         when(marketDataService.historicalIndex(Mockito.eq("000300"), any(LocalDate.class), any(LocalDate.class))).thenReturn(List.of());
         when(fundValuationService.estimate(any(), any(), any(), any())).thenReturn(new FundValuationResult("沪深300", BigDecimal.ONE, "TEST", "TEST", "A股交易中"));
@@ -235,6 +239,8 @@ class DashboardServiceImplMarketStatusTest {
         when(strategySignalMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
         when(aiAnalysisReportMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
         when(holdingSnapshotMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
+        when(fundEstimateIntradayMapper.selectList(any(LambdaQueryWrapper.class)))
+                .thenReturn(List.of(todayEstimate("000001", fixedToday.atTime(11, 30))));
         when(fundNavDailyMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
         when(marketDataService.historicalIndex(Mockito.eq("000300"), any(LocalDate.class), any(LocalDate.class))).thenReturn(List.of());
         when(fundValuationService.estimate(any(), any(), any(), any())).thenReturn(new FundValuationResult("沪深300", BigDecimal.ONE, "TEST", "TEST", "A股午间休市"));
@@ -322,7 +328,7 @@ class DashboardServiceImplMarketStatusTest {
     }
 
     @Test
-    void overviewHoldingProfitShouldUseSameIntradayDisplayBasisAsSummaryProfit() {
+    void overviewShouldKeepLatestTodayEstimateWhenProviderStopsUpdating() {
         LocalDate fixedToday = LocalDate.of(2026, 6, 29);
         PortfolioAccountService portfolioAccountService = mock(PortfolioAccountService.class);
         FundHoldingMapper fundHoldingMapper = mock(FundHoldingMapper.class);
@@ -344,7 +350,8 @@ class DashboardServiceImplMarketStatusTest {
         when(aiAnalysisReportMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
         when(holdingSnapshotMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
         when(fundNavDailyMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
-        when(fundEstimateIntradayMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(todayEstimate("012922", fixedToday)));
+        when(fundEstimateIntradayMapper.selectList(any(LambdaQueryWrapper.class)))
+                .thenReturn(List.of(todayEstimate("012922", fixedToday.atTime(14, 36))));
         when(marketDataService.historicalIndex(Mockito.eq("000300"), any(LocalDate.class), any(LocalDate.class))).thenReturn(List.of());
         when(fundValuationService.estimate(any(), any(), any(), any()))
                 .thenReturn(new FundValuationResult("海外基金", new BigDecimal("-2.6900"), "TEST", "TEST", "港股交易中"));
@@ -360,7 +367,7 @@ class DashboardServiceImplMarketStatusTest {
                 fundValuationService,
                 marketDataService,
                 fixedToday,
-                fixedToday.atTime(15, 2)
+                fixedToday.atTime(14, 54)
         );
 
         try (MockedStatic<UserContext> userContext = Mockito.mockStatic(UserContext.class)) {
@@ -393,6 +400,9 @@ class DashboardServiceImplMarketStatusTest {
                 .toList();
         when(portfolioAccountService.summary()).thenReturn(summary("11000.0000", "500.0000", "0.0000"));
         when(fundHoldingMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(holdings);
+        when(fundEstimateIntradayMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(holdings.stream()
+                .map(item -> todayEstimate(item.getFundCode(), fixedToday.atTime(10, 0)))
+                .toList());
         when(strategySignalMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
         when(aiAnalysisReportMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
         when(holdingSnapshotMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
@@ -513,10 +523,14 @@ class DashboardServiceImplMarketStatusTest {
     }
 
     private com.lk.quantfund.entity.FundEstimateIntraday todayEstimate(String fundCode, LocalDate date) {
+        return todayEstimate(fundCode, date.atTime(13, 0));
+    }
+
+    private com.lk.quantfund.entity.FundEstimateIntraday todayEstimate(String fundCode, LocalDateTime estimateTime) {
         com.lk.quantfund.entity.FundEstimateIntraday estimate = new com.lk.quantfund.entity.FundEstimateIntraday();
         estimate.setFundCode(fundCode);
-        estimate.setEstimateDate(date);
-        estimate.setEstimateTime(date.atTime(13, 0));
+        estimate.setEstimateDate(estimateTime.toLocalDate());
+        estimate.setEstimateTime(estimateTime);
         estimate.setEstimateGrowthRate(new BigDecimal("-2.6900"));
         estimate.setDelayed(0);
         return estimate;

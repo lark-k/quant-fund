@@ -17,7 +17,6 @@ import com.lk.quantfund.service.PortfolioAccountService;
 import com.lk.quantfund.service.QuantAnalysisService;
 import com.lk.quantfund.service.StrategyService;
 import com.lk.quantfund.service.analytics.OfficialNavTiming;
-import com.lk.quantfund.service.valuation.FundValuationResult;
 import com.lk.quantfund.service.valuation.FundValuationService;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -30,6 +29,7 @@ import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -51,9 +51,10 @@ public class ScheduledFundTaskService {
     private final FundHoldingMapper fundHoldingMapper;
     private final PortfolioAccountMapper portfolioAccountMapper;
     private final HoldingSnapshotMapper holdingSnapshotMapper;
-    private final FundValuationService fundValuationService;
     private final TradingCalendarService tradingCalendarService;
+    private final ScheduledFundEstimatePersistenceService estimatePersistenceService;
 
+    @Autowired
     public ScheduledFundTaskService(QuantFundProperties properties,
                                     FundQueryService fundQueryService,
                                     AiAnalysisService aiAnalysisService,
@@ -63,8 +64,8 @@ public class ScheduledFundTaskService {
                                     FundHoldingMapper fundHoldingMapper,
                                     PortfolioAccountMapper portfolioAccountMapper,
                                     HoldingSnapshotMapper holdingSnapshotMapper,
-                                    FundValuationService fundValuationService,
-                                    TradingCalendarService tradingCalendarService) {
+                                    TradingCalendarService tradingCalendarService,
+                                    ScheduledFundEstimatePersistenceService estimatePersistenceService) {
         this.properties = properties;
         this.fundQueryService = fundQueryService;
         this.aiAnalysisService = aiAnalysisService;
@@ -74,11 +75,27 @@ public class ScheduledFundTaskService {
         this.fundHoldingMapper = fundHoldingMapper;
         this.portfolioAccountMapper = portfolioAccountMapper;
         this.holdingSnapshotMapper = holdingSnapshotMapper;
-        this.fundValuationService = fundValuationService;
         this.tradingCalendarService = tradingCalendarService;
+        this.estimatePersistenceService = estimatePersistenceService;
     }
 
-    @Transactional(rollbackFor = Exception.class)
+    ScheduledFundTaskService(QuantFundProperties properties,
+                             FundQueryService fundQueryService,
+                             AiAnalysisService aiAnalysisService,
+                             StrategyService strategyService,
+                             QuantAnalysisService quantAnalysisService,
+                             PortfolioAccountService portfolioAccountService,
+                             FundHoldingMapper fundHoldingMapper,
+                             PortfolioAccountMapper portfolioAccountMapper,
+                             HoldingSnapshotMapper holdingSnapshotMapper,
+                             FundValuationService fundValuationService,
+                             TradingCalendarService tradingCalendarService) {
+        this(properties, fundQueryService, aiAnalysisService, strategyService, quantAnalysisService,
+                portfolioAccountService, fundHoldingMapper, portfolioAccountMapper, holdingSnapshotMapper,
+                tradingCalendarService,
+                new ScheduledFundEstimatePersistenceService(fundHoldingMapper, portfolioAccountService));
+    }
+
     public SchedulerTaskResult refreshIntradayEstimates() {
         SchedulerTaskResult result = new SchedulerTaskResult();
         if (!tradingCalendarService.isIntradayEstimateWindow(LocalDateTime.now())) {
@@ -89,11 +106,7 @@ public class ScheduledFundTaskService {
         for (Map.Entry<String, List<FundHolding>> entry : holdingsByFundCode.entrySet()) {
             try {
                 FundEstimateDTO estimate = fundQueryService.getIntradayEstimate(entry.getKey(), false);
-                for (FundHolding holding : entry.getValue()) {
-                    applyEstimate(holding, estimate);
-                    fundHoldingMapper.updateById(holding);
-                }
-                recalculateAccounts(entry.getValue());
+                estimatePersistenceService.apply(entry.getValue(), estimate);
                 analyzeStrategies(entry.getValue());
                 result.success();
             } catch (RuntimeException exception) {
@@ -255,34 +268,6 @@ public class ScheduledFundTaskService {
             groups.computeIfAbsent(holding.getFundCode(), ignored -> new java.util.ArrayList<>()).add(holding);
         }
         return groups;
-    }
-
-    private void applyEstimate(FundHolding holding, FundEstimateDTO estimate) {
-        BigDecimal estimateNav = scale(estimate.estimateNav());
-        BigDecimal holdingShare = scale(holding.getHoldingShare());
-        BigDecimal frozenHoldingAmount = scale(holding.getHoldingAmount());
-        holding.setCurrentEstimateNav(estimateNav);
-        holding.setHoldingAmount(frozenHoldingAmount);
-        BigDecimal dailyProfit;
-        if (holding.getLatestOfficialNav() != null
-                && holding.getLatestOfficialNav().compareTo(BigDecimal.ZERO) > 0
-                && estimateNav.compareTo(holding.getLatestOfficialNav()) != 0) {
-            BigDecimal estimateRate = rate(estimateNav.subtract(holding.getLatestOfficialNav()), holding.getLatestOfficialNav());
-            dailyProfit = amountChangeByRate(frozenHoldingAmount, estimateRate);
-        } else {
-            BigDecimal estimateRate = estimate.estimateGrowthRate() == null ? null : estimate.estimateGrowthRate();
-            FundValuationResult valuation = fundValuationService.estimate(
-                    holding.getFundCode(), holding.getFundName(), holding.getFundType(), estimateRate);
-            dailyProfit = dailyProfitByRate(frozenHoldingAmount, valuation.themeRate(), holdingShare, holding.getLatestOfficialNav());
-        }
-        holding.setDailyProfit(dailyProfit);
-        BigDecimal estimatedProfit = frozenHoldingAmount.add(dailyProfit).subtract(scale(holding.getHoldingCost()));
-        holding.setHoldingProfit(scale(estimatedProfit));
-        holding.setHoldingProfitRate(rate(holding.getHoldingProfit(), holding.getHoldingCost()));
-        holding.setUpdateTime(LocalDateTime.now());
-        if (StringUtils.hasText(estimate.fundName())) {
-            holding.setFundName(estimate.fundName());
-        }
     }
 
     private BigDecimal frozenHoldingAmount(FundHolding holding, BigDecimal holdingShare, BigDecimal fallbackNav) {

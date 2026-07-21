@@ -426,6 +426,38 @@ class ScheduledFundTaskServiceTest {
         assertThat(saved.getHoldingProfit()).isEqualByComparingTo("140.4000");
     }
 
+    @Test
+    void refreshIntradayEstimatesContinuesAfterOneFundFails() {
+        QuantFundProperties properties = new QuantFundProperties();
+        FundQueryService fundQueryService = mock(FundQueryService.class);
+        FundHoldingMapper fundHoldingMapper = mock(FundHoldingMapper.class);
+        PortfolioAccountService portfolioAccountService = mock(PortfolioAccountService.class);
+        TradingCalendarService tradingCalendarService = mock(TradingCalendarService.class);
+        FundHolding failed = holding("MIXED", "Failed Fund");
+        FundHolding succeeded = holding("MIXED", "Succeeded Fund");
+        succeeded.setId(101L);
+        succeeded.setFundCode("000002");
+        succeeded.setHoldingAmount(new BigDecimal("1000.0000"));
+        when(tradingCalendarService.isIntradayEstimateWindow(any())).thenReturn(true);
+        when(fundHoldingMapper.selectList(any())).thenReturn(List.of(failed, succeeded));
+        when(fundQueryService.getIntradayEstimate("000001", false)).thenThrow(new IllegalStateException("provider failed"));
+        when(fundQueryService.getIntradayEstimate("000002", false)).thenReturn(new FundEstimateDTO(
+                "000002", "Succeeded Fund", new BigDecimal("1.0100"), new BigDecimal("1.0000"),
+                LocalDate.now(), LocalDateTime.now(), "TEST", false, "{}"));
+        ScheduledFundTaskService service = new ScheduledFundTaskService(
+                properties, fundQueryService, mock(AiAnalysisService.class), mock(StrategyService.class),
+                mock(QuantAnalysisService.class), portfolioAccountService, fundHoldingMapper,
+                mock(PortfolioAccountMapper.class), mock(HoldingSnapshotMapper.class),
+                mock(FundValuationService.class), tradingCalendarService);
+
+        SchedulerTaskResult result = service.refreshIntradayEstimates();
+
+        assertThat(result.getFailureCount()).isEqualTo(1);
+        assertThat(result.getSuccessCount()).isEqualTo(1);
+        verify(fundHoldingMapper).updateById(succeeded);
+        verify(fundHoldingMapper, never()).updateById(failed);
+    }
+
     private FundHolding holding(String fundType, String fundName) {
         FundHolding holding = new FundHolding();
         holding.setId(100L);

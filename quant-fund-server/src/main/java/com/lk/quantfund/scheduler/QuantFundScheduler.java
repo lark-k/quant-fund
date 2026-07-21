@@ -4,11 +4,14 @@ import com.lk.quantfund.config.QuantFundProperties;
 import com.lk.quantfund.service.TradeRecordService;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -17,6 +20,7 @@ public class QuantFundScheduler {
     private static final Logger log = LoggerFactory.getLogger(QuantFundScheduler.class);
     private static final String ZONE = "Asia/Shanghai";
     private static final String TRIGGER_CRON = "CRON";
+    private static final String TRIGGER_STARTUP = "STARTUP";
 
     private final QuantFundProperties properties;
     private final TradingCalendarService tradingCalendarService;
@@ -49,6 +53,26 @@ public class QuantFundScheduler {
     public void settleDueProcessingTrades() {
         runTradingTask("SETTLE_DUE_PROCESSING_TRADES", () ->
                 tradeRecordService.settleDueProcessingTrades(LocalDate.now()));
+    }
+
+    @EventListener(ApplicationReadyEvent.class)
+    public void reconcileAfterStartup() {
+        LocalDateTime now = LocalDateTime.now();
+        if (!properties.getScheduler().isEnabled()
+                || !tradingCalendarService.isTradingDay(now.toLocalDate())) {
+            return;
+        }
+        if (!now.toLocalTime().isBefore(LocalTime.of(9, 5))) {
+            runStartupTradingTask("CREATE_DUE_REGULAR_INVEST_TRADES", () ->
+                    tradeRecordService.createDueRegularInvestTrades(now.toLocalDate()));
+        }
+        if (!now.toLocalTime().isBefore(LocalTime.of(9, 10))) {
+            runStartupTradingTask("SETTLE_DUE_PROCESSING_TRADES", () ->
+                    tradeRecordService.settleDueProcessingTrades(now.toLocalDate()));
+        }
+        if (tradingCalendarService.isIntradayEstimateWindow(now)) {
+            runStartupTradingTask("REFRESH_INTRADAY_ESTIMATES", scheduledFundTaskService::refreshIntradayEstimates);
+        }
     }
 
     @Scheduled(cron = "0 30/2 9 ? * MON-FRI", zone = ZONE)
@@ -126,7 +150,11 @@ public class QuantFundScheduler {
     }
 
     private void runTradingTask(String taskName, Supplier<SchedulerTaskResult> task) {
-        runTask(taskName, true, task);
+        runTask(taskName, true, TRIGGER_CRON, task);
+    }
+
+    private void runStartupTradingTask(String taskName, Supplier<SchedulerTaskResult> task) {
+        runTask(taskName, true, TRIGGER_STARTUP, task);
     }
 
     private void runScreenerTask(String taskName, Supplier<SchedulerTaskResult> task) {
@@ -134,11 +162,21 @@ public class QuantFundScheduler {
     }
 
     private void runTask(String taskName, boolean tradingDayRequired, Supplier<SchedulerTaskResult> task) {
-        runTask(taskName, tradingDayRequired, () -> true, "", task);
+        runTask(taskName, tradingDayRequired, TRIGGER_CRON, task);
+    }
+
+    private void runTask(String taskName, boolean tradingDayRequired, String triggerType,
+                         Supplier<SchedulerTaskResult> task) {
+        runTask(taskName, tradingDayRequired, triggerType, () -> true, "", task);
     }
 
     private void runTask(String taskName, boolean tradingDayRequired, BooleanSupplier taskEnabled,
                          String disabledReason, Supplier<SchedulerTaskResult> task) {
+        runTask(taskName, tradingDayRequired, TRIGGER_CRON, taskEnabled, disabledReason, task);
+    }
+
+    private void runTask(String taskName, boolean tradingDayRequired, String triggerType,
+                         BooleanSupplier taskEnabled, String disabledReason, Supplier<SchedulerTaskResult> task) {
         LocalDateTime startTime = LocalDateTime.now();
         SchedulerTaskResult result = new SchedulerTaskResult();
         boolean skipped = false;
@@ -163,7 +201,7 @@ public class QuantFundScheduler {
             result.failure(exception.getMessage());
             log.warn("Scheduler task {} failed: {}", taskName, exception.getMessage());
         } finally {
-            schedulerTaskLogService.save(taskName, TRIGGER_CRON, startTime, result, skipped);
+            schedulerTaskLogService.save(taskName, triggerType, startTime, result, skipped);
         }
     }
 }

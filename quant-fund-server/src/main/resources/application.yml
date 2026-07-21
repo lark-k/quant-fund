@@ -74,7 +74,7 @@ quantfund:
     mock-fallback-enabled: ${QUANTFUND_FUND_MOCK_FALLBACK_ENABLED:false}
     east-money-enabled: true
     east-money-search-url: https://fundsuggest.eastmoney.com/FundSearch/api/FundSearchAPI.ashx
-    east-money-estimate-url: https://fundgz.1234567.com.cn/js/{fundCode}.js
+    east-money-estimate-url: https://fundcomapi.tiantianfunds.com/mm/newCore/FundValuationLast
     east-money-historical-nav-url: https://api.fund.eastmoney.com/f10/lsjz
     east-money-fund-detail-url: https://fund.eastmoney.com/pingzhongdata/{fundCode}.js
     east-money-fund-archive-url: https://fundf10.eastmoney.com/FundArchivesDatas.aspx

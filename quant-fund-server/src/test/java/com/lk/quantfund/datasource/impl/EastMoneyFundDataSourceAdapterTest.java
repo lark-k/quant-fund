@@ -26,9 +26,13 @@ import org.springframework.http.HttpStatus;
 class EastMoneyFundDataSourceAdapterTest {
 
     @Test
-    void shouldParseJsonpEstimateResponse() {
-        String jsonp = "jsonpgz({\"fundcode\":\"000001\",\"name\":\"华夏成长混合\",\"gsz\":\"1.2345\",\"gszzl\":\"0.66\",\"gztime\":\"2026-06-23 14:55\"})";
-        ExchangeFunction exchangeFunction = request -> Mono.just(ClientResponse.create(HttpStatus.OK).body(jsonp).build());
+    void shouldParseCurrentEstimateResponse() {
+        String body = "{\"data\":[{\"FCODE\":\"000001\",\"SHORTNAME\":\"华夏成长混合\",\"GSZ\":1.2345,\"GSZZL\":0.66,\"GZTIME\":\"2026-06-23 14:55\"}],\"errorCode\":0,\"success\":true}";
+        AtomicReference<ClientRequest> requested = new AtomicReference<>();
+        ExchangeFunction exchangeFunction = request -> {
+            requested.set(request);
+            return Mono.just(ClientResponse.create(HttpStatus.OK).body(body).build());
+        };
         WebClient webClient = WebClient.builder().exchangeFunction(exchangeFunction).build();
         ApiCallLogService apiCallLogService = (provider, apiName, requestUrl, requestMethod, success, statusCode, errorMessage, costTimeMs, fallbackUsed) -> { };
 
@@ -45,14 +49,16 @@ class EastMoneyFundDataSourceAdapterTest {
         assertThat(estimate.get().fundCode()).isEqualTo("000001");
         assertThat(estimate.get().fundName()).isEqualTo("华夏成长混合");
         assertThat(estimate.get().delayed()).isFalse();
+        assertThat(requested.get().method().name()).isEqualTo("POST");
+        assertThat(requested.get().headers().getContentType().toString()).isEqualTo("application/x-www-form-urlencoded");
     }
 
     @Test
     void shouldIgnoreInvalidCharsetHeaderWhenParsingEstimateResponse() {
-        String jsonp = "jsonpgz({\"fundcode\":\"161725\",\"name\":\"招商中证白酒指数A\",\"gsz\":\"0.9123\",\"gszzl\":\"-0.18\",\"gztime\":\"2026-06-23 14:55\"})";
+        String body = "{\"data\":[{\"FCODE\":\"161725\",\"SHORTNAME\":\"招商中证白酒指数A\",\"GSZ\":0.9123,\"GSZZL\":-0.18,\"GZTIME\":\"2026-06-23 14:55\"}],\"errorCode\":0,\"success\":true}";
         ExchangeFunction exchangeFunction = request -> Mono.just(ClientResponse.create(HttpStatus.OK)
                 .header("Content-Type", "application/javascript; charset=UTF-8,gbk")
-                .body(jsonp)
+                .body(body)
                 .build());
         WebClient webClient = WebClient.builder().exchangeFunction(exchangeFunction).build();
         ApiCallLogService apiCallLogService = (provider, apiName, requestUrl, requestMethod, success, statusCode, errorMessage, costTimeMs, fallbackUsed) -> { };
@@ -70,6 +76,19 @@ class EastMoneyFundDataSourceAdapterTest {
         assertThat(estimate.get().fundCode()).isEqualTo("161725");
         assertThat(estimate.get().fundName()).isEqualTo("招商中证白酒指数A");
         assertThat(estimate.get().estimateGrowthRate()).isEqualByComparingTo("-0.18");
+    }
+
+    @Test
+    void shouldTreatNullEstimateFieldsAsUnavailableInsteadOfParseFailure() {
+        String body = "{\"data\":[{\"FCODE\":\"021528\",\"SHORTNAME\":\"Active Fund\",\"GSZ\":null,\"GSZZL\":null,\"GZTIME\":null}],\"errorCode\":0,\"success\":true}";
+        ExchangeFunction exchangeFunction = request -> Mono.just(ClientResponse.create(HttpStatus.OK).body(body).build());
+        WebClient webClient = WebClient.builder().exchangeFunction(exchangeFunction).build();
+        ApiCallLogService apiCallLogService = (provider, apiName, requestUrl, requestMethod, success, statusCode,
+                                               errorMessage, costTimeMs, fallbackUsed) -> { };
+        EastMoneyFundDataSourceAdapter adapter = new EastMoneyFundDataSourceAdapter(
+                webClient, new ObjectMapper(), new QuantFundProperties(), apiCallLogService);
+
+        assertThat(adapter.getIntradayEstimate("021528")).isEmpty();
     }
 
     @Test

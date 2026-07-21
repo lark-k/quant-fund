@@ -34,9 +34,11 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DataBufferUtils;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.BodyInserters;
 
 @Component
 public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter, FundUniverseDataSourceAdapter {
@@ -57,6 +59,7 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter, Fu
     private static final DateTimeFormatter COMPACT_DATE = DateTimeFormatter.BASIC_ISO_DATE;
     private static final int HISTORICAL_NAV_PAGE_SIZE = 200;
     private static final int EAST_MONEY_LEGACY_PAGE_CAP = 20;
+    private static final String ESTIMATE_FIELDS = "FCODE,SHORTNAME,GSZZL,GZTIME,GSZ";
 
     private final WebClient fundDataWebClient;
     private final ObjectMapper objectMapper;
@@ -342,28 +345,47 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter, Fu
 
     @Override
     public Optional<FundEstimateDTO> getIntradayEstimate(String fundCode) {
-        String url = properties.getFundDataSource().getEastMoneyEstimateUrl().replace("{fundCode}", fundCode)
-                + "?rt=" + System.currentTimeMillis();
-        String body = get("intraday_estimate", url);
+        String url = properties.getFundDataSource().getEastMoneyEstimateUrl();
+        String body = postEstimate(url, fundCode);
         try {
-            JsonNode root = objectMapper.readTree(stripJsonp(body));
-            if (root.isMissingNode() || root.isEmpty()) {
+            JsonNode root = objectMapper.readTree(body);
+            if (!root.path("success").asBoolean(false) || root.path("errorCode").asInt(-1) != 0) {
+                throw new FundDataSourceException("EastMoney valuation API returned an error");
+            }
+            JsonNode estimates = root.path("data");
+            if (!estimates.isArray()) {
                 return Optional.empty();
             }
-            String estimateTime = text(root, "gztime");
+            JsonNode estimate = null;
+            for (JsonNode item : estimates) {
+                if (fundCode.equals(text(item, "FCODE"))) {
+                    estimate = item;
+                    break;
+                }
+            }
+            if (estimate == null
+                    || !StringUtils.hasText(text(estimate, "GZTIME"))
+                    || !StringUtils.hasText(text(estimate, "GSZZL"))
+                    || !StringUtils.hasText(text(estimate, "GSZ"))) {
+                return Optional.empty();
+            }
+            String estimateTime = text(estimate, "GZTIME");
             LocalDateTime updateTime = parseEstimateTime(estimateTime);
             return Optional.of(new FundEstimateDTO(
-                    text(root, "fundcode", "fundCode", "code"),
-                    text(root, "name", "fundName"),
-                    decimal(text(root, "gsz")),
-                    decimal(text(root, "gszzl")),
+                    text(estimate, "FCODE"),
+                    text(estimate, "SHORTNAME"),
+                    decimal(text(estimate, "GSZ")),
+                    decimal(text(estimate, "GSZZL")),
                     updateTime.toLocalDate(),
                     updateTime,
                     SOURCE_NAME,
                     false,
-                    stripJsonp(body)
+                    body
             ));
         } catch (Exception exception) {
+            if (exception instanceof FundDataSourceException dataSourceException) {
+                throw dataSourceException;
+            }
             throw new FundDataSourceException("东方财富当天估值解析失败", exception);
         }
     }
@@ -417,10 +439,6 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter, Fu
         if (isOverseasActiveFund(fundCode)) {
             return List.of(overseasFundTheme(fundCode));
         }
-        List<FundThemeDTO> mappedThemes = mappedActiveFundThemes(fundCode);
-        if (!mappedThemes.isEmpty()) {
-            return mappedThemes;
-        }
         Optional<FundThemeDTO> indexTheme = indexTheme(fundCode);
         if (indexTheme.isPresent()) {
             return List.of(indexTheme.get());
@@ -445,21 +463,6 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter, Fu
                 })
                 .sorted(Comparator.comparing(FundThemeDTO::weight, Comparator.nullsLast(BigDecimal::compareTo)).reversed())
                 .toList();
-    }
-
-    private List<FundThemeDTO> mappedActiveFundThemes(String fundCode) {
-        return switch (fundCode) {
-            case "016874", "016873" -> List.of(
-                    mappedTheme(fundCode, "光纤", new BigDecimal("34.0000")),
-                    mappedTheme(fundCode, "算力租赁", new BigDecimal("33.0000")),
-                    mappedTheme(fundCode, "存储芯片", new BigDecimal("33.0000"))
-            );
-            case "021528", "021527" -> List.of(
-                    mappedTheme(fundCode, "PCB", new BigDecimal("55.0000")),
-                    mappedTheme(fundCode, "CPO", new BigDecimal("45.0000"))
-            );
-            default -> List.of();
-        };
     }
 
     private boolean isOverseasActiveFund(String fundCode) {
@@ -542,17 +545,6 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter, Fu
         } catch (Exception exception) {
             return null;
         }
-    }
-
-    private FundThemeDTO mappedTheme(String fundCode, String themeName, BigDecimal weight) {
-        return new FundThemeDTO(
-                fundCode,
-                themeName,
-                "FUND_THEME_MAPPING",
-                weight,
-                null,
-                SOURCE_NAME + "_RULE"
-        );
     }
 
     private Optional<FundThemeDTO> indexTheme(String fundCode) {
@@ -925,6 +917,38 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter, Fu
             return null;
         }
         return new BigDecimal(value.replace("%", "").replace(",", "").trim());
+    }
+
+    private String postEstimate(String url, String fundCode) {
+        long start = System.currentTimeMillis();
+        try {
+            String body = fundDataWebClient.post()
+                    .uri(url)
+                    .header("User-Agent", BROWSER_USER_AGENT)
+                    .header("Referer", "https://fund.eastmoney.com/")
+                    .header("Accept", "application/json,text/plain,*/*")
+                    .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                    .body(BodyInserters.fromFormData("FCODES", fundCode).with("FIELDS", ESTIMATE_FIELDS))
+                    .exchangeToMono(response -> response.body((message, context) -> DataBufferUtils.join(message.getBody())
+                                    .map(this::toBytes))
+                            .defaultIfEmpty(new byte[0])
+                            .map(bytes -> {
+                                String responseBody = decodeBody(bytes);
+                                if (response.statusCode().isError()) {
+                                    throw new FundDataSourceException("external fund api returned error: " + response.statusCode());
+                                }
+                                return responseBody;
+                            }))
+                    .timeout(Duration.ofMillis(properties.getFundDataSource().getTimeoutMs()))
+                    .block();
+            apiCallLogService.record(SOURCE_NAME, "intraday_estimate", url, "POST", true, 200, null,
+                    System.currentTimeMillis() - start, false);
+            return body;
+        } catch (RuntimeException exception) {
+            apiCallLogService.record(SOURCE_NAME, "intraday_estimate", url, "POST", false, null,
+                    exception.getMessage(), System.currentTimeMillis() - start, false);
+            throw exception;
+        }
     }
 
     private BigDecimal fundSizeFromYuan(String value) {

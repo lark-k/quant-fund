@@ -219,7 +219,7 @@ public class QuantFundProperties {
         @NotBlank
         private String eastMoneyFundListUrl = "https://fund.eastmoney.com/js/fundcode_search.js";
         @NotBlank
-        private String eastMoneyEstimateUrl = "https://fundgz.1234567.com.cn/js/{fundCode}.js";
+        private String eastMoneyEstimateUrl = "https://fundcomapi.tiantianfunds.com/mm/newCore/FundValuationLast";
         @NotBlank
         private String eastMoneyHistoricalNavUrl = "https://api.fund.eastmoney.com/f10/lsjz";
         @NotBlank

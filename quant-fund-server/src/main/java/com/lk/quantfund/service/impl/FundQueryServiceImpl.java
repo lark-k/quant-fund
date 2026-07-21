@@ -152,7 +152,6 @@ public class FundQueryServiceImpl implements FundQueryService {
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public FundEstimateDTO getIntradayEstimate(String fundCode, boolean manualRefresh) {
         if (!tradingCalendarService.isIntradayEstimateDisplayWindow(LocalDateTime.now())) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "当前不在盘中估值时间，暂不刷新盘中估值");
@@ -168,7 +167,16 @@ public class FundQueryServiceImpl implements FundQueryService {
         }
 
         try {
-            FundEstimateDTO estimate = queryAdaptersOptional(adapter -> adapter.getIntradayEstimate(fundCode))
+            Optional<FundEstimateDTO> providerEstimate;
+            try {
+                providerEstimate = queryAdaptersOptional(adapter -> adapter.getIntradayEstimate(fundCode));
+            } catch (RuntimeException providerFailure) {
+                log.warn("Fund estimate provider failed for {}, trying holdings-based estimate: {}",
+                        fundCode, providerFailure.getMessage());
+                providerEstimate = Optional.empty();
+            }
+            FundEstimateDTO estimate = providerEstimate
+                    .or(() -> holdingsBasedEstimate(fundCode))
                     .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "基金当天估值不存在"));
             writeCache(cacheKey, estimate, Duration.ofMinutes(5));
             saveEstimate(estimate);
@@ -182,6 +190,68 @@ public class FundQueryServiceImpl implements FundQueryService {
             }
             throw exception;
         }
+    }
+
+    private Optional<FundEstimateDTO> holdingsBasedEstimate(String fundCode) {
+        if (fundNavDailyMapper == null) {
+            return Optional.empty();
+        }
+        List<FundThemeDTO> themes;
+        try {
+            themes = queryAdapters(adapter -> adapter.getRelatedThemes(fundCode));
+        } catch (RuntimeException exception) {
+            log.warn("Holdings-based estimate failed for {}: {}", fundCode, exception.getMessage());
+            return Optional.empty();
+        }
+        List<FundThemeDTO> usableThemes = themes.stream()
+                .filter(theme -> theme.weight() != null && theme.weight().compareTo(BigDecimal.ZERO) > 0)
+                .filter(theme -> theme.estimatedRate() != null)
+                .toList();
+        BigDecimal totalWeight = usableThemes.stream()
+                .map(FundThemeDTO::weight)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (totalWeight.compareTo(BigDecimal.ZERO) <= 0) {
+            return Optional.empty();
+        }
+        BigDecimal estimateRate = usableThemes.stream()
+                .map(theme -> theme.weight().multiply(theme.estimatedRate()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .divide(totalWeight, 4, RoundingMode.HALF_UP);
+        FundNavDaily latestNav = fundNavDailyMapper.selectOne(new LambdaQueryWrapper<FundNavDaily>()
+                .eq(FundNavDaily::getFundCode, fundCode)
+                .orderByDesc(FundNavDaily::getNavDate)
+                .last("LIMIT 1"));
+        if (latestNav == null || latestNav.getUnitNav() == null
+                || latestNav.getUnitNav().compareTo(BigDecimal.ZERO) <= 0) {
+            return Optional.empty();
+        }
+        BigDecimal estimateNav = latestNav.getUnitNav()
+                .multiply(BigDecimal.ONE.add(estimateRate.divide(new BigDecimal("100.0000"), 8, RoundingMode.HALF_UP)))
+                .setScale(4, RoundingMode.HALF_UP);
+        FundInfo info = fundInfoMapper == null ? null : fundInfoMapper.selectOne(new LambdaQueryWrapper<FundInfo>()
+                .eq(FundInfo::getFundCode, fundCode)
+                .last("LIMIT 1"));
+        LocalDateTime estimateTime = LocalDateTime.now();
+        String rawPayload;
+        try {
+            rawPayload = objectMapper.writeValueAsString(Map.of(
+                    "type", "HEAVY_STOCK_WEIGHTED",
+                    "coverage", totalWeight,
+                    "themes", usableThemes));
+        } catch (JsonProcessingException exception) {
+            rawPayload = "{}";
+        }
+        return Optional.of(new FundEstimateDTO(
+                fundCode,
+                info == null || !StringUtils.hasText(info.getFundName()) ? fundCode : info.getFundName(),
+                estimateNav,
+                estimateRate,
+                estimateTime.toLocalDate(),
+                estimateTime,
+                "HEAVY_STOCK_WEIGHTED",
+                false,
+                rawPayload
+        ));
     }
 
     @Override
