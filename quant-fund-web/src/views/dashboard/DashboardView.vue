@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { InfoFilled } from '@element-plus/icons-vue'
 import MetricTile from '@/components/common/MetricTile.vue'
 import ActionTag from '@/components/common/ActionTag.vue'
 import DisclaimerBar from '@/components/common/DisclaimerBar.vue'
@@ -390,6 +391,50 @@ function quantMlReturnRangeSegments(signal: QuantSignal) {
   ]
 }
 
+function quantDecisionDetail(signal: QuantSignal) {
+  const metrics = parseSignalMetrics(signal.metricsJson)
+  const reason = String(metrics.decisionReason || '')
+  const labels: Record<string, string> = {
+    extreme_risk_exit: '极端风险防守',
+    extreme_risk_recovery_watch: '回撤改善观察',
+    risk_exit: '止损防守',
+    weak_trend_defense: '弱趋势防守',
+    weak_trend_pending: '弱趋势待确认',
+    defense_cooldown: '防守冷静期',
+    position_limit: '仓位再平衡',
+    portfolio_sell_budget_deferred: '账户额度延后'
+  }
+  const details: string[] = []
+  if (labels[reason]) details.push(labels[reason])
+  if (metrics.intradayEstimateUsed) {
+    const estimateGrowth = numberMetric(metrics.intradayEstimateGrowthRate)
+    details.push(estimateGrowth === null ? '已使用盘中估值' : `盘中估值 ${percent(estimateGrowth, 2)}`)
+  }
+  const maxDrawdown = numberMetric(metrics.maxDrawdown60d)
+  if (maxDrawdown !== null) details.push(`60日最大回撤 ${percent(maxDrawdown, 1)}`)
+  const drawdown = numberMetric(metrics.currentDrawdown60d)
+  if (drawdown !== null) details.push(`当前回撤 ${percent(drawdown, 1)}`)
+  const drawdownRisk = signal.risks?.find((item) => item.includes('最大回撤'))
+  if (maxDrawdown === null && drawdownRisk) details.push(drawdownRisk)
+  const confirmedStage = numberMetric(metrics.extremeRiskConfirmedStage)
+  const suggestedStage = numberMetric(metrics.extremeRiskSuggestedStageAfter)
+    ?? numberMetric(metrics.extremeRiskStageAfter)
+  if (reason === 'extreme_risk_exit' && suggestedStage !== null && suggestedStage > 0) {
+    if (confirmedStage !== null && confirmedStage > 0) {
+      details.push(`已确认 ${confirmedStage}/2 · 待执行 ${suggestedStage}/2`)
+    } else {
+      details.push(`待执行阶段 ${suggestedStage}/2`)
+    }
+  } else if (confirmedStage !== null && confirmedStage > 0) {
+    details.push(`已确认阶段 ${confirmedStage}/2`)
+  }
+  if (metrics.portfolioSellBudgetAdjusted) details.push('已按账户上限调整')
+  if (!details.length && signal.reasons?.length) details.push(signal.reasons[0])
+  if (!details.length && signal.risks?.length) details.push(signal.risks[0])
+  if (!details.length) details.push(`量化模型建议：${signal.actionText}`)
+  return details.join(' · ')
+}
+
 function parseSignalMetrics(value?: string | null) {
   if (!value) return {} as Record<string, unknown>
   try {
@@ -770,12 +815,31 @@ function go(path: string) {
         <div v-if="visibleQuantSignals.length" class="visual-table-wrap">
           <table class="visual-table signal-table">
             <thead>
-              <tr><th>基金</th><th>动作</th><th>总分</th><th class="ml-return-head">未来20个净值样本预计收益</th><th>风险</th><th>置信</th><th>时间</th></tr>
+              <tr><th>基金</th><th>动作</th><th>总分</th><th class="ml-return-head">未来20个净值样本预计收益</th><th>信号风险</th><th>置信</th><th>时间</th></tr>
             </thead>
             <tbody>
               <tr v-for="signal in visibleQuantSignals" :key="signal.id">
                 <td class="visual-name-cell">{{ displaySignalFund(signal) }}</td>
-                <td><ActionTag :action="signal.action" :text="signal.actionText" /></td>
+                <td class="signal-action-cell">
+                  <div class="signal-action-line">
+                    <ActionTag :action="signal.action" :text="signal.actionText" />
+                    <el-tooltip
+                      :content="quantDecisionDetail(signal)"
+                      effect="dark"
+                      placement="top"
+                      popper-class="signal-detail-popper"
+                      :show-after="200"
+                    >
+                      <button
+                        class="signal-detail-trigger"
+                        type="button"
+                        :aria-label="`查看动作说明：${quantDecisionDetail(signal)}`"
+                      >
+                        <el-icon><InfoFilled /></el-icon>
+                      </button>
+                    </el-tooltip>
+                  </div>
+                </td>
                 <td>{{ signal.totalScore.toFixed(1) }}</td>
                 <td class="ml-return-cell" title="LGBM 仅作规则辅助参考，不覆盖量化动作">
                   <template v-for="(segment, index) in quantMlReturnRangeSegments(signal)" :key="`${signal.id}-${index}`">
@@ -848,6 +912,76 @@ function go(path: string) {
 .ml-return-separator {
   color: var(--muted);
   font-weight: 600;
+}
+
+.signal-action-cell {
+  overflow: hidden;
+}
+
+.signal-table th:nth-child(1),
+.signal-table td:nth-child(1) {
+  width: 22%;
+}
+
+.signal-table th:nth-child(2),
+.signal-table td:nth-child(2) {
+  width: 18%;
+}
+
+.signal-action-line {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.signal-action-line .action-tag {
+  flex: 0 0 auto;
+  width: auto;
+  max-width: none;
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.signal-detail-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  color: var(--muted);
+  background: transparent;
+  border-radius: 4px;
+  cursor: help;
+  transition: color 0.16s ease, background-color 0.16s ease;
+}
+
+.signal-detail-trigger:hover,
+.signal-detail-trigger:focus-visible {
+  color: var(--blue);
+  background: rgba(60, 156, 255, 0.12);
+  outline: none;
+}
+
+:global(.signal-detail-popper.el-popper) {
+  max-width: min(420px, calc(100vw - 24px));
+  padding: 9px 12px;
+  border-color: #31505e;
+  color: #dce8ee;
+  background: #101b22;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.36);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
+}
+
+:global(.signal-detail-popper .el-popper__arrow::before) {
+  border-color: #31505e;
+  background: #101b22;
 }
 
 @media (max-width: 900px) {

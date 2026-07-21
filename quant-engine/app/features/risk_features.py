@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 import pandas as pd
 
 from app.core.schemas import NavPoint
@@ -19,7 +20,9 @@ def calculate_risk_features(nav_series: list[NavPoint]) -> dict[str, float]:
     for window in (5, 20, 60):
         features[f"volatility{window}d"] = round(_annualized_volatility(returns.tail(window)), 4)
     for window in (20, 60, 120):
+        features[f"currentDrawdown{window}d"] = round(_current_drawdown(nav.tail(window)), 4)
         features[f"maxDrawdown{window}d"] = round(_max_drawdown(nav.tail(window)), 4)
+        features[f"maxDrawdownWithin{window}d"] = features[f"maxDrawdown{window}d"]
 
     last20 = returns.tail(20)
     downside = last20[last20 < 0]
@@ -42,6 +45,25 @@ def _max_drawdown(nav: pd.Series) -> float:
     return float(drawdown.min() * 100)
 
 
+def _current_drawdown(nav: pd.Series) -> float:
+    if nav.empty:
+        return 0.0
+    peak = float(nav.max())
+    return float((float(nav.iloc[-1]) / peak - 1) * 100) if peak > 0 else 0.0
+
+
+def rolling_current_drawdown(nav: pd.Series, window: int) -> pd.Series:
+    rolling_peak = nav.rolling(window, min_periods=2).max()
+    return ((nav / rolling_peak - 1) * 100).replace([np.inf, -np.inf], 0).fillna(0)
+
+
+def rolling_max_drawdown(nav: pd.Series, window: int) -> pd.Series:
+    def drawdown(values: np.ndarray) -> float:
+        return _max_drawdown(pd.Series(values, dtype=float))
+
+    return nav.rolling(window, min_periods=2).apply(drawdown, raw=True).fillna(0)
+
+
 def _empty_risk_features() -> dict[str, float]:
     return {
         "volatility5d": 0.0,
@@ -50,6 +72,12 @@ def _empty_risk_features() -> dict[str, float]:
         "maxDrawdown20d": 0.0,
         "maxDrawdown60d": 0.0,
         "maxDrawdown120d": 0.0,
+        "maxDrawdownWithin20d": 0.0,
+        "maxDrawdownWithin60d": 0.0,
+        "maxDrawdownWithin120d": 0.0,
+        "currentDrawdown20d": 0.0,
+        "currentDrawdown60d": 0.0,
+        "currentDrawdown120d": 0.0,
         "downsideVolatility20d": 0.0,
         "lossDayRatio20d": 0.0,
     }

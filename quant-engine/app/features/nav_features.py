@@ -12,11 +12,12 @@ MA_WINDOWS = (5, 10, 20, 60, 120)
 
 def build_nav_frame(nav_series: list[NavPoint]) -> pd.DataFrame:
     if not nav_series:
-        return pd.DataFrame(columns=["date", "nav", "dailyGrowthRate"])
+        return pd.DataFrame(columns=["date", "nav", "dailyGrowthRate", "estimated", "observedAt", "navSource"])
     rows = [point.model_dump() for point in nav_series]
     frame = pd.DataFrame(rows)
     frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
     frame["nav"] = pd.to_numeric(frame["nav"], errors="coerce")
+    frame["estimated"] = frame.get("estimated", False).fillna(False).astype(bool)
     for column in (
         "dailyGrowthRate",
         "indexReturnRate",
@@ -33,14 +34,28 @@ def build_nav_frame(nav_series: list[NavPoint]) -> pd.DataFrame:
     return frame.reset_index(drop=True)
 
 
-def calculate_nav_features(nav_series: list[NavPoint]) -> dict[str, float | int]:
+def calculate_nav_features(nav_series: list[NavPoint]) -> dict[str, float | int | bool | str | None]:
     frame = build_nav_frame(nav_series)
     if frame.empty:
         return _empty_nav_features()
 
     nav = frame["nav"].astype(float)
     latest = float(nav.iloc[-1])
-    features: dict[str, float | int] = {"latestNav": round(latest, 6), "navSampleSize": int(len(nav))}
+    latest_row = frame.iloc[-1]
+    intraday_estimate_used = bool(latest_row.get("estimated", False))
+    observed_at = latest_row.get("observedAt")
+    intraday_growth = latest_row.get("dailyGrowthRate")
+    features: dict[str, float | int | bool | str | None] = {
+        "latestNav": round(latest, 6),
+        "navSampleSize": int(len(nav)),
+        "officialNavSampleSize": int((~frame["estimated"]).sum()),
+        "intradayEstimateUsed": intraday_estimate_used,
+        "intradayEstimateTime": observed_at.isoformat() if intraday_estimate_used and pd.notna(observed_at) else None,
+        "navSource": latest_row.get("navSource") if intraday_estimate_used else "OFFICIAL_NAV",
+        "intradayEstimateGrowthRate": round(float(intraday_growth), 4)
+        if intraday_estimate_used and pd.notna(intraday_growth)
+        else 0.0,
+    }
 
     for window in WINDOWS:
         features[f"return{window}d"] = round(_window_return(nav, window), 4)
@@ -58,7 +73,8 @@ def calculate_nav_features(nav_series: list[NavPoint]) -> dict[str, float | int]
     daily = daily.fillna(0)
     features["consecutiveUpDays"] = _consecutive_days(daily, positive=True)
     features["consecutiveDownDays"] = _consecutive_days(daily, positive=False)
-    features.update(_market_features(frame, features))
+    official_frame = frame.loc[~frame["estimated"]].reset_index(drop=True)
+    features.update(_market_features(official_frame))
     return features
 
 
@@ -100,8 +116,16 @@ def _consecutive_days(daily_growth: pd.Series, positive: bool) -> int:
     return count
 
 
-def _empty_nav_features() -> dict[str, float | int]:
-    features: dict[str, float | int] = {"latestNav": 0.0, "navSampleSize": 0}
+def _empty_nav_features() -> dict[str, float | int | bool | str | None]:
+    features: dict[str, float | int | bool | str | None] = {
+        "latestNav": 0.0,
+        "navSampleSize": 0,
+        "officialNavSampleSize": 0,
+        "intradayEstimateUsed": False,
+        "intradayEstimateTime": None,
+        "navSource": None,
+        "intradayEstimateGrowthRate": 0.0,
+    }
     for window in WINDOWS:
         features[f"return{window}d"] = 0.0
     for window in MA_WINDOWS:
@@ -125,8 +149,9 @@ def _empty_nav_features() -> dict[str, float | int]:
     return features
 
 
-def _market_features(frame: pd.DataFrame, nav_features: dict[str, float | int]) -> dict[str, float]:
+def _market_features(frame: pd.DataFrame) -> dict[str, float]:
     features: dict[str, float] = {}
+    nav = frame["nav"].astype(float) if not frame.empty else pd.Series(dtype=float)
     market_sources = {
         "trackingIndex": "indexReturnRate",
         "marketSh000001": "marketSh000001ReturnRate",
@@ -141,7 +166,7 @@ def _market_features(frame: pd.DataFrame, nav_features: dict[str, float | int]) 
         for window, value in returns.items():
             features[f"{prefix}Return{window}d"] = round(value, 4)
             if prefix == "trackingIndex":
-                fund_return = float(nav_features.get(f"return{window}d", 0.0) or 0.0)
+                fund_return = _window_return(nav, window)
                 features[f"trackingExcessReturn{window}d"] = round(fund_return - value, 4)
     return features
 

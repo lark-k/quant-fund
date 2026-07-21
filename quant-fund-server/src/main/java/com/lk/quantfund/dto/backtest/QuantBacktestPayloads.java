@@ -118,6 +118,7 @@ public final class QuantBacktestPayloads {
 
     public record Trade(
             String date,
+            String signalDate,
             String action,
             BigDecimal amount,
             BigDecimal share,

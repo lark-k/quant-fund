@@ -285,8 +285,9 @@ def test_backtest_strong_trend_lock_reduces_profit_sells():
 
     assert response.status_code == 200
     trades = response.json()["trades"]
-    assert len(trades) <= 5
-    assert "trend_start_buy" in [item["reason"] for item in trades]
+    assert len(trades) <= 6
+    assert any(item["reason"] in {"trend_start_buy", "benchmark_alignment_buy", "strong_trend_buy"} for item in trades)
+    assert all(item["signalDate"] < item["date"] for item in trades)
     assert trades[0]["amount"] >= 4000
     assert "positionRateBefore" in trades[0]
     assert "positionRateAfter" in trades[0]
@@ -499,9 +500,9 @@ def test_backtest_weak_trend_defense_sells_only_once_before_extreme_risk():
     trades = response.json()["trades"]
     reasons = [item["reason"] for item in trades]
     assert reasons.count("weak_trend_defense") <= 1
-    extreme_trade = next(item for item in trades if item["reason"] == "extreme_risk_exit")
-    assert extreme_trade["tradeRatio"] == 100
-    assert extreme_trade["positionRateAfter"] == 0
+    extreme_trades = [item for item in trades if item["reason"] == "extreme_risk_exit"]
+    assert [item["tradeRatio"] for item in extreme_trades] == [50, 100]
+    assert extreme_trades[-1]["positionRateAfter"] == 0
 
 
 def test_backtest_weak_recovery_blocks_shallow_trend_restart_buy():

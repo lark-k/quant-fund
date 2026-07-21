@@ -13,6 +13,12 @@ from app.strategies.fund_profile import (
 TARGET_ENTRY_POSITION_RATE = 45.0
 BENCHMARK_ENTRY_POSITION_RATE = 40.0
 EARLY_TREND_BOOTSTRAP_SAMPLES = 150
+WEAK_TREND_CONFIRM_DAYS = 4
+WEAK_TREND_COOLDOWN_DAYS = 45
+POSITION_REBALANCE_COOLDOWN_DAYS = 20
+EXTREME_RISK_DRAWDOWN = 22.0
+EXTREME_RISK_RECOVERY_POINTS = 3.0
+TAIL_POSITION_RATE = 5.0
 
 ACTION_TEXT = {
     "BUY": "建议加仓",
@@ -29,10 +35,6 @@ def map_action(request: QuantAnalyzeRequest, score: ScoreBreakdown, features: di
     total = score.totalScore
     fund_type = resolve_effective_fund_type(request.holding.fundCode, request.holding.fundName, request.holding.fundType)
 
-    if features.get("shouldReduceByPosition"):
-        ratio = params.sellStepRatio if request.holding.holdingProfitRate < 15 else max(params.sellStepRatio, 20)
-        return "SELL", _sell_amount(request, ratio), ratio, blockers
-
     strong_trend_lock = _is_strong_trend_lock(features, params, fund_type)
     trend_start_buy = _is_trend_start_buy(features, score, params, fund_type)
     midterm_trend_buy = _is_midterm_trend_buy(features, score, fund_type)
@@ -42,9 +44,34 @@ def map_action(request: QuantAnalyzeRequest, score: ScoreBreakdown, features: di
     early_trend_bootstrap_buy = _is_early_trend_bootstrap_buy(features, score, params, request.holding.positionRate, fund_type)
     trend_repair_buy = _is_trend_repair_buy(features, score, params, request.holding.positionRate, fund_type)
 
-    if _should_sell_by_market(score, features, request, strong_trend_lock, fund_type):
-        ratio = _sell_ratio_by_market(score, features, request, fund_type)
+    state = _advance_execution_state(request, score, features, fund_type)
+    exit_reason = _market_exit_reason(score, features, request, strong_trend_lock, state)
+    if exit_reason is not None:
+        ratio = _sell_ratio(exit_reason, request, state)
+        _record_execution_state(request, features, state, exit_reason)
+        features["decisionReason"] = exit_reason
         return "SELL", _sell_amount(request, ratio), ratio, blockers
+
+    if state["extremeRiskRecoveryWatch"]:
+        features["decisionReason"] = "extreme_risk_recovery_watch"
+        _record_execution_state(request, features, state, "extreme_risk_recovery_watch")
+        return "WATCH", 0.0, 0.0, blockers
+
+    if features.get("shouldReduceByPosition"):
+        ratio = params.sellStepRatio if request.holding.holdingProfitRate < 15 else max(params.sellStepRatio, 20)
+        features["decisionReason"] = "position_limit"
+        _record_execution_state(request, features, state, "position_limit")
+        return "SELL", _sell_amount(request, ratio), ratio, blockers
+
+    if (
+        state["weakTrendCandidate"]
+        or state["weakRecoveryRequired"]
+        or state["weakTrendCooldownDays"] > 0
+        or state["positionRebalanceCooldownDays"] > 0
+    ):
+        features["decisionReason"] = "weak_trend_pending" if state["weakTrendCandidate"] else "defense_cooldown"
+        _record_execution_state(request, features, state)
+        return "WATCH", 0.0, 0.0, blockers
 
     should_buy = _should_buy(
         score,
@@ -75,15 +102,139 @@ def map_action(request: QuantAnalyzeRequest, score: ScoreBreakdown, features: di
         )
         amount = _suggest_amount(request, ratio)
         if amount <= 0:
+            _record_execution_state(request, features, state)
             return "HOLD", 0.0, 0.0, blockers
+        features["decisionReason"] = _buy_reason(
+            strong_trend_lock,
+            trend_start_buy,
+            midterm_trend_buy,
+            recoverable_pullback_buy,
+            benchmark_alignment_buy,
+            core_trend_allocation_buy,
+            early_trend_bootstrap_buy,
+            trend_repair_buy,
+        )
+        _record_execution_state(request, features, state)
         return "BUY", amount, ratio, blockers
 
     if should_buy and blockers:
+        _record_execution_state(request, features, state)
         return "WATCH", 0.0, 0.0, blockers
 
+    _record_execution_state(request, features, state)
     if total >= params.buyThreshold and score.trendScore >= 40:
         return "HOLD", 0.0, 0.0, blockers
     return "WATCH", 0.0, 0.0, blockers
+
+
+def _advance_execution_state(
+    request: QuantAnalyzeRequest,
+    score: ScoreBreakdown,
+    features: dict,
+    fund_type: str,
+) -> dict:
+    previous = request.strategyState
+    decision_date = _decision_date(request)
+    same_decision_day = bool(decision_date and previous.lastActionDate == decision_date)
+    weak_candidate = _is_weak_trend_defense(features, score, fund_type)
+    recovered = _is_weak_trend_recovered(features, score, request.strategyParams, fund_type)
+    cooldown = int(previous.weakTrendCooldownDays)
+    position_cooldown = int(previous.positionRebalanceCooldownDays)
+    if not same_decision_day:
+        cooldown = max(cooldown - 1, 0)
+        position_cooldown = max(position_cooldown - 1, 0)
+    if same_decision_day:
+        candidate_days = int(previous.weakTrendCandidateDays)
+    else:
+        candidate_days = int(previous.weakTrendCandidateDays) + 1 if weak_candidate else 0
+    recovery_required = bool(previous.weakRecoveryRequired)
+    handled = bool(previous.weakTrendDefenseHandled)
+    extreme_count = int(previous.extremeRiskSellCount)
+    last_extreme_drawdown = previous.lastExtremeDrawdown
+    extreme_stage = int(previous.extremeRiskStage)
+    if extreme_stage == 0 and extreme_count > 0 and last_extreme_drawdown is not None:
+        extreme_stage = min(extreme_count, 2)
+    current_drawdown = _current_drawdown60(features)
+
+    if recovered:
+        recovery_required = False
+    if cooldown == 0 and not recovery_required and not weak_candidate:
+        handled = False
+    if current_drawdown < 18 and request.holding.holdingProfitRate > request.strategyParams.stopLossRate:
+        extreme_count = 0
+        extreme_stage = 0
+        last_extreme_drawdown = None
+
+    state = {
+        "weakTrendCandidate": weak_candidate,
+        "weakTrendCandidateDays": candidate_days,
+        "weakTrendConfirmed": weak_candidate and candidate_days >= WEAK_TREND_CONFIRM_DAYS,
+        "weakTrendDefenseHandled": handled,
+        "weakTrendCooldownDays": cooldown,
+        "positionRebalanceCooldownDays": position_cooldown,
+        "weakRecoveryRequired": recovery_required,
+        "weakTrendRecovered": recovered,
+        "extremeRiskSellCount": extreme_count,
+        "extremeRiskStage": extreme_stage,
+        "confirmedExtremeRiskStage": extreme_stage,
+        "lastExtremeRiskDate": previous.lastExtremeRiskDate,
+        "lastExtremeDrawdown": last_extreme_drawdown,
+        "lastActionDate": previous.lastActionDate,
+        "sameDecisionDay": same_decision_day,
+        "currentDrawdown60dForDecision": current_drawdown,
+        "extremeRiskRecoveryWatch": False,
+        "lastDefenseDate": previous.lastDefenseDate,
+    }
+    features.update(state)
+    return state
+
+
+def _record_execution_state(
+    request: QuantAnalyzeRequest,
+    features: dict,
+    state: dict,
+    exit_reason: str | None = None,
+) -> None:
+    if exit_reason in {"score_exit", "risk_exit", "weak_trend_defense", "extreme_risk_exit"}:
+        state["weakTrendDefenseHandled"] = True
+        state["weakTrendCooldownDays"] = WEAK_TREND_COOLDOWN_DAYS
+        state["weakRecoveryRequired"] = True
+        now = request.market.now
+        state["lastDefenseDate"] = now.date().isoformat() if now else None
+    elif exit_reason == "position_limit":
+        state["positionRebalanceCooldownDays"] = max(
+            state["positionRebalanceCooldownDays"],
+            POSITION_REBALANCE_COOLDOWN_DAYS,
+        )
+    if exit_reason == "extreme_risk_exit":
+        if not state["sameDecisionDay"]:
+            if request.holding.positionRate <= TAIL_POSITION_RATE or state["extremeRiskStage"] >= 1:
+                state["extremeRiskStage"] = 2
+            else:
+                state["extremeRiskStage"] = 1
+            state["extremeRiskSellCount"] = state["extremeRiskStage"]
+            state["lastExtremeRiskDate"] = _decision_date(request)
+            state["lastExtremeDrawdown"] = state["currentDrawdown60dForDecision"]
+    elif exit_reason == "extreme_risk_recovery_watch" and not state["sameDecisionDay"]:
+        state["lastExtremeRiskDate"] = _decision_date(request)
+        state["lastExtremeDrawdown"] = state["currentDrawdown60dForDecision"]
+    state["lastActionDate"] = _decision_date(request) or state["lastActionDate"]
+    features.update({
+        "weakTrendCandidateDaysAfter": state["weakTrendCandidateDays"],
+        "weakTrendDefenseHandledAfter": state["weakTrendDefenseHandled"],
+        "weakTrendCooldownDaysAfter": state["weakTrendCooldownDays"],
+        "positionRebalanceCooldownDaysAfter": state["positionRebalanceCooldownDays"],
+        "weakRecoveryRequiredAfter": state["weakRecoveryRequired"],
+        "extremeRiskSellCountAfter": state["extremeRiskSellCount"],
+        "extremeRiskStageAfter": state["extremeRiskStage"],
+        "extremeRiskConfirmedStage": state["confirmedExtremeRiskStage"],
+        "extremeRiskSuggestedStageAfter": state["extremeRiskStage"],
+        "extremeRiskTradeConfirmationRequired": exit_reason == "extreme_risk_exit",
+        "lastExtremeRiskDateAfter": state["lastExtremeRiskDate"],
+        "lastExtremeDrawdownAfter": state["lastExtremeDrawdown"],
+        "lastActionDateAfter": state["lastActionDate"],
+        "lastDefenseDateAfter": state["lastDefenseDate"],
+    })
 
 
 def _buy_ratio(
@@ -194,6 +345,43 @@ def _is_short_term_breakdown(features: dict) -> bool:
     return float(features.get("return5d", 0)) <= -1 and float(features.get("return20d", 0)) <= 0
 
 
+def _market_exit_reason(
+    score: ScoreBreakdown,
+    features: dict,
+    request: QuantAnalyzeRequest,
+    strong_trend_lock: bool,
+    state: dict,
+) -> str | None:
+    if request.holding.holdingAmount <= 0:
+        return None
+    drawdown60 = _current_drawdown60(features)
+    profit_rate = request.holding.holdingProfitRate
+    params = request.strategyParams
+
+    if profit_rate <= -18 or drawdown60 >= EXTREME_RISK_DRAWDOWN:
+        previous_drawdown = state.get("lastExtremeDrawdown")
+        is_distinct_follow_up = (
+            state["extremeRiskStage"] >= 1
+            and not state["sameDecisionDay"]
+            and previous_drawdown is not None
+        )
+        if is_distinct_follow_up and float(previous_drawdown) - drawdown60 >= EXTREME_RISK_RECOVERY_POINTS:
+            state["extremeRiskRecoveryWatch"] = True
+            return None
+        return "extreme_risk_exit"
+    if strong_trend_lock:
+        return None
+    if profit_rate <= params.stopLossRate:
+        return "risk_exit"
+    if state["weakTrendConfirmed"] and not state["weakTrendDefenseHandled"]:
+        return "weak_trend_defense"
+    if profit_rate >= params.takeProfitRate:
+        return "profit_exit"
+    if score.totalScore <= params.sellThreshold:
+        return "score_exit"
+    return None
+
+
 def _should_sell_by_market(
     score: ScoreBreakdown,
     features: dict,
@@ -201,27 +389,13 @@ def _should_sell_by_market(
     strong_trend_lock: bool = False,
     fund_type: str | None = None,
 ) -> bool:
-    return20 = float(features.get("return20d", 0))
-    return60 = float(features.get("return60d", 0))
-    drawdown60 = abs(float(features.get("maxDrawdown60d", 0)))
-    loss_pressure = float(features.get("lossPressure", 0))
-    profit_rate = request.holding.holdingProfitRate
-    params = request.strategyParams
-
-    extreme_stop_loss = loss_pressure >= abs(params.stopLossRate) or drawdown60 >= 22
-    if extreme_stop_loss:
-        return True
-    if (strong_trend_lock or _is_midterm_trend_pullback(features, fund_type) or _is_orderly_trend_hold(features, params, fund_type)) and loss_pressure < 12:
-        return False
-    if _is_recoverable_pullback(features, score) and loss_pressure < 8:
-        return False
-
-    weak_trend_defense = _is_weak_trend_defense(features, score, fund_type)
-    deep_loss_breakdown = loss_pressure >= 12 and score.trendScore < 45 and drawdown60 >= 12
-    trend_breakdown = return20 < -8 and return60 < -5 and score.trendScore < 40
-    profit_giveback = profit_rate >= params.takeProfitRate and drawdown60 >= 10 and score.trendScore < 55
-    extreme_score_breakdown = score.totalScore < params.sellThreshold and score.trendScore < 45
-    return weak_trend_defense or deep_loss_breakdown or trend_breakdown or profit_giveback or extreme_score_breakdown
+    state = _advance_execution_state(
+        request,
+        score,
+        dict(features),
+        fund_type or request.holding.fundType,
+    )
+    return _market_exit_reason(score, features, request, strong_trend_lock, state) is not None
 
 
 def _normalize_fund_type(fund_type: str | None) -> str:
@@ -310,7 +484,7 @@ def _is_weak_trend_defense(features: dict, score: ScoreBreakdown, fund_type: str
     return20 = float(features.get("return20d", 0))
     return60 = float(features.get("return60d", 0))
     ma20_deviation = float(features.get("ma20Deviation", 0))
-    drawdown60 = abs(float(features.get("maxDrawdown60d", 0)))
+    drawdown60 = _current_drawdown60(features)
     if _is_midterm_trend_pullback(features, fund_type):
         return False
     if _is_recoverable_pullback(features, score):
@@ -328,10 +502,28 @@ def _is_weak_trend_defense(features: dict, score: ScoreBreakdown, fund_type: str
     )
 
 
+def _is_weak_trend_recovered(features: dict, score: ScoreBreakdown, params, fund_type: str | None = None) -> bool:
+    active = _is_active_equity_type(fund_type)
+    qdii = _is_qdii_or_overseas_type(fund_type)
+    return60_min = 5.5 if active else 6.0 if qdii else 4.5
+    trend_score_min = 55.0 if active else 58.0 if qdii else 55.0
+    risk_score_min = 30.0 if active else 34.0 if qdii else 30.0
+    loss_day_limit = 62.0 if active else 58.0 if qdii else 62.0
+    return (
+        float(features.get("return20d", 0)) > max(float(params.trendHoldReturn20d), 0.0)
+        and float(features.get("return60d", 0)) > return60_min
+        and float(features.get("ma20Deviation", 0)) >= max(float(params.trendHoldMa20Deviation), -6.0)
+        and _current_drawdown60(features) < 18
+        and score.trendScore >= trend_score_min
+        and score.riskScore >= risk_score_min
+        and float(features.get("lossDayRatio20d", 0)) <= loss_day_limit
+    )
+
+
 def _is_recoverable_pullback(features: dict, score: ScoreBreakdown) -> bool:
     return20 = float(features.get("return20d", 0))
     return60 = float(features.get("return60d", 0))
-    drawdown60 = abs(float(features.get("maxDrawdown60d", 0)))
+    drawdown60 = _current_drawdown60(features)
     return (
         return60 > -8
         and return20 > -18
@@ -489,25 +681,62 @@ def _is_trend_repair_buy(features: dict, score: ScoreBreakdown, params, position
     )
 
 
-def _sell_ratio_by_market(score: ScoreBreakdown, features: dict, request: QuantAnalyzeRequest, fund_type: str | None = None) -> float:
-    drawdown60 = abs(float(features.get("maxDrawdown60d", 0)))
-    loss_pressure = float(features.get("lossPressure", 0))
+def _sell_ratio(exit_reason: str, request: QuantAnalyzeRequest, state: dict) -> float:
     params = request.strategyParams
-    if _is_weak_trend_defense(features, score, fund_type or request.holding.fundType):
-        return max(params.sellStepRatio, 15.0)
-    if loss_pressure >= abs(params.stopLossRate) or drawdown60 >= 22:
+    if exit_reason == "extreme_risk_exit":
+        if request.holding.positionRate <= TAIL_POSITION_RATE:
+            return 100.0
+        if state["extremeRiskStage"] >= 1 and not state["sameDecisionDay"]:
+            return 100.0
         return max(params.sellStepRatio, 50.0)
-    if loss_pressure >= 12 and score.trendScore < 45 and drawdown60 >= 12:
+    if exit_reason == "risk_exit":
         return max(params.sellStepRatio, 35.0)
-    if request.holding.holdingProfitRate >= params.takeProfitRate and drawdown60 >= 12:
+    if exit_reason == "profit_exit":
         return max(params.sellStepRatio, 20.0)
+    if exit_reason == "weak_trend_defense":
+        return max(params.sellStepRatio, 15.0)
     return params.sellStepRatio
 
 
+def _sell_ratio_by_market(score: ScoreBreakdown, features: dict, request: QuantAnalyzeRequest, fund_type: str | None = None) -> float:
+    state = _advance_execution_state(request, score, dict(features), fund_type or request.holding.fundType)
+    reason = _market_exit_reason(score, features, request, False, state)
+    return _sell_ratio(reason or "score_exit", request, state)
+
+
+def _buy_reason(
+    strong_trend_lock: bool,
+    trend_start_buy: bool,
+    midterm_trend_buy: bool,
+    recoverable_pullback_buy: bool,
+    benchmark_alignment_buy: bool,
+    core_trend_allocation_buy: bool,
+    early_trend_bootstrap_buy: bool,
+    trend_repair_buy: bool,
+) -> str:
+    if strong_trend_lock:
+        return "strong_trend_buy"
+    if trend_start_buy:
+        return "trend_start_buy"
+    if core_trend_allocation_buy:
+        return "core_trend_allocation_buy"
+    if midterm_trend_buy:
+        return "midterm_trend_buy"
+    if benchmark_alignment_buy:
+        return "benchmark_alignment_buy"
+    if recoverable_pullback_buy:
+        return "recoverable_pullback_buy"
+    if early_trend_bootstrap_buy:
+        return "early_trend_bootstrap_buy"
+    if trend_repair_buy:
+        return "trend_repair_buy"
+    return "score_above_buy_threshold"
+
+
 def _suggest_amount(request: QuantAnalyzeRequest, ratio: float) -> float:
-    if ratio <= 0 or request.holding.holdingAmount <= 0:
+    if ratio <= 0 or request.account.totalAsset <= 0:
         return 0.0
-    amount = request.holding.holdingAmount * ratio / 100
+    amount = request.account.totalAsset * ratio / 100
     if amount < 100:
         return 0.0
     return round(amount, 2)
@@ -517,3 +746,15 @@ def _sell_amount(request: QuantAnalyzeRequest, ratio: float) -> float:
     if ratio <= 0 or request.holding.holdingAmount <= 0:
         return 0.0
     return round(request.holding.holdingAmount * ratio / 100, 2)
+
+
+def _current_drawdown60(features: dict) -> float:
+    value = features.get("currentDrawdown60d")
+    if value is None:
+        value = features.get("maxDrawdown60d", 0)
+    return abs(float(value or 0))
+
+
+def _decision_date(request: QuantAnalyzeRequest) -> str | None:
+    now = request.market.now
+    return now.date().isoformat() if now else None

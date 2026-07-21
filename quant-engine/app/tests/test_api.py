@@ -1,6 +1,10 @@
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.api.inference import _apply_portfolio_sell_budget
+from app.core.config import get_settings
+from app.core.schemas import AccountSnapshot, HoldingSnapshot
+from app.strategies.rule_model import RuleQuantModel
 
 from .conftest import make_request
 
@@ -15,7 +19,7 @@ def test_health_api_returns_up():
     assert response.json() == {
         "status": "UP",
         "service": "quant-engine",
-        "modelVersion": "rule-v1.36.0",
+        "modelVersion": "rule-v1.39.0",
     }
 
 
@@ -47,6 +51,50 @@ def test_analyze_batch_api_returns_batch_counts():
     assert body["successCount"] == 2
     assert body["failedCount"] == 0
     assert len(body["results"]) == 2
+
+
+def test_batch_sell_budget_prioritizes_risk_caps_total_and_defers_state():
+    model = RuleQuantModel(get_settings())
+    requests = []
+    results = []
+    for index, (amount, drawdown) in enumerate(((4000, -30), (3000, -25), (2000, -23)), start=1):
+        request = make_request(
+            requestId=f"budget-{index}",
+            account=AccountSnapshot(accountId=1, totalAsset=10000),
+            holding=HoldingSnapshot(
+                holdingId=index,
+                fundCode=f"00000{index}",
+                fundType="INDEX",
+                holdingAmount=amount,
+                holdingProfitRate=-4,
+                positionRate=amount / 100,
+            ),
+        )
+        result = model.analyze(request)
+        metrics = dict(result.metrics)
+        metrics.update({
+            "decisionReason": "extreme_risk_exit",
+            "currentDrawdown60d": drawdown,
+            "extremeRiskStageAfter": 1,
+            "extremeRiskSellCountAfter": 1,
+        })
+        requests.append(request)
+        results.append(result.model_copy(update={
+            "action": "SELL",
+            "suggestAmount": amount * 0.5,
+            "suggestRatio": 50.0,
+            "metrics": metrics,
+        }))
+
+    protected = _apply_portfolio_sell_budget(requests, results)
+
+    assert sum(float(item.suggestAmount) for item in protected if item.action == "SELL") == 3000
+    assert protected[0].suggestRatio == 50
+    assert protected[1].suggestRatio == 33.33
+    assert protected[1].metrics["portfolioSellBudgetAdjusted"] is True
+    assert protected[2].action == "WATCH"
+    assert protected[2].metrics["portfolioSellBudgetDeferred"] is True
+    assert protected[2].metrics["extremeRiskStageAfter"] == 0
 
 
 def test_analyze_api_accepts_null_trade_numbers():

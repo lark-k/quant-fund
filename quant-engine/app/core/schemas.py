@@ -71,6 +71,9 @@ class NavPoint(ApiModel):
     marketCyb399006ReturnRate: float | None = None
     marketHs300ReturnRate: float | None = None
     marketZz500ReturnRate: float | None = None
+    estimated: bool = False
+    observedAt: datetime | None = None
+    navSource: str | None = None
 
 
 class TradeRecord(ApiModel):
@@ -122,6 +125,21 @@ class BacktestStrategyParams(ApiModel):
     trendHoldMa20Deviation: float = -7
 
 
+class StrategyExecutionState(ApiModel):
+    weakTrendCandidateDays: int = 0
+    weakTrendDefenseHandled: bool = False
+    weakTrendCooldownDays: int = 0
+    positionRebalanceCooldownDays: int = 0
+    weakRecoveryRequired: bool = False
+    extremeRiskStage: int = 0
+    lastExtremeRiskDate: str | None = None
+    lastExtremeDrawdown: float | None = None
+    lastActionDate: str | None = None
+    # Kept during the rule-v1.37 migration window. New decisions use extremeRiskStage.
+    extremeRiskSellCount: int = 0
+    lastDefenseDate: str | None = None
+
+
 class QuantAnalyzeRequest(ApiModel):
     requestId: str
     userId: int | None = None
@@ -131,6 +149,7 @@ class QuantAnalyzeRequest(ApiModel):
     navSeries: list[NavPoint] = Field(default_factory=list)
     tradeRecords: list[TradeRecord] = Field(default_factory=list)
     strategyParams: BacktestStrategyParams = Field(default_factory=BacktestStrategyParams)
+    strategyState: StrategyExecutionState = Field(default_factory=StrategyExecutionState)
     market: MarketContext = Field(default_factory=MarketContext)
 
 
@@ -216,6 +235,7 @@ class BacktestBatchRunRequest(ApiModel):
 
 class BacktestTrade(ApiModel):
     date: str
+    signalDate: str | None = None
     action: Literal["BUY", "SELL"]
     amount: float
     share: float

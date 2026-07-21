@@ -28,4 +28,34 @@ def test_risk_features_calculate_max_drawdown_from_nav_series():
     features = calculate_risk_features(nav)
 
     assert features["maxDrawdown20d"] == -10.0
+    assert features["maxDrawdownWithin20d"] == -10.0
+    assert features["currentDrawdown20d"] == -7.2727
     assert features["volatility5d"] > 0
+
+
+def test_intraday_estimate_is_full_temporary_nav_point_for_trend_and_drawdown():
+    nav = [
+        NavPoint(date="2026-06-01", nav=1.00, dailyGrowthRate=0),
+        NavPoint(date="2026-06-02", nav=1.10, dailyGrowthRate=10),
+        NavPoint(
+            date="2026-06-03",
+            nav=0.88,
+            dailyGrowthRate=-20,
+            estimated=True,
+            observedAt="2026-06-03 14:50:00",
+            navSource="TEST_ESTIMATE",
+        ),
+    ]
+    request = make_request(navSeries=nav)
+
+    features = build_features(request)
+
+    assert features["latestNav"] == 0.88
+    assert features["navSampleSize"] == 3
+    assert features["officialNavSampleSize"] == 2
+    assert features["intradayEstimateUsed"] is True
+    assert features["intradayEstimateGrowthRate"] == -20
+    assert features["navSource"] == "TEST_ESTIMATE"
+    assert features["currentDrawdown20d"] == -20
+    assert features["maxDrawdown20d"] == -20
+    assert features["consecutiveDownDays"] == 1

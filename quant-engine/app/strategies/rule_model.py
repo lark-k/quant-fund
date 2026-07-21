@@ -41,6 +41,9 @@ class RuleQuantModel:
         if ml_prediction.available and ml_prediction.scoreAdjustment:
             score = adjust_total_score(score, ml_prediction.scoreAdjustment)
         action, suggest_amount, suggest_ratio, blockers = map_action(request, score, features)
+        signal_risk_level = self._signal_risk_level(action, features, score)
+        features["investorRiskLevel"] = request.riskProfile.riskLevel
+        features["signalRiskLevel"] = signal_risk_level
         reasons = self._build_reasons(request, features, score, blockers)
         risks = self._build_risks(request, features, blockers)
         confidence = self._confidence(score, features, blockers)
@@ -55,7 +58,7 @@ class RuleQuantModel:
             suggestAmount=suggest_amount,
             suggestRatio=suggest_ratio,
             confidence=confidence,
-            riskLevel=request.riskProfile.riskLevel,
+            riskLevel=signal_risk_level,
             score=score,
             metrics=features,
             reasons=reasons,
@@ -127,3 +130,15 @@ class RuleQuantModel:
         if blockers:
             confidence -= 0.08
         return round(max(0.1, min(0.95, confidence)), 2)
+
+    def _signal_risk_level(self, action: str, features: dict, score) -> str:
+        reason = str(features.get("decisionReason") or "")
+        if reason in {"extreme_risk_exit", "risk_exit", "extreme_risk_recovery_watch"}:
+            return "HIGH"
+        if action == "SELL" or score.riskScore < 30 or _abs_metric(features, "currentDrawdown60d") >= 15:
+            return "MEDIUM"
+        return "LOW"
+
+
+def _abs_metric(features: dict, key: str) -> float:
+    return abs(float(features.get(key, 0) or 0))

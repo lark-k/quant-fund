@@ -234,6 +234,7 @@ export type BacktestEquityPoint = {
 
 export type BacktestTrade = {
   date: string
+  signalDate?: string
   action: 'BUY' | 'SELL'
   amount: number
   share: number

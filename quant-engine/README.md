@@ -54,7 +54,7 @@ Response:
 {
   "status": "UP",
   "service": "quant-engine",
-  "modelVersion": "rule-v1.36.0"
+  "modelVersion": "rule-v1.39.0"
 }
 ```
 
@@ -236,7 +236,7 @@ two LightGBM outputs:
   horizon, currently the next 20 NAV samples by default.
 
 - By default `QUANT_ENGINE_ML_ENABLED=false`, so production behavior stays pure
-  `rule-v1.36.0`.
+  `rule-v1.39.0`.
 - When enabled, the active model in `models/registry.json` is loaded once. Its
   probability is converted into a capped score adjustment, and its
   `expectedReturn` is exposed for AI explanation and backtest diagnostics.
@@ -314,8 +314,21 @@ The backtest page export uses the default label rule:
 - The service only generates suggestions. It never places trades.
 - `BUY` is blocked when single-fund or total equity position reaches the risk
   profile limit.
-- QDII/overseas funds are blocked from generating same-day `BUY` suggestions
-  from A-share intraday movement.
+- Live analysis may append a fresh same-day valuation as an in-memory estimated
+  NAV point. That point participates in return, moving-average, trend, volatility,
+  opportunity, drawdown, and final action calculations without being persisted as official NAV.
+- Backtests keep `estimateGrowthRate=0` and use official historical NAV only;
+  they do not synthesize or append intraday valuation points.
+- Exit decisions use the current distance from the 60-sample rolling peak;
+  the worst drawdown inside that window remains available for scoring and display.
+- Extreme risk sells 50% on the first decision day. A distinct later decision
+  clears the remainder only when risk is still extreme and drawdown has not
+  improved by at least 3 percentage points; positions at or below 5% may be cleared directly.
+- Live analysis advances an extreme-risk stage only after Java finds a completed
+  `SELL` or `CONVERT_OUT` trade recorded after the corresponding signal. Merely
+  generating a suggestion, or leaving a trade in `PROCESSING`, does not advance it.
+- Batch analysis limits combined sell suggestions to 30% of account assets per
+  decision day and defers lower-priority sells without advancing their execution state.
 - Large language models may explain returned results later, but must not
   override the deterministic action returned by this engine.
 

@@ -16,6 +16,7 @@ import com.lk.quantfund.dto.quant.QuantNavPointDTO;
 import com.lk.quantfund.dto.quant.QuantRiskProfileDTO;
 import com.lk.quantfund.dto.quant.QuantScoreDTO;
 import com.lk.quantfund.dto.quant.QuantStrategyParamsDTO;
+import com.lk.quantfund.dto.quant.QuantStrategyStateDTO;
 import com.lk.quantfund.dto.quant.QuantTradeDTO;
 import com.lk.quantfund.entity.FundHolding;
 import com.lk.quantfund.entity.FundNavDaily;
@@ -48,6 +49,7 @@ import com.lk.quantfund.vo.quant.QuantEngineHealthVO;
 import com.lk.quantfund.vo.quant.QuantSignalVO;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -71,6 +73,8 @@ public class QuantAnalysisServiceImpl implements QuantAnalysisService {
 
     private static final Logger log = LoggerFactory.getLogger(QuantAnalysisServiceImpl.class);
     private static final BigDecimal ZERO = BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP);
+    private static final Duration INTRADAY_ESTIMATE_MAX_AGE = Duration.ofMinutes(5);
+    private static final Duration INTRADAY_ESTIMATE_MAX_CLOCK_SKEW = Duration.ofMinutes(1);
     private static final Map<String, String> COMMON_MARKET_INDICES = new LinkedHashMap<>();
 
     static {
@@ -133,10 +137,10 @@ public class QuantAnalysisServiceImpl implements QuantAnalysisService {
     @Transactional(rollbackFor = Exception.class)
     public QuantSignalVO analyzeHoldingForUser(Long userId, Long holdingId) {
         FundHolding holding = loadOwnedHolding(userId, holdingId);
-        refreshIntradayEstimateBeforeQuant(holding);
+        IntradayEstimateContext intradayEstimate = refreshIntradayEstimateBeforeQuant(holding);
         PortfolioAccount account = loadOwnedAccount(userId, holding.getAccountId());
         RiskProfile riskProfile = loadOrCreateRiskProfile(userId);
-        QuantAnalyzeRequest request = buildRequest(userId, account, holding, riskProfile);
+        QuantAnalyzeRequest request = buildRequest(userId, account, holding, riskProfile, intradayEstimate);
         QuantAnalyzeResponse response = analyzeWithFallback(request, account, holding, riskProfile);
         return toVO(saveSignal(userId, account, holding, request, response, fallbackUsed(response)));
     }
@@ -163,9 +167,10 @@ public class QuantAnalysisServiceImpl implements QuantAnalysisService {
         if (holdings.size() > maxBatch) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "holding count exceeds quant engine max batch size");
         }
-        holdings.forEach(this::refreshIntradayEstimateBeforeQuant);
+        Map<Long, IntradayEstimateContext> intradayEstimates = new LinkedHashMap<>();
+        holdings.forEach(holding -> intradayEstimates.put(holding.getId(), refreshIntradayEstimateBeforeQuant(holding)));
         List<QuantAnalyzeRequest> requests = holdings.stream()
-                .map(holding -> buildRequest(userId, account, holding, riskProfile))
+                .map(holding -> buildRequest(userId, account, holding, riskProfile, intradayEstimates.get(holding.getId())))
                 .toList();
         List<QuantAnalyzeResponse> responses;
         boolean fallback = false;
@@ -239,10 +244,18 @@ public class QuantAnalysisServiceImpl implements QuantAnalysisService {
         }
     }
 
-    private QuantAnalyzeRequest buildRequest(Long userId, PortfolioAccount account, FundHolding holding, RiskProfile riskProfile) {
+    private QuantAnalyzeRequest buildRequest(Long userId,
+                                             PortfolioAccount account,
+                                             FundHolding holding,
+                                             RiskProfile riskProfile,
+                                             IntradayEstimateContext intradayEstimate) {
         LocalDateTime now = LocalDateTime.now();
         String phase = decisionPhase(now.toLocalTime());
         LocalDateTime deadline = parseDeadline(now.toLocalDate());
+        NavSeriesContext navContext = navSeries(holding, intradayEstimate);
+        IntradayEstimateContext effectiveEstimate = navContext.intradayEstimateUsed()
+                ? intradayEstimate
+                : IntradayEstimateContext.unavailable();
         return new QuantAnalyzeRequest(
                 "qf-" + now.toLocalDate() + "-" + holding.getId() + "-" + UUID.randomUUID(),
                 userId,
@@ -277,19 +290,20 @@ public class QuantAnalysisServiceImpl implements QuantAnalysisService {
                         valueOrZero(holding.getHoldingProfitRate()),
                         valueOrZero(holding.getDailyProfit()),
                         positionRate(account, holding),
-                        holding.getCurrentEstimateNav(),
+                        effectiveEstimate.estimateNav(),
                         holding.getLatestOfficialNav(),
-                        estimateGrowthRate(holding),
+                        effectiveEstimate.growthRate(),
                         null,
-                        estimateGrowthRate(holding),
+                        effectiveEstimate.growthRate(),
                         null,
                         holding.getHoldingDays() == null ? 0 : holding.getHoldingDays(),
                         holding.getCoreHolding() != null && holding.getCoreHolding() == 1,
                         holding.getWatchFocus() != null && holding.getWatchFocus() == 1
                 ),
-                navSeries(holding),
+                navContext.points(),
                 tradeRecords(userId, holding.getId()),
                 defaultStrategyParams(),
+                strategyState(userId, holding.getId(), now.toLocalDate()),
                 new QuantMarketContextDTO(
                         tradingCalendarService.isTradingDay(now.toLocalDate()),
                         tradingCalendarService.isIntradayEstimateWindow(now),
@@ -443,7 +457,7 @@ public class QuantAnalysisServiceImpl implements QuantAnalysisService {
         signal.setAction(response.action());
         signal.setActionText(response.actionText());
         BigDecimal suggestRatio = scale(response.suggestRatio());
-        signal.setSuggestAmount(normalizeSuggestAmount(response.action(), response.suggestAmount(), suggestRatio, holding));
+        signal.setSuggestAmount(normalizeSuggestAmount(response.action(), response.suggestAmount(), suggestRatio, account, holding));
         signal.setSuggestRatio(suggestRatio);
         signal.setRiskLevel(firstText(response.riskLevel(), RiskLevel.MEDIUM.name()));
         signal.setConfidence(scale(response.confidence()));
@@ -508,7 +522,7 @@ public class QuantAnalysisServiceImpl implements QuantAnalysisService {
         }
     }
 
-    private List<QuantNavPointDTO> navSeries(FundHolding holding) {
+    private NavSeriesContext navSeries(FundHolding holding, IntradayEstimateContext intradayEstimate) {
         List<FundNavDaily> rows = fundNavDailyMapper.selectList(new LambdaQueryWrapper<FundNavDaily>()
                 .eq(FundNavDaily::getFundCode, holding.getFundCode())
                 .orderByDesc(FundNavDaily::getNavDate)
@@ -517,14 +531,19 @@ public class QuantAnalysisServiceImpl implements QuantAnalysisService {
                 .sorted(Comparator.comparing(FundNavDaily::getNavDate))
                 .toList();
         if (sorted.isEmpty()) {
-            return List.of();
+            if (!intradayEstimate.available()) {
+                return new NavSeriesContext(List.of(), false);
+            }
+            return new NavSeriesContext(List.of(intradayNavPoint(intradayEstimate)), true);
         }
         LocalDate startDate = sorted.get(0).getNavDate();
-        LocalDate endDate = sorted.get(sorted.size() - 1).getNavDate();
+        LocalDate latestOfficialDate = sorted.get(sorted.size() - 1).getNavDate();
+        boolean useIntradayEstimate = intradayEstimate.available() && latestOfficialDate.isBefore(LocalDate.now());
+        LocalDate endDate = useIntradayEstimate ? LocalDate.now() : latestOfficialDate;
         Map<String, NavigableMap<LocalDate, BigDecimal>> marketReturns = marketReturnSeries(startDate, endDate);
         IndexMatch tracking = trackingIndex(holding);
         NavigableMap<LocalDate, BigDecimal> trackingReturns = marketReturnSeries(tracking.code(), startDate, endDate);
-        return sorted.stream()
+        List<QuantNavPointDTO> points = new ArrayList<>(sorted.stream()
                 .map(item -> new QuantNavPointDTO(
                         item.getNavDate(),
                         item.getUnitNav(),
@@ -539,7 +558,31 @@ public class QuantAnalysisServiceImpl implements QuantAnalysisService {
                         marketReturn(marketReturns.get("marketHs300ReturnRate"), item.getNavDate()),
                         marketReturn(marketReturns.get("marketZz500ReturnRate"), item.getNavDate())
                 ))
-                .toList();
+                .toList());
+        if (useIntradayEstimate) {
+            points.add(intradayNavPoint(intradayEstimate));
+        }
+        return new NavSeriesContext(List.copyOf(points), useIntradayEstimate);
+    }
+
+    private QuantNavPointDTO intradayNavPoint(IntradayEstimateContext estimate) {
+        return new QuantNavPointDTO(
+                estimate.estimateTime().toLocalDate(),
+                estimate.estimateNav(),
+                null,
+                estimate.growthRate(),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                true,
+                estimate.estimateTime(),
+                estimate.sourceName()
+        );
     }
 
     private Map<String, NavigableMap<LocalDate, BigDecimal>> marketReturnSeries(LocalDate startDate, LocalDate endDate) {
@@ -638,6 +681,131 @@ public class QuantAnalysisServiceImpl implements QuantAnalysisService {
                         item.getTradeTime()
                 ))
                 .toList();
+    }
+
+    private QuantStrategyStateDTO strategyState(Long userId, Long holdingId, LocalDate today) {
+        List<QuantSignal> rows = quantSignalMapper.selectList(new LambdaQueryWrapper<QuantSignal>()
+                .eq(QuantSignal::getUserId, userId)
+                .eq(QuantSignal::getHoldingId, holdingId)
+                .lt(QuantSignal::getTradeDate, today)
+                .ge(QuantSignal::getTradeDate, today.minusDays(120))
+                .eq(QuantSignal::getDeleted, 0)
+                .orderByDesc(QuantSignal::getTradeDate)
+                .orderByDesc(QuantSignal::getSignalTime));
+        List<TradeRecord> completedReductions = tradeRecordMapper.selectList(new LambdaQueryWrapper<TradeRecord>()
+                .eq(TradeRecord::getUserId, userId)
+                .eq(TradeRecord::getHoldingId, holdingId)
+                .eq(TradeRecord::getTradeStatus, "COMPLETED")
+                .in(TradeRecord::getTradeType, List.of("SELL", "CONVERT_OUT"))
+                .ge(TradeRecord::getTradeTime, today.minusDays(120).atStartOfDay())
+                .orderByDesc(TradeRecord::getTradeTime));
+        Map<LocalDate, QuantSignal> latestByDate = new LinkedHashMap<>();
+        rows.forEach(row -> latestByDate.putIfAbsent(row.getTradeDate(), row));
+        QuantStrategyStateDTO latestState = null;
+        ConfirmedExtremeState confirmedExtreme = null;
+        boolean extremeResetReached = false;
+        for (QuantSignal signal : latestByDate.values()) {
+            Map<String, Object> metrics = readMap(signal.getMetricsJson());
+            if (metrics.containsKey("weakTrendCooldownDaysAfter")) {
+                if (latestState == null) {
+                    latestState = strategyStateFromMetrics(metrics);
+                }
+                int suggestedStage = metrics.containsKey("extremeRiskStageAfter")
+                        ? integerValue(metrics.get("extremeRiskStageAfter"))
+                        : integerValue(metrics.get("extremeRiskSellCountAfter"));
+                if (confirmedExtreme == null && !extremeResetReached) {
+                    if (suggestedStage <= 0) {
+                        extremeResetReached = true;
+                    } else if ("SELL".equals(signal.getAction())
+                            && "extreme_risk_exit".equals(stringValue(metrics.get("decisionReason")))
+                            && hasCompletedReductionAfter(signal, completedReductions)) {
+                        confirmedExtreme = new ConfirmedExtremeState(
+                                suggestedStage,
+                                stringValue(metrics.get("lastExtremeRiskDateAfter")),
+                                decimalValue(metrics.get("lastExtremeDrawdownAfter"))
+                        );
+                    }
+                }
+            }
+            // Treat a legacy 15% defense recommendation as an already handled event.
+            if (latestState == null && "SELL".equals(signal.getAction()) && signal.getSuggestRatio() != null
+                    && signal.getSuggestRatio().compareTo(new BigDecimal("15.0000")) == 0) {
+                String signalDate = signal.getTradeDate() == null ? null : signal.getTradeDate().toString();
+                latestState = new QuantStrategyStateDTO(4, true, 45, 0, true, 0,
+                        null, null, signalDate, 0, signalDate);
+            }
+        }
+        if (latestState == null) {
+            return QuantStrategyStateDTO.initial();
+        }
+        int confirmedStage = confirmedExtreme == null ? 0 : confirmedExtreme.stage();
+        return new QuantStrategyStateDTO(
+                latestState.weakTrendCandidateDays(),
+                latestState.weakTrendDefenseHandled(),
+                latestState.weakTrendCooldownDays(),
+                latestState.positionRebalanceCooldownDays(),
+                latestState.weakRecoveryRequired(),
+                confirmedStage,
+                confirmedExtreme == null ? null : confirmedExtreme.signalDate(),
+                confirmedExtreme == null ? null : confirmedExtreme.drawdown(),
+                latestState.lastActionDate(),
+                confirmedStage,
+                latestState.lastDefenseDate()
+        );
+    }
+
+    private QuantStrategyStateDTO strategyStateFromMetrics(Map<String, Object> metrics) {
+        return new QuantStrategyStateDTO(
+                integerValue(metrics.get("weakTrendCandidateDaysAfter")),
+                booleanValue(metrics.get("weakTrendDefenseHandledAfter")),
+                integerValue(metrics.get("weakTrendCooldownDaysAfter")),
+                integerValue(metrics.get("positionRebalanceCooldownDaysAfter")),
+                booleanValue(metrics.get("weakRecoveryRequiredAfter")),
+                integerValue(metrics.get("extremeRiskStageAfter")),
+                stringValue(metrics.get("lastExtremeRiskDateAfter")),
+                decimalValue(metrics.get("lastExtremeDrawdownAfter")),
+                stringValue(metrics.get("lastActionDateAfter")),
+                integerValue(metrics.get("extremeRiskSellCountAfter")),
+                stringValue(metrics.get("lastDefenseDateAfter"))
+        );
+    }
+
+    private boolean hasCompletedReductionAfter(QuantSignal signal, List<TradeRecord> reductions) {
+        LocalDateTime signalTime = signal.getSignalTime();
+        if (signalTime == null && signal.getTradeDate() != null) {
+            signalTime = signal.getTradeDate().atStartOfDay();
+        }
+        if (signalTime == null) {
+            return false;
+        }
+        LocalDateTime finalSignalTime = signalTime;
+        return reductions.stream().anyMatch(trade -> {
+            if (!"COMPLETED".equals(trade.getTradeStatus())
+                    || !("SELL".equals(trade.getTradeType()) || "CONVERT_OUT".equals(trade.getTradeType()))) {
+                return false;
+            }
+            LocalDateTime recordedAt = trade.getCreateTime() == null ? trade.getTradeTime() : trade.getCreateTime();
+            return trade.getTradeTime() != null
+                    && !trade.getTradeTime().isBefore(finalSignalTime)
+                    && recordedAt != null
+                    && !recordedAt.isBefore(finalSignalTime);
+        });
+    }
+
+    private record ConfirmedExtremeState(int stage, String signalDate, BigDecimal drawdown) {
+    }
+
+    private record NavSeriesContext(List<QuantNavPointDTO> points, boolean intradayEstimateUsed) {
+    }
+
+    private record IntradayEstimateContext(boolean available,
+                                           BigDecimal estimateNav,
+                                           BigDecimal growthRate,
+                                           LocalDateTime estimateTime,
+                                           String sourceName) {
+        private static IntradayEstimateContext unavailable() {
+            return new IntradayEstimateContext(false, null, ZERO, null, null);
+        }
     }
 
     private RiskProfile loadOrCreateRiskProfile(Long userId) {
@@ -754,29 +922,56 @@ public class QuantAnalysisServiceImpl implements QuantAnalysisService {
         return valueOrZero(holding.getHoldingAmount()).multiply(new BigDecimal("100.0000")).divide(totalAsset, 4, RoundingMode.HALF_UP);
     }
 
-    private void refreshIntradayEstimateBeforeQuant(FundHolding holding) {
+    private IntradayEstimateContext refreshIntradayEstimateBeforeQuant(FundHolding holding) {
         LocalDateTime now = LocalDateTime.now();
         if (!tradingCalendarService.isIntradayEstimateWindow(now)) {
-            return;
+            return IntradayEstimateContext.unavailable();
         }
         try {
             FundEstimateDTO estimate = fundQueryService.getIntradayEstimate(holding.getFundCode(), false);
+            if (!validIntradayEstimate(estimate, now)) {
+                log.warn("Intraday estimate ignored before quant for holding {} because it is stale, delayed, or invalid", holding.getId());
+                return IntradayEstimateContext.unavailable();
+            }
             if (StringUtils.hasText(estimate.fundName())) {
                 holding.setFundName(estimate.fundName());
             }
-            if (estimate.estimateNav() != null) {
-                holding.setCurrentEstimateNav(scale(estimate.estimateNav()));
-            }
+            holding.setCurrentEstimateNav(scale(estimate.estimateNav()));
             holding.setUpdateTime(now);
             fundHoldingMapper.updateById(holding);
+            return new IntradayEstimateContext(
+                    true,
+                    scale(estimate.estimateNav()),
+                    estimateGrowthRate(holding, estimate),
+                    estimate.estimateTime(),
+                    firstText(estimate.sourceName(), "INTRADAY_ESTIMATE")
+            );
         } catch (RuntimeException exception) {
             log.warn("Refresh intraday estimate skipped before quant for holding {}: {}", holding.getId(), exception.getMessage());
+            return IntradayEstimateContext.unavailable();
         }
     }
 
-    private BigDecimal estimateGrowthRate(FundHolding holding) {
+    private boolean validIntradayEstimate(FundEstimateDTO estimate, LocalDateTime now) {
+        if (estimate == null || estimate.delayed() || estimate.estimateNav() == null
+                || estimate.estimateNav().compareTo(BigDecimal.ZERO) <= 0
+                || estimate.estimateDate() == null || !estimate.estimateDate().equals(now.toLocalDate())
+                || estimate.estimateTime() == null || !estimate.estimateTime().toLocalDate().equals(now.toLocalDate())) {
+            return false;
+        }
+        Duration age = Duration.between(estimate.estimateTime(), now);
+        if (age.isNegative()) {
+            return age.abs().compareTo(INTRADAY_ESTIMATE_MAX_CLOCK_SKEW) <= 0;
+        }
+        return age.compareTo(INTRADAY_ESTIMATE_MAX_AGE) <= 0;
+    }
+
+    private BigDecimal estimateGrowthRate(FundHolding holding, FundEstimateDTO estimateContext) {
+        if (estimateContext.estimateGrowthRate() != null) {
+            return scale(estimateContext.estimateGrowthRate());
+        }
         BigDecimal latest = holding.getLatestOfficialNav();
-        BigDecimal estimate = holding.getCurrentEstimateNav();
+        BigDecimal estimate = estimateContext.estimateNav();
         if (latest == null || estimate == null || latest.compareTo(BigDecimal.ZERO) <= 0) {
             return ZERO;
         }
@@ -786,6 +981,7 @@ public class QuantAnalysisServiceImpl implements QuantAnalysisService {
     private BigDecimal normalizeSuggestAmount(String action,
                                               BigDecimal suggestAmount,
                                               BigDecimal suggestRatio,
+                                              PortfolioAccount account,
                                               FundHolding holding) {
         BigDecimal amount = scale(suggestAmount);
         if (amount.compareTo(BigDecimal.ZERO) > 0 || suggestRatio.compareTo(BigDecimal.ZERO) <= 0) {
@@ -797,7 +993,7 @@ public class QuantAnalysisServiceImpl implements QuantAnalysisService {
                     .divide(new BigDecimal("100.0000"), 4, RoundingMode.HALF_UP);
         }
         if ("BUY".equals(action)) {
-            return valueOrZero(holding.getHoldingAmount())
+            return valueOrZero(account.getTotalAsset())
                     .multiply(suggestRatio)
                     .divide(new BigDecimal("100.0000"), 4, RoundingMode.HALF_UP);
         }
@@ -821,6 +1017,47 @@ public class QuantAnalysisServiceImpl implements QuantAnalysisService {
             return objectMapper.readValue(json, new TypeReference<List<String>>() {});
         } catch (Exception exception) {
             return List.of();
+        }
+    }
+
+    private Map<String, Object> readMap(String json) {
+        if (!StringUtils.hasText(json)) {
+            return Map.of();
+        }
+        try {
+            return objectMapper.readValue(json, new TypeReference<Map<String, Object>>() {});
+        } catch (Exception exception) {
+            return Map.of();
+        }
+    }
+
+    private int integerValue(Object value) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        try {
+            return value == null ? 0 : Integer.parseInt(value.toString());
+        } catch (NumberFormatException exception) {
+            return 0;
+        }
+    }
+
+    private boolean booleanValue(Object value) {
+        return value instanceof Boolean bool ? bool : Boolean.parseBoolean(String.valueOf(value));
+    }
+
+    private String stringValue(Object value) {
+        return value == null ? null : value.toString();
+    }
+
+    private BigDecimal decimalValue(Object value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return new BigDecimal(value.toString());
+        } catch (NumberFormatException exception) {
+            return null;
         }
     }
 

@@ -10,6 +10,7 @@ import pandas as pd
 from app.backtest.metrics import annual_return, calmar_ratio, max_drawdown, pct, percentile, sharpe_ratio
 from app.core.config import Settings
 from app.core.schemas import (
+    AccountSnapshot,
     BacktestBatchRunRequest,
     BacktestBatchRunResponse,
     BacktestEquityPoint,
@@ -21,9 +22,14 @@ from app.core.schemas import (
     BacktestStrategyParams,
     BacktestSummary,
     BacktestTrade,
+    HoldingSnapshot,
+    MarketContext,
+    QuantAnalyzeRequest,
+    RiskProfile,
+    StrategyExecutionState,
 )
 from app.features.nav_features import build_nav_frame
-from app.features.risk_features import _annualized_volatility
+from app.features.risk_features import _annualized_volatility, rolling_current_drawdown, rolling_max_drawdown
 from app.ml.features import fund_profile_features
 from app.ml.predict import MlSignalPredictor
 from app.strategies.fund_profile import (
@@ -33,7 +39,8 @@ from app.strategies.fund_profile import (
     normalize_fund_type,
     resolve_fund_profile,
 )
-from app.strategies.scoring import clamp
+from app.strategies.action_mapper import map_action
+from app.strategies.scoring import adjust_total_score, calculate_scores, clamp
 
 
 WEAK_TREND_COOLDOWN_DAYS = 45
@@ -67,233 +74,133 @@ def run_single_backtest(request: BacktestRunRequest, settings: Settings, enable_
     trade_amount_sum = 0.0
     sell_count = 0
     win_sell_count = 0
-    weak_trend_cooldown = 0
-    weak_trend_watch_days = 0
-    weak_trend_defense_handled = False
-    weak_trend_defense_sell_count = 0
-    extreme_risk_sell_count = 0
-    weak_recovery_required = False
+    strategy_state = StrategyExecutionState()
     trades: list[BacktestTrade] = []
     equity_curve: list[BacktestEquityPoint] = []
-
-    for row in trade_frame.itertuples(index=False):
-        nav = float(row.nav)
-        position_value = share * nav
-        total_asset = cash + position_value
-        position_rate = pct(position_value, total_asset) + 100 if total_asset > 0 and position_value > 0 else 0.0
+    rows = list(trade_frame.itertuples(index=False))
+    for index, execution_row in enumerate(rows):
+        nav = float(execution_row.nav)
         action = "HOLD"
-        strong_trend_lock = _strong_trend_lock(row, params, fund_type)
-        strong_reentry_buy = _strong_reentry_buy(row, params, fund_type)
-        trend_start_buy = _trend_start_buy(row, params, fund_type)
-        midterm_trend_buy = _midterm_trend_buy(row, fund_type)
-        recoverable_pullback_buy = _recoverable_pullback_buy(row)
-        benchmark_alignment_buy = _benchmark_alignment_buy(row, params, position_rate, fund_type)
-        core_trend_allocation_buy = _core_trend_allocation_buy(row, params, position_rate, fund_type)
-        early_trend_bootstrap_buy = _early_trend_bootstrap_buy(row, params, position_rate, fund_type)
-        trend_repair_reentry_buy = (
-            (weak_recovery_required or weak_trend_defense_handled or weak_trend_cooldown > 0)
-            and _trend_repair_reentry_buy(row, params, position_rate, fund_type)
-        )
-        recoverable_reentry_buy = recoverable_pullback_buy and weak_trend_defense_handled
-        underposition_recoverable_buy = _underposition_recoverable_buy(recoverable_pullback_buy, position_rate, params)
-        weak_trend_defense = _weak_trend_defense(row, fund_type)
-        if weak_trend_defense:
-            weak_trend_cooldown = max(weak_trend_cooldown, WEAK_TREND_COOLDOWN_DAYS)
-            weak_recovery_required = True
-            weak_trend_watch_days = weak_trend_watch_days + 1
-        else:
-            weak_trend_cooldown = max(weak_trend_cooldown - 1, 0)
-            weak_trend_watch_days = 0
-        if weak_recovery_required and _weak_trend_recovered(row, params, fund_type):
-            weak_recovery_required = False
-            weak_trend_defense_handled = False
-            weak_trend_watch_days = 0
-            weak_trend_cooldown = 0
+        signal_score = float(execution_row.totalScore)
 
-        if (
-            (
-                _score_threshold_buy(row, params)
-                or strong_trend_lock
-                or trend_start_buy
-                or midterm_trend_buy
-                or recoverable_pullback_buy
-                or benchmark_alignment_buy
-                or core_trend_allocation_buy
-                or early_trend_bootstrap_buy
-                or trend_repair_reentry_buy
-            )
-            and row.sampleIndex >= params.minNavSamples
-            and position_rate < params.maxSinglePositionRate
-            and (
-                weak_trend_cooldown == 0
-                or strong_reentry_buy
-                or recoverable_reentry_buy
-                or underposition_recoverable_buy
-                or benchmark_alignment_buy
-                or core_trend_allocation_buy
-                or early_trend_bootstrap_buy
-                or trend_repair_reentry_buy
-            )
-            and (
-                not weak_recovery_required
-                or strong_trend_lock
-                or strong_reentry_buy
-                or recoverable_reentry_buy
-                or underposition_recoverable_buy
-                or benchmark_alignment_buy
-                or core_trend_allocation_buy
-                or early_trend_bootstrap_buy
-                or trend_repair_reentry_buy
-            )
-        ):
-            room = max(params.maxSinglePositionRate - position_rate, 0)
-            buy_ratio = min(
-                _buy_step_ratio(
-                    params,
-                    strong_trend_lock,
-                    trend_start_buy,
-                    midterm_trend_buy,
-                    position_rate,
-                    _score_threshold_buy(row, params),
-                    recoverable_pullback_buy,
-                    benchmark_alignment_buy,
-                    core_trend_allocation_buy,
-                    early_trend_bootstrap_buy,
-                    trend_repair_reentry_buy,
+        if index > 0:
+            signal_row = rows[index - 1]
+            signal_nav = float(signal_row.nav)
+            signal_position_value = share * signal_nav
+            signal_total_asset = cash + signal_position_value
+            signal_position_rate = signal_position_value / signal_total_asset * 100 if signal_total_asset > 0 else 0.0
+            signal_position_return = pct(signal_nav, avg_cost) if share > 0 and avg_cost > 0 else 0.0
+            decision_features = _decision_features(signal_row, signal_position_rate, signal_position_return, params)
+            risk_profile = RiskProfile(riskLevel="MEDIUM", maxSingleFundPositionRate=params.maxSinglePositionRate)
+            decision_score = calculate_scores(decision_features, risk_profile)
+            if enable_ml and float(getattr(signal_row, "mlScoreAdjustment", 0) or 0):
+                decision_score = adjust_total_score(decision_score, float(signal_row.mlScoreAdjustment))
+            signal_score = decision_score.totalScore
+            analyze_request = QuantAnalyzeRequest(
+                requestId=f"backtest-{request.fundCode}-{signal_row.date.date()}",
+                account=AccountSnapshot(totalAsset=signal_total_asset),
+                riskProfile=risk_profile,
+                holding=HoldingSnapshot(
+                    fundCode=request.fundCode,
+                    fundName=request.fundName,
+                    fundType=fund_type,
+                    holdingAmount=signal_position_value,
+                    holdingShare=share,
+                    holdingCost=avg_cost,
+                    holdingProfitRate=signal_position_return,
+                    positionRate=signal_position_rate,
+                    holdingDays=int(signal_row.sampleIndex),
                 ),
-                room,
+                strategyParams=params,
+                strategyState=strategy_state,
+                market=MarketContext(
+                    tradingDay=True,
+                    trading=False,
+                    decisionPhase="BACKTEST_CLOSE",
+                    now=signal_row.date.to_pydatetime(),
+                ),
             )
-            amount = min(total_asset * buy_ratio / 100, cash)
-            if amount >= 100:
-                position_rate_before = position_rate
-                fee = amount * request.feeRate
-                net_amount = max(amount - fee, 0)
-                bought_share = net_amount / nav
-                previous_cost = avg_cost * share
-                share += bought_share
-                avg_cost = (previous_cost + net_amount) / share if share > 0 else 0
-                cash -= amount
-                trade_amount_sum += amount
-                action = "BUY"
-                extreme_risk_sell_count = 0
-                reason = _buy_reason(
-                    strong_trend_lock,
-                    trend_start_buy,
-                    midterm_trend_buy,
-                    recoverable_pullback_buy,
-                    benchmark_alignment_buy,
-                    core_trend_allocation_buy,
-                    early_trend_bootstrap_buy,
-                    trend_repair_reentry_buy,
-                )
-                position_rate_after = _position_rate(share, nav, cash)
-                trades.append(
-                    _trade(
-                        row,
-                        action,
-                        amount,
-                        bought_share,
-                        nav,
-                        fee,
-                        row.totalScore,
-                        reason,
-                        buy_ratio,
-                        position_rate_before,
-                        position_rate_after,
-                    )
-                )
+            requested_action, suggested_amount, suggested_ratio, _ = map_action(
+                analyze_request,
+                decision_score,
+                decision_features,
+            )
+            strategy_state = _state_from_features(decision_features)
+            reason = str(decision_features.get("decisionReason") or "no_action")
 
-        position_value = share * nav
-        total_asset = cash + position_value
-        position_return = pct(nav, avg_cost) if share > 0 and avg_cost > 0 else 0.0
-        trend_hold = _should_hold_trend(row, params, fund_type)
-        score_exit = row.totalScore <= params.sellThreshold
-        if score_exit and trend_hold:
-            score_exit = False
-        profit_exit = position_return >= params.takeProfitRate
-        if profit_exit and trend_hold:
-            profit_exit = False
-        risk_exit = position_return <= params.stopLossRate
-        extreme_risk_exit = position_return <= -18 or abs(float(row.maxDrawdown60d)) >= 22
-        weak_exit = (
-            weak_trend_defense
-            and weak_trend_watch_days >= WEAK_TREND_CONFIRM_DAYS
-            and share > 0
-            and not weak_trend_defense_handled
-            and weak_trend_defense_sell_count == 0
-        )
-        if strong_trend_lock and not extreme_risk_exit:
-            score_exit = False
-            profit_exit = False
-            risk_exit = False
-            weak_exit = False
-        should_sell = share > 0 and (score_exit or profit_exit or risk_exit or weak_exit or extreme_risk_exit)
-        if should_sell:
-            position_rate_before = _position_rate(share, nav, cash)
-            sell_ratio = params.sellStepRatio
-            if extreme_risk_exit:
-                if weak_trend_defense_sell_count > 0 or extreme_risk_sell_count > 0 or position_rate_before <= 25:
-                    sell_ratio = 100.0
-                else:
-                    sell_ratio = max(sell_ratio, 50.0)
-            elif risk_exit:
-                sell_ratio = max(sell_ratio, 35.0)
-            elif profit_exit:
-                sell_ratio = max(sell_ratio, 20.0)
-            if weak_exit:
-                sell_ratio = max(sell_ratio, 15.0)
-            reason = _sell_reason(score_exit, profit_exit, risk_exit, weak_exit, extreme_risk_exit)
-            sold_share = min(share, share * sell_ratio / 100)
-            gross = sold_share * nav
-            fee = gross * request.feeRate
-            cash += gross - fee
-            share -= sold_share
-            trade_amount_sum += gross
-            sell_count += 1
-            if nav > avg_cost:
-                win_sell_count += 1
-            action = "SELL"
-            position_rate_after = _position_rate(share, nav, cash)
-            trades.append(
-                _trade(
-                    row,
+            if requested_action == "SELL" and share > 0 and suggested_ratio > 0:
+                position_rate_before = _position_rate(share, nav, cash)
+                sold_share = min(share, share * suggested_ratio / 100)
+                gross = sold_share * nav
+                fee = gross * request.feeRate
+                cash += gross - fee
+                share -= sold_share
+                trade_amount_sum += gross
+                sell_count += 1
+                if nav > avg_cost:
+                    win_sell_count += 1
+                action = "SELL"
+                position_rate_after = _position_rate(share, nav, cash)
+                trades.append(_trade(
+                    signal_row,
+                    execution_row,
                     action,
                     gross,
                     sold_share,
                     nav,
                     fee,
-                    row.totalScore,
+                    decision_score.totalScore,
                     reason,
-                    sell_ratio,
+                    suggested_ratio,
                     position_rate_before,
                     position_rate_after,
-                )
-            )
-            defense_exit = score_exit or risk_exit or weak_exit or extreme_risk_exit
-            if defense_exit:
-                weak_trend_defense_handled = True
-                weak_trend_cooldown = max(weak_trend_cooldown, WEAK_TREND_COOLDOWN_DAYS)
-                weak_recovery_required = True
-            if weak_exit:
-                weak_trend_defense_sell_count += 1
-            if extreme_risk_exit:
-                extreme_risk_sell_count += 1
-            if share <= 1e-8:
-                share = 0.0
-                avg_cost = 0.0
+                    decision_score,
+                ))
+                if share <= 1e-8:
+                    share = 0.0
+                    avg_cost = 0.0
+            elif requested_action == "BUY" and suggested_amount > 0 and cash > 0:
+                amount = min(float(suggested_amount), cash)
+                if amount >= 100:
+                    position_rate_before = _position_rate(share, nav, cash)
+                    fee = amount * request.feeRate
+                    net_amount = max(amount - fee, 0)
+                    bought_share = net_amount / nav
+                    previous_cost = avg_cost * share
+                    share += bought_share
+                    avg_cost = (previous_cost + net_amount) / share if share > 0 else 0
+                    cash -= amount
+                    trade_amount_sum += amount
+                    action = "BUY"
+                    position_rate_after = _position_rate(share, nav, cash)
+                    trades.append(_trade(
+                        signal_row,
+                        execution_row,
+                        action,
+                        amount,
+                        bought_share,
+                        nav,
+                        fee,
+                        decision_score.totalScore,
+                        reason,
+                        suggested_ratio,
+                        position_rate_before,
+                        position_rate_after,
+                        decision_score,
+                    ))
 
         position_value = share * nav
         total_asset = cash + position_value
         position_rate = position_value / total_asset * 100 if total_asset > 0 else 0.0
         equity_curve.append(
             BacktestEquityPoint(
-                date=str(row.date.date()),
+                date=str(execution_row.date.date()),
                 totalAsset=round(total_asset, 4),
                 cash=round(cash, 4),
                 positionValue=round(position_value, 4),
                 positionRate=round(position_rate, 4),
                 nav=round(nav, 6),
-                signalScore=round(float(row.totalScore), 2),
+                signalScore=round(signal_score, 2),
                 action=action,
             )
         )
@@ -565,12 +472,10 @@ def _attach_signal_columns(
     out["volatility20d"] = returns.rolling(20, min_periods=2).apply(_annualized_volatility, raw=False).fillna(0)
     out["volatility60d"] = returns.rolling(60, min_periods=2).apply(_annualized_volatility, raw=False).fillna(0)
     out["trendSlope20d"] = nav.rolling(20, min_periods=2).apply(_trend_slope, raw=True).fillna(0)
-    rolling_max_20 = nav.rolling(20, min_periods=2).max()
-    out["maxDrawdown20d"] = ((nav / rolling_max_20 - 1) * 100).fillna(0)
-    rolling_max_60 = nav.rolling(60, min_periods=2).max()
-    out["maxDrawdown60d"] = ((nav / rolling_max_60 - 1) * 100).fillna(0)
-    rolling_max_120 = nav.rolling(120, min_periods=2).max()
-    out["maxDrawdown120d"] = ((nav / rolling_max_120 - 1) * 100).fillna(0)
+    for window in (20, 60, 120):
+        out[f"currentDrawdown{window}d"] = rolling_current_drawdown(nav, window)
+        out[f"maxDrawdown{window}d"] = rolling_max_drawdown(nav, window)
+        out[f"maxDrawdownWithin{window}d"] = out[f"maxDrawdown{window}d"]
     out["lossDayRatio20d"] = returns.rolling(20, min_periods=2).apply(lambda value: (value < 0).mean() * 100, raw=False).fillna(0)
     daily = returns.fillna(0) * 100
     out["consecutiveUpDays"] = _consecutive_streak(daily, positive=True)
@@ -1196,8 +1101,40 @@ def _position_rate(share: float, nav: float, cash: float) -> float:
     return position_value / total_asset * 100 if total_asset > 0 else 0.0
 
 
+def _decision_features(row, position_rate: float, position_return: float, params: BacktestStrategyParams) -> dict:
+    features = dict(row._asdict())
+    limit = max(float(params.maxSinglePositionRate), 0.0)
+    features["positionRate"] = position_rate
+    features["positionToSingleLimit"] = position_rate / limit if limit > 0 else 1.0
+    features["profitBuffer"] = max(position_return, 0.0)
+    features["lossPressure"] = abs(min(position_return, 0.0))
+    features["canBuyMore"] = position_rate < limit
+    features["shouldReduceByPosition"] = position_rate >= limit + 5.0
+    features["holdingProfitRate"] = position_return
+    features["holdingDays"] = int(row.sampleIndex)
+    features["navSampleSize"] = int(row.sampleIndex)
+    return features
+
+
+def _state_from_features(features: dict) -> StrategyExecutionState:
+    return StrategyExecutionState(
+        weakTrendCandidateDays=int(features.get("weakTrendCandidateDaysAfter", 0) or 0),
+        weakTrendDefenseHandled=bool(features.get("weakTrendDefenseHandledAfter", False)),
+        weakTrendCooldownDays=int(features.get("weakTrendCooldownDaysAfter", 0) or 0),
+        positionRebalanceCooldownDays=int(features.get("positionRebalanceCooldownDaysAfter", 0) or 0),
+        weakRecoveryRequired=bool(features.get("weakRecoveryRequiredAfter", False)),
+        extremeRiskStage=int(features.get("extremeRiskStageAfter", 0) or 0),
+        lastExtremeRiskDate=features.get("lastExtremeRiskDateAfter"),
+        lastExtremeDrawdown=features.get("lastExtremeDrawdownAfter"),
+        lastActionDate=features.get("lastActionDateAfter"),
+        extremeRiskSellCount=int(features.get("extremeRiskSellCountAfter", 0) or 0),
+        lastDefenseDate=features.get("lastDefenseDateAfter"),
+    )
+
+
 def _trade(
-    row,
+    signal_row,
+    execution_row,
     action: str,
     amount: float,
     share: float,
@@ -1208,9 +1145,11 @@ def _trade(
     trade_ratio: float,
     position_rate_before: float,
     position_rate_after: float,
+    score_breakdown,
 ) -> BacktestTrade:
     return BacktestTrade(
-        date=str(row.date.date()),
+        date=str(execution_row.date.date()),
+        signalDate=str(signal_row.date.date()),
         action=action,
         amount=round(amount, 4),
         share=round(share, 4),
@@ -1221,14 +1160,14 @@ def _trade(
         tradeRatio=round(float(trade_ratio), 4),
         positionRateBefore=round(float(position_rate_before), 4),
         positionRateAfter=round(float(position_rate_after), 4),
-        return5d=round(float(row.return5d), 4),
-        return20d=round(float(row.return20d), 4),
-        return60d=round(float(row.return60d), 4),
-        ma20Deviation=round(float(row.ma20Deviation), 4),
-        maxDrawdown60d=round(float(row.maxDrawdown60d), 4),
-        trendScore=round(float(row.trendScore), 2),
-        opportunityScore=round(float(row.opportunityScore), 2),
-        riskScore=round(float(row.riskScore), 2),
+        return5d=round(float(signal_row.return5d), 4),
+        return20d=round(float(signal_row.return20d), 4),
+        return60d=round(float(signal_row.return60d), 4),
+        ma20Deviation=round(float(signal_row.ma20Deviation), 4),
+        maxDrawdown60d=round(float(signal_row.maxDrawdown60d), 4),
+        trendScore=round(float(score_breakdown.trendScore), 2),
+        opportunityScore=round(float(score_breakdown.opportunityScore), 2),
+        riskScore=round(float(score_breakdown.riskScore), 2),
     )
 
 

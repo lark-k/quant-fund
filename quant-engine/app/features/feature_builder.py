@@ -8,6 +8,9 @@ from app.features.risk_features import calculate_risk_features
 from app.ml.features import fund_profile_features
 
 
+POSITION_LIMIT_REBALANCE_BUFFER = 5.0
+
+
 def build_features(request: QuantAnalyzeRequest) -> dict[str, float | bool | int | str | None]:
     features: dict[str, float | bool | int | str | None] = {}
     features.update(calculate_nav_features(request.navSeries))
@@ -27,4 +30,4 @@ def _apply_strategy_position_limit(features: dict[str, float | bool | int | str 
         return
     features["positionToSingleLimit"] = round(request.holding.positionRate / single_limit, 4)
     features["canBuyMore"] = request.holding.positionRate < single_limit
-    features["shouldReduceByPosition"] = request.holding.positionRate > single_limit
+    features["shouldReduceByPosition"] = request.holding.positionRate >= single_limit + POSITION_LIMIT_REBALANCE_BUFFER

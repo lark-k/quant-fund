@@ -1,4 +1,6 @@
-from app.core.schemas import AccountSnapshot, BacktestStrategyParams, HoldingSnapshot, MarketContext, ScoreBreakdown
+import pytest
+
+from app.core.schemas import AccountSnapshot, BacktestStrategyParams, HoldingSnapshot, MarketContext, ScoreBreakdown, StrategyExecutionState
 from app.features.feature_builder import build_features
 from app.strategies.action_mapper import map_action
 
@@ -53,7 +55,7 @@ def test_equity_fund_can_buy_with_good_trend_even_when_risk_score_is_low():
     action, amount, ratio, blockers = map_action(request, buy_score(), features)
 
     assert action == "BUY"
-    assert amount == 420
+    assert amount == 3500
     assert ratio == 35
     assert blockers == []
 
@@ -99,7 +101,7 @@ def test_recoverable_pullback_can_buy_after_short_term_stabilizes():
     action, amount, ratio, blockers = map_action(request, score, features)
 
     assert action == "BUY"
-    assert amount == 300
+    assert amount == 2500
     assert ratio == 25
     assert blockers == []
 
@@ -184,9 +186,9 @@ def test_market_breakdown_maps_to_sell():
 
     action, amount, ratio, blockers = map_action(request, score, features)
 
-    assert action == "SELL"
-    assert amount == 420
-    assert ratio == 35
+    assert action == "WATCH"
+    assert amount == 0
+    assert ratio == 0
     assert blockers == []
 
 
@@ -216,7 +218,7 @@ def test_strong_trend_lock_allows_buy_instead_of_profit_giveback_sell_when_room_
     action, amount, ratio, blockers = map_action(request, score, features)
 
     assert action == "BUY"
-    assert amount == 396
+    assert amount == 3300
     assert ratio == 33
     assert blockers == []
 
@@ -235,6 +237,7 @@ def test_strong_trend_lock_keeps_extreme_stop_loss_available():
     features["return60d"] = 18
     features["ma20Deviation"] = -1
     features["maxDrawdown60d"] = -23
+    features["currentDrawdown60d"] = -23
     features["lossPressure"] = 20
     score = ScoreBreakdown(
         totalScore=40,
@@ -344,7 +347,7 @@ def test_midterm_trend_continuation_can_buy_on_orderly_pullback():
     action, amount, ratio, blockers = map_action(request, score, features)
 
     assert action == "BUY"
-    assert amount == 1500
+    assert amount == 2500
     assert ratio == 25
     assert blockers == []
 
@@ -410,7 +413,7 @@ def test_benchmark_alignment_buy_tops_up_underweight_orderly_trend():
     action, amount, ratio, blockers = map_action(request, score, features)
 
     assert action == "BUY"
-    assert amount == 1500
+    assert amount == 2500
     assert ratio == 25
     assert blockers == []
 
@@ -476,7 +479,7 @@ def test_core_trend_allocation_buy_fills_underweight_confirmed_trend():
     action, amount, ratio, blockers = map_action(request, score, features)
 
     assert action == "BUY"
-    assert amount == 2100
+    assert amount == 3500
     assert ratio == 35
     assert blockers == []
 
@@ -511,7 +514,7 @@ def test_early_trend_bootstrap_buy_maps_short_history_winner_to_buy():
     action, amount, ratio, blockers = map_action(request, score, features)
 
     assert action == "BUY"
-    assert amount == 1500
+    assert amount == 2500
     assert ratio == 25
     assert blockers == []
 
@@ -545,7 +548,7 @@ def test_active_equity_trend_repair_maps_to_buy_but_qdii_stays_cautious():
     action, amount, ratio, blockers = map_action(request, score, features)
 
     assert action == "BUY"
-    assert amount == 1800
+    assert amount == 3000
     assert ratio == 30
     assert blockers == []
 
@@ -590,7 +593,7 @@ def test_active_qdii_profile_uses_active_repair_rules_even_when_raw_type_is_qdii
     action, amount, ratio, blockers = map_action(request, score, features)
 
     assert action == "BUY"
-    assert amount == 1800
+    assert amount == 3000
     assert ratio == 30
     assert blockers == []
 
@@ -623,7 +626,7 @@ def test_active_qdii_profile_prevents_raw_qdii_weak_defense_sell():
     action, amount, ratio, blockers = map_action(request, score, features)
 
     assert action == "BUY"
-    assert amount == 300
+    assert amount == 500
     assert ratio == 5
     assert blockers == []
 
@@ -636,7 +639,7 @@ def test_weak_trend_defense_maps_to_sell():
         positionRate=12,
         holdingProfitRate=-4,
     )
-    request = make_request(holding=holding)
+    request = make_request(holding=holding, strategyState=StrategyExecutionState(weakTrendCandidateDays=3))
     features = build_features(request)
     features["return20d"] = -7
     features["return60d"] = -6
@@ -660,7 +663,7 @@ def test_weak_trend_defense_maps_to_sell():
 
 
 def test_weak_trend_defense_blocks_buy():
-    request = make_request()
+    request = make_request(strategyState=StrategyExecutionState(weakTrendCandidateDays=3))
     features = build_features(request)
     features["return20d"] = -7
     features["return60d"] = -9
@@ -704,7 +707,7 @@ def test_qdii_intraday_can_generate_buy_signal():
 
     assert features["isQdiiOrOverseas"] is True
     assert action == "BUY"
-    assert amount == 420
+    assert amount == 3500
     assert ratio == 35
     assert blockers == []
 
@@ -730,3 +733,245 @@ def test_strategy_params_override_default_position_limit_and_steps():
     assert amount == 120
     assert ratio == 10
     assert len(blockers) == 1
+
+
+def test_weak_trend_waits_for_four_distinct_decision_days():
+    request = make_request(strategyState=StrategyExecutionState(weakTrendCandidateDays=2))
+    features = build_features(request)
+    features.update({"return20d": -7, "return60d": -9, "ma20Deviation": -5, "maxDrawdown60d": -9})
+
+    action, amount, ratio, _ = map_action(request, high_score(), features)
+
+    assert action == "WATCH"
+    assert amount == 0
+    assert ratio == 0
+    assert features["weakTrendCandidateDaysAfter"] == 3
+    assert features["weakTrendDefenseHandledAfter"] is False
+
+
+def test_handled_weak_trend_does_not_repeat_daily_sell():
+    request = make_request(strategyState=StrategyExecutionState(
+        weakTrendCandidateDays=4,
+        weakTrendDefenseHandled=True,
+        weakTrendCooldownDays=45,
+        weakRecoveryRequired=True,
+        lastDefenseDate="2026-06-27",
+    ))
+    features = build_features(request)
+    features.update({"return20d": -7, "return60d": -9, "ma20Deviation": -5, "maxDrawdown60d": -9})
+
+    action, amount, ratio, _ = map_action(request, high_score(), features)
+
+    assert action == "WATCH"
+    assert amount == 0
+    assert ratio == 0
+    assert features["weakTrendCooldownDaysAfter"] == 44
+    assert features["weakTrendDefenseHandledAfter"] is True
+
+
+def test_recovery_does_not_bypass_remaining_cooldown():
+    request = make_request(strategyState=StrategyExecutionState(
+        weakTrendDefenseHandled=True,
+        weakTrendCooldownDays=2,
+        weakRecoveryRequired=True,
+    ))
+    features = build_features(request)
+
+    action, amount, ratio, _ = map_action(request, high_score(), features)
+
+    assert features["weakTrendRecovered"] is True
+    assert features["weakRecoveryRequiredAfter"] is False
+    assert features["weakTrendCooldownDaysAfter"] == 1
+    assert action == "WATCH"
+    assert amount == 0
+    assert ratio == 0
+
+
+def test_extreme_risk_has_priority_over_confirmed_weak_trend():
+    holding = HoldingSnapshot(
+        fundCode="013403",
+        fundType="ETF",
+        holdingAmount=4000,
+        positionRate=40,
+        holdingProfitRate=-4,
+    )
+    request = make_request(
+        holding=holding,
+        strategyState=StrategyExecutionState(weakTrendCandidateDays=3),
+    )
+    features = build_features(request)
+    features.update({
+        "return20d": -7,
+        "return60d": -9,
+        "ma20Deviation": -5,
+        "maxDrawdown60d": -23,
+        "currentDrawdown60d": -23,
+    })
+
+    action, amount, ratio, _ = map_action(request, high_score(), features)
+
+    assert action == "SELL"
+    assert ratio == 50
+    assert amount == 2000
+    assert features["decisionReason"] == "extreme_risk_exit"
+
+
+def test_first_extreme_risk_exit_is_partial_after_weak_trend_defense():
+    holding = HoldingSnapshot(
+        fundCode="013403",
+        fundType="ETF",
+        holdingAmount=4000,
+        positionRate=40,
+        holdingProfitRate=-4,
+    )
+    request = make_request(
+        holding=holding,
+        strategyState=StrategyExecutionState(
+            weakTrendDefenseHandled=True,
+            weakTrendCooldownDays=45,
+            weakRecoveryRequired=True,
+        ),
+    )
+    features = build_features(request)
+    features.update({
+        "return20d": -7,
+        "return60d": -9,
+        "ma20Deviation": -5,
+        "maxDrawdown60d": -23,
+        "currentDrawdown60d": -23,
+    })
+
+    action, amount, ratio, _ = map_action(request, high_score(), features)
+
+    assert action == "SELL"
+    assert ratio == 50
+    assert amount == 2000
+    assert features["extremeRiskSellCountAfter"] == 1
+
+
+def test_historical_drawdown_does_not_trigger_extreme_exit_after_recovery():
+    request = make_request(holding=HoldingSnapshot(
+        fundCode="013403",
+        fundType="ETF",
+        holdingAmount=4000,
+        positionRate=40,
+        holdingProfitRate=-4,
+    ))
+    features = build_features(request)
+    features.update({"maxDrawdown60d": -25, "currentDrawdown60d": -12})
+
+    action, _, ratio, _ = map_action(request, high_score(), features)
+
+    assert action != "SELL"
+
+
+@pytest.mark.parametrize("position_rate", [10, 20, 40])
+def test_first_extreme_exit_sells_half_at_normal_position_sizes(position_rate):
+    request = make_request(holding=HoldingSnapshot(
+        fundCode="013403",
+        fundType="ETF",
+        holdingAmount=4000,
+        positionRate=position_rate,
+        holdingProfitRate=-4,
+    ))
+    features = build_features(request)
+    features["currentDrawdown60d"] = -23
+
+    action, amount, ratio, _ = map_action(request, high_score(), features)
+
+    assert action == "SELL"
+    assert amount == 2000
+    assert ratio == 50
+    assert features["extremeRiskConfirmedStage"] == 0
+    assert features["extremeRiskStageAfter"] == 1
+    assert features["extremeRiskTradeConfirmationRequired"] is True
+
+
+def test_extreme_exit_clears_only_true_tail_position():
+    request = make_request(holding=HoldingSnapshot(
+        fundCode="013403",
+        fundType="ETF",
+        holdingAmount=400,
+        positionRate=5,
+        holdingProfitRate=-4,
+    ))
+    features = build_features(request)
+    features["currentDrawdown60d"] = -23
+
+    action, amount, ratio, _ = map_action(request, high_score(), features)
+
+    assert action == "SELL"
+    assert amount == 400
+    assert ratio == 100
+    assert features["extremeRiskStageAfter"] == 2
+
+
+def test_second_extreme_day_exits_when_drawdown_does_not_improve():
+    request = make_request(strategyState=StrategyExecutionState(
+        extremeRiskStage=1,
+        lastExtremeRiskDate="2026-06-26",
+        lastExtremeDrawdown=23,
+        lastActionDate="2026-06-26",
+    ))
+    features = build_features(request)
+    features["currentDrawdown60d"] = -21
+    request.holding.holdingProfitRate = -19
+
+    action, _, ratio, _ = map_action(request, high_score(), features)
+
+    assert action == "SELL"
+    assert ratio == 100
+    assert features["extremeRiskConfirmedStage"] == 1
+    assert features["extremeRiskStageAfter"] == 2
+
+
+def test_second_extreme_day_watches_when_drawdown_improves_three_points():
+    request = make_request(strategyState=StrategyExecutionState(
+        extremeRiskStage=1,
+        lastExtremeRiskDate="2026-06-26",
+        lastExtremeDrawdown=26,
+        lastActionDate="2026-06-26",
+    ))
+    features = build_features(request)
+    features["currentDrawdown60d"] = -23
+
+    action, amount, ratio, _ = map_action(request, high_score(), features)
+
+    assert action == "WATCH"
+    assert amount == 0
+    assert ratio == 0
+    assert features["decisionReason"] == "extreme_risk_recovery_watch"
+    assert features["extremeRiskStageAfter"] == 1
+    assert features["lastExtremeDrawdownAfter"] == 23
+
+
+def test_same_day_reanalysis_does_not_advance_extreme_stage():
+    request = make_request(strategyState=StrategyExecutionState(
+        extremeRiskStage=1,
+        lastExtremeRiskDate="2026-06-28",
+        lastExtremeDrawdown=23,
+        lastActionDate="2026-06-28",
+    ))
+    features = build_features(request)
+    features["currentDrawdown60d"] = -24
+
+    action, _, ratio, _ = map_action(request, high_score(), features)
+
+    assert action == "SELL"
+    assert ratio == 50
+    assert features["extremeRiskStageAfter"] == 1
+
+
+def test_legacy_extreme_count_without_drawdown_baseline_does_not_force_full_exit():
+    request = make_request(strategyState=StrategyExecutionState(
+        extremeRiskSellCount=1,
+        lastDefenseDate="2026-06-27",
+    ))
+    features = build_features(request)
+    features["currentDrawdown60d"] = -24
+
+    action, _, ratio, _ = map_action(request, high_score(), features)
+
+    assert action == "SELL"
+    assert ratio == 50
+    assert features["extremeRiskStageAfter"] == 1

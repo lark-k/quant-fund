@@ -87,7 +87,8 @@ def _position_score(features: dict) -> float:
 def _momentum_score(features: dict) -> float:
     score = 50
     score += float(features.get("themeRate", 0)) * 2.5
-    score += float(features.get("estimateGrowthRate", 0)) * 2.0
+    if not features.get("intradayEstimateUsed"):
+        score += float(features.get("estimateGrowthRate", 0)) * 2.0
     score += min(float(features.get("consecutiveUpDays", 0)), 4) * 3
     score -= min(float(features.get("consecutiveDownDays", 0)), 4) * 4
     return clamp(score)

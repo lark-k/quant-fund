@@ -339,7 +339,7 @@ public class QuantFundProperties {
         @Min(1)
         private int responseMaxInMemoryMb = 16;
         @NotBlank
-        private String modelVersion = "rule-v1.36.0";
+        private String modelVersion = "rule-v1.39.0";
         private boolean fallbackToJavaRules = false;
         @NotBlank
         private String decisionDeadline = "15:00:00";

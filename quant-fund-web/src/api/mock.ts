@@ -256,7 +256,7 @@ function toQuantSignal(holding: FundHolding, index = 0): QuantSignal {
       holdingProfitRate: holding.holdingProfitRate
     }),
     modelName: 'QuantRuleEngine',
-    modelVersion: 'rule-v1.36.0',
+    modelVersion: 'rule-v1.39.0',
     deadline: atTime(15, 0),
     signalTime: atTime(14, 50 - index),
     fallbackUsed: false,
@@ -1257,7 +1257,7 @@ export const mockApi = {
     return {
       status: 'UP',
       service: 'quant-engine',
-      modelVersion: 'rule-v1.36.0',
+      modelVersion: 'rule-v1.39.0',
       enabled: true
     }
   },

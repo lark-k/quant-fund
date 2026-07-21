@@ -3,6 +3,9 @@ from __future__ import annotations
 from app.core.schemas import AccountSnapshot, HoldingSnapshot, RiskProfile
 
 
+POSITION_LIMIT_REBALANCE_BUFFER = 5.0
+
+
 def calculate_position_features(
     account: AccountSnapshot,
     risk_profile: RiskProfile,
@@ -14,7 +17,7 @@ def calculate_position_features(
     equity_to_limit = account.equityPositionRate / equity_limit if equity_limit > 0 else 1.0
 
     can_buy_more = holding.positionRate < single_limit
-    should_reduce = holding.positionRate > single_limit
+    should_reduce = holding.positionRate >= single_limit + POSITION_LIMIT_REBALANCE_BUFFER
 
     return {
         "positionRate": round(holding.positionRate, 4),
