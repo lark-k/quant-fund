@@ -39,6 +39,7 @@ import com.lk.quantfund.vo.dashboard.MarketSessionItemVO;
 import com.lk.quantfund.vo.dashboard.MarketSessionStatusVO;
 import com.lk.quantfund.vo.holding.FundHoldingVO;
 import com.lk.quantfund.vo.market.MarketIndexDailyVO;
+import com.lk.quantfund.vo.portfolio.PortfolioAccountVO;
 import com.lk.quantfund.vo.portfolio.PortfolioSummaryVO;
 import com.lk.quantfund.vo.strategy.StrategySignalVO;
 import java.math.BigDecimal;
@@ -124,9 +125,17 @@ public class DashboardServiceImpl implements DashboardService {
                 .collect(Collectors.toSet());
         Map<String, FundNavDaily> latestOfficialNavByFund = latestOfficialNavByFund(fundCodes);
         Set<String> todayEstimateFundCodes = todayEstimateFundCodes(fundCodes, today);
+        Map<Long, BigDecimal> accountTotalAssetById = summary.accounts().stream()
+                .collect(Collectors.toMap(PortfolioAccountVO::id, PortfolioAccountVO::totalAsset, (left, right) -> left));
         List<FundHoldingVO> topHoldings = holdings.stream()
                 .limit(10)
-                .map(holding -> toHoldingVO(holding, intradayDisplayWindow, latestOfficialNavByFund, todayEstimateFundCodes))
+                .map(holding -> toHoldingVO(
+                        holding,
+                        intradayDisplayWindow,
+                        latestOfficialNavByFund,
+                        todayEstimateFundCodes,
+                        accountTotalAssetById.getOrDefault(holding.getAccountId(), ZERO)
+                ))
                 .toList();
         PortfolioSummaryVO effectiveSummary = dashboardSummary(summary, holdings, latestOfficialNavByFund,
                 dashboardDailyProfit(holdings, intradayDisplayWindow, latestOfficialNavByFund, todayEstimateFundCodes),
@@ -538,19 +547,10 @@ public class DashboardServiceImpl implements DashboardService {
         };
     }
 
-    private FundHoldingVO toHoldingVO(FundHolding holding) {
-        FundNavDaily officialNav = latestOfficialNav(holding.getFundCode());
-        Map<String, FundNavDaily> officialNavByFund = officialNav == null ? Map.of() : Map.of(holding.getFundCode(), officialNav);
-        Set<String> fundCodes = holding.getFundCode() == null || holding.getFundCode().isBlank()
-                ? Set.of()
-                : Set.of(holding.getFundCode());
-        Set<String> todayEstimateFundCodes = todayEstimateFundCodes(fundCodes, today());
-        return toHoldingVO(holding, tradingCalendarService.isIntradayEstimateDisplayWindow(now()), officialNavByFund, todayEstimateFundCodes);
-    }
-
     private FundHoldingVO toHoldingVO(FundHolding holding, boolean intradayDisplayWindow,
                                       Map<String, FundNavDaily> latestOfficialNavByFund,
-                                      Set<String> todayEstimateFundCodes) {
+                                      Set<String> todayEstimateFundCodes,
+                                      BigDecimal accountTotal) {
         FundNavDaily officialNav = latestOfficialNavByFund.get(holding.getFundCode());
         boolean intradayFresh = intradayDataFreshToday(holding, todayEstimateFundCodes);
         BigDecimal estimateRate = currentEstimateGrowthRate(holding, officialNav, intradayDisplayWindow, intradayFresh);
@@ -581,11 +581,6 @@ public class DashboardServiceImpl implements DashboardService {
         BigDecimal holdingProfitRate = !officialUpdated && intradayAllowed
                 ? rate(holdingProfit, holding.getHoldingCost())
                 : scale(holding.getHoldingProfitRate());
-        BigDecimal accountTotal = fundHoldingMapper.selectList(new LambdaQueryWrapper<FundHolding>()
-                        .eq(FundHolding::getAccountId, holding.getAccountId()))
-                .stream()
-                .map(this::effectiveHoldingAmount)
-                .reduce(ZERO, BigDecimal::add);
         return new FundHoldingVO(
                 holding.getId(),
                 holding.getAccountId(),
@@ -746,12 +741,13 @@ public class DashboardServiceImpl implements DashboardService {
                                                 boolean intradayDisplayWindow,
                                                 Set<String> todayEstimateFundCodes) {
         if (holdings.isEmpty()) {
-            return dashboardSummary(summary, summary.totalAsset(), summary.currentProfit(),
+            return dashboardSummary(summary, summary.holdingMarketValue(), summary.totalAsset(), summary.currentProfit(),
                     summary.equityPositionRate(), summary.bondPositionRate(), dailyProfit);
         }
-        BigDecimal totalAsset = holdings.stream()
+        BigDecimal holdingMarketValue = holdings.stream()
                 .map(this::effectiveHoldingAmount)
                 .reduce(ZERO, BigDecimal::add);
+        BigDecimal totalAsset = holdingMarketValue.add(summary.cashAmount());
         BigDecimal currentProfit = holdings.stream()
                 .map(holding -> {
                     FundNavDaily officialNav = latestOfficialNavByFund.get(holding.getFundCode());
@@ -770,21 +766,25 @@ public class DashboardServiceImpl implements DashboardService {
                 .filter(holding -> isBondType(holding.getFundType()))
                 .map(this::effectiveHoldingAmount)
                 .reduce(ZERO, BigDecimal::add);
-        return dashboardSummary(summary, totalAsset, currentProfit, rate(equityAmount, totalAsset), rate(bondAmount, totalAsset), dailyProfit);
+        return dashboardSummary(summary, holdingMarketValue, totalAsset, currentProfit,
+                rate(equityAmount, totalAsset), rate(bondAmount, totalAsset), dailyProfit);
     }
 
-    private PortfolioSummaryVO dashboardSummary(PortfolioSummaryVO summary, BigDecimal totalAsset,
+    private PortfolioSummaryVO dashboardSummary(PortfolioSummaryVO summary, BigDecimal holdingMarketValue,
+                                                BigDecimal totalAsset,
                                                 BigDecimal currentProfit, BigDecimal equityPositionRate,
                                                 BigDecimal bondPositionRate, BigDecimal dailyProfit) {
         return new PortfolioSummaryVO(
                 scale(totalAsset),
+                scale(holdingMarketValue),
+                summary.cashAmount(),
                 summary.totalInvestAmount(),
                 scale(currentProfit),
                 rate(currentProfit, summary.totalInvestAmount()),
                 scale(dailyProfit),
                 scale(equityPositionRate),
                 scale(bondPositionRate),
-                summary.cashPositionRate(),
+                rate(summary.cashAmount(), totalAsset),
                 summary.holdingCount(),
                 summary.accounts()
         );

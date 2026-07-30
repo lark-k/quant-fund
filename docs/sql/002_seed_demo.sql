@@ -37,11 +37,11 @@ DELETE FROM portfolio_account WHERE user_id = @demo_user_id;
 
 INSERT INTO portfolio_account (
   user_id, account_name, platform_type, total_asset, total_invest_amount, current_profit,
-  current_profit_rate, daily_profit, cash_position_rate, equity_position_rate, bond_position_rate,
+  current_profit_rate, daily_profit, cash_amount, cash_position_rate, equity_position_rate, bond_position_rate,
   max_single_fund_position_rate, status, create_time, update_time, deleted
 ) VALUES (
   @demo_user_id, 'QuantFund 演示组合', 'MANUAL', 501921.0000, 475000.0000, 26921.0000,
-  5.6676, 3764.2000, 0.0000, 100.0000, 0.0000, 40.0561,
+  5.6676, 3764.2000, 0.0000, 0.0000, 100.0000, 0.0000, 40.0561,
   'ENABLED', CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3), 0
 );
 

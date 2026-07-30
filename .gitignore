@@ -27,6 +27,7 @@ dist/
 *.key
 # 临时缓存
 tmp/
+.tmp/
 .cache/
 qa-artifacts/
 !quant-fund-web/qa-artifacts/

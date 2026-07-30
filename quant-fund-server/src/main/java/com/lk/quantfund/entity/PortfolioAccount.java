@@ -20,6 +20,7 @@ public class PortfolioAccount {
     private BigDecimal currentProfit;
     private BigDecimal currentProfitRate;
     private BigDecimal dailyProfit;
+    private BigDecimal cashAmount;
     private BigDecimal cashPositionRate;
     private BigDecimal equityPositionRate;
     private BigDecimal bondPositionRate;
@@ -48,6 +49,8 @@ public class PortfolioAccount {
     public void setCurrentProfitRate(BigDecimal currentProfitRate) { this.currentProfitRate = currentProfitRate; }
     public BigDecimal getDailyProfit() { return dailyProfit; }
     public void setDailyProfit(BigDecimal dailyProfit) { this.dailyProfit = dailyProfit; }
+    public BigDecimal getCashAmount() { return cashAmount; }
+    public void setCashAmount(BigDecimal cashAmount) { this.cashAmount = cashAmount; }
     public BigDecimal getCashPositionRate() { return cashPositionRate; }
     public void setCashPositionRate(BigDecimal cashPositionRate) { this.cashPositionRate = cashPositionRate; }
     public BigDecimal getEquityPositionRate() { return equityPositionRate; }
@@ -65,4 +68,3 @@ public class PortfolioAccount {
     public Integer getDeleted() { return deleted; }
     public void setDeleted(Integer deleted) { this.deleted = deleted; }
 }
-

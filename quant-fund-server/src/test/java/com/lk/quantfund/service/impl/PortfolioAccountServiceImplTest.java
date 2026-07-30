@@ -66,6 +66,29 @@ class PortfolioAccountServiceImplTest {
         assertThat(snapshot.getDailyProfitRate()).isEqualByComparingTo("1.2000");
     }
 
+    @Test
+    void recalculateShouldIncludeCashWithoutChangingHoldingProfitMetrics() {
+        PortfolioAccount account = account(10L, "1000.0000", "12.0000");
+        account.setCashAmount(new BigDecimal("250.0000"));
+        when(portfolioAccountMapper.selectOne(any())).thenReturn(account);
+        when(fundHoldingMapper.selectList(any())).thenReturn(List.of(holding()));
+        when(tradingCalendarService.isIntradayEstimateWindow(any(LocalDateTime.class))).thenReturn(false);
+        PortfolioAccountServiceImpl service = service();
+        ArgumentCaptor<PortfolioAccount> accountCaptor = ArgumentCaptor.forClass(PortfolioAccount.class);
+
+        service.recalculateOwnedAccount(4L, 10L);
+
+        verify(portfolioAccountMapper).updateById(accountCaptor.capture());
+        PortfolioAccount saved = accountCaptor.getValue();
+        assertThat(saved.getTotalAsset()).isEqualByComparingTo("1250.0000");
+        assertThat(saved.getCashAmount()).isEqualByComparingTo("250.0000");
+        assertThat(saved.getTotalInvestAmount()).isEqualByComparingTo("900.0000");
+        assertThat(saved.getCurrentProfit()).isEqualByComparingTo("112.0000");
+        assertThat(saved.getDailyProfit()).isEqualByComparingTo("12.0000");
+        assertThat(saved.getCashPositionRate()).isEqualByComparingTo("20.0000");
+        assertThat(saved.getEquityPositionRate()).isEqualByComparingTo("80.0000");
+    }
+
     private PortfolioAccountServiceImpl service() {
         return new PortfolioAccountServiceImpl(
                 portfolioAccountMapper,

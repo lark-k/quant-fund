@@ -93,6 +93,11 @@ class TradeRecordServiceImplTest {
         assertThat(saved.getHoldingCost()).isEqualByComparingTo("1121.5000");
         assertThat(saved.getHoldingAmount()).isEqualByComparingTo("1320.0000");
         assertThat(saved.getHoldingProfit()).isEqualByComparingTo("198.5000");
+        verify(accountService).adjustCashAmountOwnedAccount(
+                1L,
+                10L,
+                new BigDecimal("-121.5000")
+        );
         verify(accountService).recalculateOwnedAccount(1L, 10L);
     }
 
@@ -547,6 +552,11 @@ class TradeRecordServiceImplTest {
         assertThat(saved.getHoldingCost()).isEqualByComparingTo("800.0000");
         assertThat(saved.getHoldingAmount()).isEqualByComparingTo("1000.0000");
         assertThat(saved.getHoldingProfit()).isEqualByComparingTo("200.0000");
+        verify(accountService).adjustCashAmountOwnedAccount(
+                1L,
+                10L,
+                new BigDecimal("250.0000")
+        );
         verify(accountService).recalculateOwnedAccount(1L, 10L);
     }
 

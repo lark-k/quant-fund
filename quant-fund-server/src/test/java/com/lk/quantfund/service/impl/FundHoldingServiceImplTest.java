@@ -264,6 +264,11 @@ class FundHoldingServiceImplTest {
         assertThat(trade.getRemark()).contains(SystemConstants.SIMULATED_TRADE_NOTICE);
         verify(holdingMapper, never()).deleteById(any(Long.class));
         verify(aiAnalysisReportMapper, never()).delete(any());
+        verify(portfolioAccountService).adjustCashAmountOwnedAccount(
+                1L,
+                10L,
+                new BigDecimal("1200.0000")
+        );
         verify(portfolioAccountService).recalculateOwnedAccount(1L, 10L);
     }
 
@@ -318,6 +323,11 @@ class FundHoldingServiceImplTest {
         assertThat(trade.getTradeShare()).isEqualByComparingTo("1000.0000");
         assertThat(trade.getTradeNav()).isEqualByComparingTo("1.2000");
         assertThat(trade.getRemark()).isEqualTo("确认清仓流水，" + SystemConstants.SIMULATED_TRADE_NOTICE);
+        verify(portfolioAccountService).adjustCashAmountOwnedAccount(
+                1L,
+                10L,
+                new BigDecimal("1197.0000")
+        );
     }
 
     @Test

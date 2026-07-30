@@ -8,6 +8,7 @@ import com.lk.quantfund.annotation.RequireLogin;
 import com.lk.quantfund.common.ApiResponse;
 import com.lk.quantfund.constants.SystemConstants;
 import com.lk.quantfund.dto.portfolio.CreatePortfolioAccountRequest;
+import com.lk.quantfund.dto.portfolio.UpdateCashAmountRequest;
 import com.lk.quantfund.dto.portfolio.UpdatePortfolioAccountRequest;
 import com.lk.quantfund.enums.DataOperation;
 import com.lk.quantfund.enums.ResourceType;
@@ -75,6 +76,16 @@ public class PortfolioController {
         return ApiResponse.success(portfolioAccountService.update(id, request));
     }
 
+    @PutMapping("/{id}/cash")
+    @DataScope(resourceType = ResourceType.PORTFOLIO_ACCOUNT, idParam = "id", operation = DataOperation.UPDATE)
+    @RateLimit(key = "portfolio:update-cash", windowSeconds = 60, maxRequests = 60)
+    @RepeatSubmit(intervalSeconds = 3)
+    @OperationLog(module = "portfolio", action = "update_cash", bizType = "PORTFOLIO_ACCOUNT")
+    public ApiResponse<PortfolioAccountVO> updateCashAmount(@PathVariable Long id,
+                                                           @Valid @RequestBody UpdateCashAmountRequest request) {
+        return ApiResponse.success(portfolioAccountService.updateCashAmount(id, request));
+    }
+
     @GetMapping("/{id}/holdings")
     @DataScope(resourceType = ResourceType.PORTFOLIO_ACCOUNT, idParam = "id", operation = DataOperation.READ)
     @RateLimit(key = "portfolio:holdings", windowSeconds = 60, maxRequests = 120)
@@ -91,4 +102,3 @@ public class PortfolioController {
         return ApiResponse.success(portfolioAccountService.recalculate(id));
     }
 }
-

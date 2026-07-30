@@ -5,6 +5,8 @@ import java.util.List;
 
 public record PortfolioSummaryVO(
         BigDecimal totalAsset,
+        BigDecimal holdingMarketValue,
+        BigDecimal cashAmount,
         BigDecimal totalInvestAmount,
         BigDecimal currentProfit,
         BigDecimal currentProfitRate,
@@ -16,4 +18,3 @@ public record PortfolioSummaryVO(
         List<PortfolioAccountVO> accounts
 ) {
 }
-

@@ -12,6 +12,7 @@ public record PortfolioAccountVO(
         BigDecimal currentProfit,
         BigDecimal currentProfitRate,
         BigDecimal dailyProfit,
+        BigDecimal cashAmount,
         BigDecimal cashPositionRate,
         BigDecimal equityPositionRate,
         BigDecimal bondPositionRate,
@@ -20,4 +21,3 @@ public record PortfolioAccountVO(
         LocalDateTime updateTime
 ) {
 }
-

@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS portfolio_account (
   current_profit DECIMAL(20,4) NOT NULL DEFAULT 0.0000 COMMENT 'Current profit',
   current_profit_rate DECIMAL(10,4) NOT NULL DEFAULT 0.0000 COMMENT 'Current profit rate percentage',
   daily_profit DECIMAL(20,4) NOT NULL DEFAULT 0.0000 COMMENT 'Daily profit',
+  cash_amount DECIMAL(20,4) NOT NULL DEFAULT 0.0000 COMMENT 'Available cash balance',
   cash_position_rate DECIMAL(10,4) NOT NULL DEFAULT 0.0000 COMMENT 'Cash position percentage',
   equity_position_rate DECIMAL(10,4) NOT NULL DEFAULT 0.0000 COMMENT 'Equity fund position percentage',
   bond_position_rate DECIMAL(10,4) NOT NULL DEFAULT 0.0000 COMMENT 'Bond fund position percentage',

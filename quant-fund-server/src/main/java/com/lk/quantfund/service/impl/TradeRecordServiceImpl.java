@@ -478,16 +478,27 @@ public class TradeRecordServiceImpl implements TradeRecordService {
     }
 
     private void applyCompletedTrade(Long userId, TradeRecord record, FundHolding holding) {
-        if (isIncreaseTrade(TradeType.valueOf(record.getTradeType()))) {
+        TradeType tradeType = TradeType.valueOf(record.getTradeType());
+        if (isIncreaseTrade(tradeType)) {
             FundHolding target = holding == null ? createHoldingFromTrade(userId, record) : holding;
             increaseHolding(target, record);
             fundHoldingMapper.updateById(target);
             record.setHoldingId(target.getId());
             tradeRecordMapper.updateById(record);
+            portfolioAccountService.adjustCashAmountOwnedAccount(
+                    userId,
+                    record.getAccountId(),
+                    valueOrZero(record.getTradeAmount()).add(valueOrZero(record.getTradeFee())).negate()
+            );
             return;
         }
         decreaseHolding(holding, record);
         fundHoldingMapper.updateById(holding);
+        portfolioAccountService.adjustCashAmountOwnedAccount(
+                userId,
+                record.getAccountId(),
+                maxZero(valueOrZero(record.getTradeAmount()).subtract(valueOrZero(record.getTradeFee())))
+        );
     }
 
     private FundHolding createHoldingFromTrade(Long userId, TradeRecord record) {

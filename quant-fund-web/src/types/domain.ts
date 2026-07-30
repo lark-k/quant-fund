@@ -36,6 +36,8 @@ export type PasswordUpdateRequest = {
 
 export interface PortfolioSummary {
   totalAsset: number
+  holdingMarketValue: number
+  cashAmount: number
   totalInvestAmount: number
   currentProfit: number
   currentProfitRate: number
@@ -44,6 +46,7 @@ export interface PortfolioSummary {
   bondPositionRate: number
   cashPositionRate: number
   holdingCount: number
+  accounts: PortfolioAccount[]
 }
 
 export interface FundHolding {
@@ -89,6 +92,7 @@ export interface PortfolioAccount {
   currentProfit: number
   currentProfitRate: number
   dailyProfit: number
+  cashAmount: number
   cashPositionRate: number
   equityPositionRate: number
   bondPositionRate: number

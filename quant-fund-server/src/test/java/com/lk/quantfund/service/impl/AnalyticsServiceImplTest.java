@@ -118,6 +118,8 @@ class AnalyticsServiceImplTest {
                 .thenReturn(List.of(holding), List.of(), List.of());
         when(portfolioAccountService.summary()).thenReturn(new PortfolioSummaryVO(
                 new BigDecimal("4526.2352"),
+                new BigDecimal("4526.2352"),
+                BigDecimal.ZERO,
                 new BigDecimal("4036.0200"),
                 new BigDecimal("576.7623"),
                 new BigDecimal("14.2904"),
@@ -633,6 +635,8 @@ class AnalyticsServiceImplTest {
     private PortfolioSummaryVO summary(String dailyProfit) {
         return new PortfolioSummaryVO(
                 new BigDecimal("10000.0000"),
+                new BigDecimal("10000.0000"),
+                BigDecimal.ZERO,
                 new BigDecimal("9500.0000"),
                 new BigDecimal("500.0000"),
                 new BigDecimal("5.0000"),

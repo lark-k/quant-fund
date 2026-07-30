@@ -158,8 +158,11 @@ export const holdings: FundHolding[] = holdingSeeds.map((item, index) => ({
   disclaimer: DISCLAIMER
 }))
 
+const mockCashAmount = 100000
+const mockHoldingMarketValue = holdings.reduce((sum, item) => sum + item.holdingAmount, 0)
+
 holdings.forEach((holding) => {
-  const total = holdings.reduce((sum, item) => sum + item.holdingAmount, 0)
+  const total = mockHoldingMarketValue + mockCashAmount
   holding.positionRate = total > 0 ? holding.holdingAmount / total * 100 : 0
 })
 
@@ -168,13 +171,14 @@ export const portfolios: PortfolioAccount[] = [
     id: 1,
     accountName: '手动基金账户',
     platformType: 'MANUAL',
-    totalAsset: holdings.reduce((total, item) => total + item.holdingAmount, 0),
+    totalAsset: mockHoldingMarketValue + mockCashAmount,
     totalInvestAmount: holdings.reduce((total, item) => total + item.holdingCost, 0),
     currentProfit: holdings.reduce((total, item) => total + item.holdingProfit, 0),
     currentProfitRate: 8.64,
     dailyProfit: holdings.reduce((total, item) => total + item.dailyProfit, 0),
-    cashPositionRate: 8.2,
-    equityPositionRate: 76.4,
+    cashAmount: mockCashAmount,
+    cashPositionRate: mockCashAmount / (mockHoldingMarketValue + mockCashAmount) * 100,
+    equityPositionRate: mockHoldingMarketValue / (mockHoldingMarketValue + mockCashAmount) * 100,
     bondPositionRate: 15.4,
     maxSingleFundPositionRate: 25,
     status: 'ACTIVE',
@@ -437,6 +441,8 @@ const trend = Array.from({ length: 18 }, (_, index) => {
 export const dashboard: DashboardOverview = {
   summary: {
     totalAsset: 6842713.23,
+    holdingMarketValue: 6047059.78,
+    cashAmount: 795653.45,
     totalInvestAmount: 6000000,
     currentProfit: 842713.23,
     currentProfitRate: 14.03,
@@ -444,7 +450,8 @@ export const dashboard: DashboardOverview = {
     equityPositionRate: 78.65,
     bondPositionRate: 9.72,
     cashPositionRate: 11.63,
-    holdingCount: 10
+    holdingCount: 10,
+    accounts: portfolios
   },
   topHoldings: holdings,
   positionDistribution: [
@@ -470,7 +477,9 @@ export const dashboard: DashboardOverview = {
 }
 
 function buildDashboard(): DashboardOverview {
-  const totalAsset = holdings.reduce((total, item) => total + item.holdingAmount, 0)
+  const holdingMarketValue = holdings.reduce((total, item) => total + item.holdingAmount, 0)
+  const cashAmount = portfolios.reduce((total, item) => total + item.cashAmount, 0)
+  const totalAsset = holdingMarketValue + cashAmount
   const totalInvestAmount = holdings.reduce((total, item) => total + item.holdingCost, 0)
   const currentProfit = holdings.reduce((total, item) => total + item.holdingProfit, 0)
   const dailyProfit = holdings.reduce((total, item) => total + item.dailyProfit, 0)
@@ -481,11 +490,16 @@ function buildDashboard(): DashboardOverview {
     summary: {
       ...dashboard.summary,
       totalAsset,
+      holdingMarketValue,
+      cashAmount,
       totalInvestAmount,
       currentProfit,
       currentProfitRate: totalInvestAmount ? currentProfit / totalInvestAmount * 100 : 0,
       dailyProfit,
-      holdingCount: holdings.length
+      cashPositionRate: totalAsset ? cashAmount / totalAsset * 100 : 0,
+      equityPositionRate: totalAsset ? holdingMarketValue / totalAsset * 100 : 0,
+      holdingCount: holdings.length,
+      accounts: portfolios
     },
     topHoldings: holdings,
     estimateStatus: {
@@ -1074,6 +1088,7 @@ export const mockApi = {
       currentProfit: 0,
       currentProfitRate: 0,
       dailyProfit: 0,
+      cashAmount: 0,
       cashPositionRate: 100,
       equityPositionRate: 0,
       bondPositionRate: 0,
@@ -1083,6 +1098,21 @@ export const mockApi = {
     }
     portfolios.unshift(saved)
     return saved
+  },
+  async updatePortfolioCash(id: number, cashAmount: number) {
+    const existing = portfolios.find((item) => item.id === id)
+    if (!existing) throw new Error('未找到账户')
+    existing.cashAmount = Math.max(Number(cashAmount) || 0, 0)
+    const accountHoldings = holdings.filter((item) => item.accountId === id)
+    const holdingMarketValue = accountHoldings.reduce((total, item) => total + item.holdingAmount, 0)
+    existing.totalAsset = holdingMarketValue + existing.cashAmount
+    existing.cashPositionRate = existing.totalAsset ? existing.cashAmount / existing.totalAsset * 100 : 0
+    existing.equityPositionRate = existing.totalAsset ? holdingMarketValue / existing.totalAsset * 100 : 0
+    existing.updateTime = new Date().toISOString()
+    accountHoldings.forEach((holding) => {
+      holding.positionRate = existing.totalAsset ? holding.holdingAmount / existing.totalAsset * 100 : 0
+    })
+    return existing
   },
   async createHolding(request: HoldingCreateRequest) {
     const latestNav = request.latestOfficialNav ?? 1
@@ -1198,6 +1228,8 @@ export const mockApi = {
         remark: simulatedRemark(request?.remark || '清仓自动生成的模拟卖出流水'),
         simulatedTradeNotice: SIMULATED_TRADE_NOTICE
       })
+      const account = portfolios.find((item) => item.id === existing.accountId)
+      if (account) account.cashAmount += Math.max(tradeAmount - tradeFee, 0)
     }
     Object.assign(existing, {
       activeFund: false,

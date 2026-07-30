@@ -165,6 +165,11 @@ public class FundHoldingServiceImpl implements FundHoldingService {
         LocalDateTime now = LocalDateTime.now();
         if (clearedAmount.compareTo(BigDecimal.ZERO) > 0 || clearedShare.compareTo(BigDecimal.ZERO) > 0) {
             insertClearTrade(userId, holding, tradeAmount, clearedShare, clearedNav, tradeFee, remark, now);
+            portfolioAccountService.adjustCashAmountOwnedAccount(
+                    userId,
+                    holding.getAccountId(),
+                    maxZero(tradeAmount.subtract(tradeFee))
+            );
         }
         holding.setActiveFund(0);
         holding.setHoldingAmount(ZERO);
@@ -689,11 +694,8 @@ public class FundHoldingServiceImpl implements FundHoldingService {
     }
 
     private BigDecimal accountTotal(Long accountId) {
-        return fundHoldingMapper.selectList(new LambdaQueryWrapper<FundHolding>()
-                        .eq(FundHolding::getAccountId, accountId))
-                .stream()
-                .map(this::displayHoldingAmount)
-                .reduce(ZERO, BigDecimal::add);
+        PortfolioAccount account = portfolioAccountMapper.selectById(accountId);
+        return account == null ? ZERO : valueOrZero(account.getTotalAsset());
     }
 
     private void ensureAccountOwned(Long userId, Long accountId) {
@@ -921,12 +923,12 @@ public class FundHoldingServiceImpl implements FundHoldingService {
         return value == null ? ZERO : scale(value);
     }
 
-    private BigDecimal scale(BigDecimal value) {
-        return value.setScale(4, RoundingMode.HALF_UP);
-    }
-
     private BigDecimal maxZero(BigDecimal value) {
         return value.compareTo(BigDecimal.ZERO) < 0 ? ZERO : scale(value);
+    }
+
+    private BigDecimal scale(BigDecimal value) {
+        return value.setScale(4, RoundingMode.HALF_UP);
     }
 
     private Integer toInt(Boolean value) {

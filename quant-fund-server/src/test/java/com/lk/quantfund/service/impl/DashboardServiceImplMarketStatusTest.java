@@ -500,6 +500,8 @@ class DashboardServiceImplMarketStatusTest {
     private PortfolioSummaryVO summary(String totalAsset, String currentProfit, String dailyProfit) {
         return new PortfolioSummaryVO(
                 new BigDecimal(totalAsset),
+                new BigDecimal(totalAsset),
+                BigDecimal.ZERO,
                 BigDecimal.ZERO,
                 new BigDecimal(currentProfit),
                 BigDecimal.ZERO,

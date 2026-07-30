@@ -72,6 +72,9 @@ export const quantApi = {
   createPortfolio(request: PortfolioAccountRequest): Promise<PortfolioAccount> {
     return USE_MOCK ? mockApi.createPortfolio(request) : http.post('/portfolios', request)
   },
+  updatePortfolioCash(id: number, cashAmount: number): Promise<PortfolioAccount> {
+    return USE_MOCK ? mockApi.updatePortfolioCash(id, cashAmount) : http.put(`/portfolios/${id}/cash`, { cashAmount })
+  },
   createHolding(request: HoldingCreateRequest): Promise<FundHolding> {
     return USE_MOCK ? mockApi.createHolding(request) : http.post('/holdings', request)
   },

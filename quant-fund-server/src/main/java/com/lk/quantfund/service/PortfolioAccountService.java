@@ -1,6 +1,7 @@
 package com.lk.quantfund.service;
 
 import com.lk.quantfund.dto.portfolio.CreatePortfolioAccountRequest;
+import com.lk.quantfund.dto.portfolio.UpdateCashAmountRequest;
 import com.lk.quantfund.dto.portfolio.UpdatePortfolioAccountRequest;
 import com.lk.quantfund.vo.holding.FundHoldingVO;
 import com.lk.quantfund.vo.portfolio.PortfolioAccountVO;
@@ -13,6 +14,8 @@ public interface PortfolioAccountService {
 
     PortfolioAccountVO update(Long accountId, UpdatePortfolioAccountRequest request);
 
+    PortfolioAccountVO updateCashAmount(Long accountId, UpdateCashAmountRequest request);
+
     PortfolioAccountVO detail(Long accountId);
 
     List<PortfolioAccountVO> list();
@@ -24,5 +27,6 @@ public interface PortfolioAccountService {
     PortfolioAccountVO recalculate(Long accountId);
 
     void recalculateOwnedAccount(Long userId, Long accountId);
-}
 
+    void adjustCashAmountOwnedAccount(Long userId, Long accountId, java.math.BigDecimal delta);
+}

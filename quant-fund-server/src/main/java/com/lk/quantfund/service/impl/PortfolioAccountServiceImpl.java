@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.lk.quantfund.auth.UserContext;
 import com.lk.quantfund.constants.SystemConstants;
 import com.lk.quantfund.dto.portfolio.CreatePortfolioAccountRequest;
+import com.lk.quantfund.dto.portfolio.UpdateCashAmountRequest;
 import com.lk.quantfund.dto.portfolio.UpdatePortfolioAccountRequest;
 import com.lk.quantfund.entity.FundNavDaily;
 import com.lk.quantfund.entity.FundHolding;
@@ -74,6 +75,7 @@ public class PortfolioAccountServiceImpl implements PortfolioAccountService {
         account.setCurrentProfit(ZERO);
         account.setCurrentProfitRate(ZERO);
         account.setDailyProfit(ZERO);
+        account.setCashAmount(ZERO);
         account.setCashPositionRate(ZERO);
         account.setEquityPositionRate(ZERO);
         account.setBondPositionRate(ZERO);
@@ -84,6 +86,18 @@ public class PortfolioAccountServiceImpl implements PortfolioAccountService {
         account.setDeleted(0);
         portfolioAccountMapper.insert(account);
         return toVO(account);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public PortfolioAccountVO updateCashAmount(Long accountId, UpdateCashAmountRequest request) {
+        Long userId = UserContext.getUserId();
+        PortfolioAccount account = loadOwnedAccount(userId, accountId);
+        account.setCashAmount(scale(request.cashAmount()));
+        account.setUpdateTime(LocalDateTime.now());
+        portfolioAccountMapper.updateById(account);
+        recalculateOwnedAccount(userId, accountId);
+        return toVO(loadOwnedAccount(userId, accountId));
     }
 
     @Override
@@ -119,6 +133,8 @@ public class PortfolioAccountServiceImpl implements PortfolioAccountService {
     public PortfolioSummaryVO summary() {
         List<PortfolioAccountVO> accounts = list();
         BigDecimal totalAsset = sumAccounts(accounts, PortfolioAccountVO::totalAsset);
+        BigDecimal cashAmount = sumAccounts(accounts, PortfolioAccountVO::cashAmount);
+        BigDecimal holdingMarketValue = maxZero(totalAsset.subtract(cashAmount));
         BigDecimal totalInvest = sumAccounts(accounts, PortfolioAccountVO::totalInvestAmount);
         BigDecimal profit = sumAccounts(accounts, PortfolioAccountVO::currentProfit);
         BigDecimal dailyProfit = sumAccounts(accounts, PortfolioAccountVO::dailyProfit);
@@ -128,13 +144,15 @@ public class PortfolioAccountServiceImpl implements PortfolioAccountService {
                 .eq(FundHolding::getUserId, UserContext.getUserId())).intValue();
         return new PortfolioSummaryVO(
                 totalAsset,
+                holdingMarketValue,
+                cashAmount,
                 totalInvest,
                 profit,
                 rate(profit, totalInvest),
                 dailyProfit,
                 rate(equityAmount, totalAsset),
                 rate(bondAmount, totalAsset),
-                ZERO,
+                rate(cashAmount, totalAsset),
                 holdingCount,
                 accounts
         );
@@ -168,9 +186,11 @@ public class PortfolioAccountServiceImpl implements PortfolioAccountService {
         List<FundHolding> holdings = fundHoldingMapper.selectList(new LambdaQueryWrapper<FundHolding>()
                 .eq(FundHolding::getUserId, userId)
                 .eq(FundHolding::getAccountId, accountId));
-        BigDecimal totalAsset = holdings.stream()
+        BigDecimal holdingMarketValue = holdings.stream()
                 .map(this::effectiveHoldingAmount)
                 .reduce(ZERO, BigDecimal::add);
+        BigDecimal cashAmount = valueOrZero(account.getCashAmount());
+        BigDecimal totalAsset = holdingMarketValue.add(cashAmount);
         BigDecimal totalInvest = sumHoldings(holdings, FundHolding::getHoldingCost);
         BigDecimal profit = holdings.stream()
                 .map(this::effectiveHoldingProfit)
@@ -194,13 +214,23 @@ public class PortfolioAccountServiceImpl implements PortfolioAccountService {
         account.setCurrentProfit(scale(profit));
         account.setCurrentProfitRate(rate(profit, totalInvest));
         account.setDailyProfit(scale(dailyProfit));
-        account.setCashPositionRate(ZERO);
+        account.setCashPositionRate(rate(cashAmount, totalAsset));
         account.setEquityPositionRate(rate(equityAmount, totalAsset));
         account.setBondPositionRate(rate(bondAmount, totalAsset));
         account.setMaxSingleFundPositionRate(rate(maxSingleAmount, totalAsset));
         account.setUpdateTime(LocalDateTime.now());
         portfolioAccountMapper.updateById(account);
         upsertIntradaySnapshot(userId);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void adjustCashAmountOwnedAccount(Long userId, Long accountId, BigDecimal delta) {
+        PortfolioAccount account = loadOwnedAccount(userId, accountId);
+        BigDecimal adjusted = valueOrZero(account.getCashAmount()).add(valueOrZero(delta));
+        account.setCashAmount(maxZero(adjusted));
+        account.setUpdateTime(LocalDateTime.now());
+        portfolioAccountMapper.updateById(account);
     }
 
     private void upsertIntradaySnapshot(Long userId) {
@@ -254,6 +284,7 @@ public class PortfolioAccountServiceImpl implements PortfolioAccountService {
                 valueOrZero(account.getCurrentProfit()),
                 valueOrZero(account.getCurrentProfitRate()),
                 valueOrZero(account.getDailyProfit()),
+                valueOrZero(account.getCashAmount()),
                 valueOrZero(account.getCashPositionRate()),
                 valueOrZero(account.getEquityPositionRate()),
                 valueOrZero(account.getBondPositionRate()),
@@ -322,11 +353,8 @@ public class PortfolioAccountServiceImpl implements PortfolioAccountService {
     }
 
     private BigDecimal accountTotal(Long accountId) {
-        return fundHoldingMapper.selectList(new LambdaQueryWrapper<FundHolding>()
-                        .eq(FundHolding::getAccountId, accountId))
-                .stream()
-                .map(this::effectiveHoldingAmount)
-                .reduce(ZERO, BigDecimal::add);
+        PortfolioAccount account = portfolioAccountMapper.selectById(accountId);
+        return account == null ? ZERO : valueOrZero(account.getTotalAsset());
     }
 
     private BigDecimal effectiveHoldingAmount(FundHolding holding) {
@@ -428,6 +456,10 @@ public class PortfolioAccountServiceImpl implements PortfolioAccountService {
 
     private BigDecimal valueOrZero(BigDecimal value) {
         return value == null ? ZERO : scale(value);
+    }
+
+    private BigDecimal maxZero(BigDecimal value) {
+        return value.compareTo(BigDecimal.ZERO) < 0 ? ZERO : scale(value);
     }
 
     private BigDecimal scale(BigDecimal value) {

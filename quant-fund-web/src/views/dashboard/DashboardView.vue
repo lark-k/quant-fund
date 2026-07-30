@@ -92,6 +92,11 @@ onBeforeUnmount(() => {
 
 const overview = computed(() => store.overview)
 const summary = computed(() => overview.value?.summary)
+const cashAccounts = computed(() => summary.value?.accounts || [])
+const cashDialogOpen = ref(false)
+const cashSaving = ref(false)
+const cashAccountId = ref<number>()
+const cashAmountDraft = ref(0)
 const trendPoints = computed<TrendPoint[]>(() => {
   if (activeRange.value === 'TODAY') {
     return intradayTrendPoints.value
@@ -649,6 +654,38 @@ async function autoRefreshEstimate() {
 function go(path: string) {
   router.push(path)
 }
+
+function openCashEditor() {
+  const account = cashAccounts.value[0]
+  if (!account) {
+    ElMessage.warning('暂无可调整现金的账户')
+    return
+  }
+  cashAccountId.value = account.id
+  cashAmountDraft.value = account.cashAmount
+  cashDialogOpen.value = true
+}
+
+function syncCashAmountDraft(accountId: number) {
+  const account = cashAccounts.value.find((item) => item.id === accountId)
+  cashAmountDraft.value = account?.cashAmount || 0
+}
+
+async function saveCashAmount() {
+  if (!cashAccountId.value || !Number.isFinite(cashAmountDraft.value) || cashAmountDraft.value < 0) {
+    ElMessage.warning('请输入有效的现金金额')
+    return
+  }
+  cashSaving.value = true
+  try {
+    await quantApi.updatePortfolioCash(cashAccountId.value, cashAmountDraft.value)
+    await store.fetchOverview()
+    cashDialogOpen.value = false
+    ElMessage.success('现金金额已更新')
+  } finally {
+    cashSaving.value = false
+  }
+}
 </script>
 
 <template>
@@ -658,14 +695,28 @@ function go(path: string) {
       <MetricTile label="总资产（元）" :value="money(summary.totalAsset)" sub-label="总投入" :delta="money(summary.totalInvestAmount)" tone="neutral" />
       <MetricTile label="总收益（元）" :value="signed(summary.currentProfit)" sub-label="总收益率" :delta="percent(summary.currentProfitRate)" :tone="metricTone(summary.currentProfit)" />
       <MetricTile label="当日收益（元）" :value="signed(summary.dailyProfit)" sub-label="当日收益率" :delta="percent(dailyProfitRate)" :tone="metricTone(summary.dailyProfit)" />
-      <MetricTile label="权益仓位" :value="percent(summary.equityPositionRate, 2)" sub-label="债券/现金" :delta="`${percent(summary.bondPositionRate, 2)} / ${percent(summary.cashPositionRate, 2)}`" tone="neutral" />
+      <button class="metric-tile cash-metric-tile" type="button" aria-label="修改现金金额" @click="openCashEditor">
+        <div class="metric-label cash-metric-label">
+          <span>现金（元）</span>
+          <span class="cash-edit-hint">点击修改</span>
+        </div>
+        <div class="metric-value metric-neutral">{{ money(summary.cashAmount) }}</div>
+        <div class="metric-sub">
+          <span>现金占比</span>
+          <strong class="metric-neutral">{{ percent(summary.cashPositionRate, 2) }}</strong>
+        </div>
+      </button>
     </div>
 
     <div class="dashboard-workspace">
       <div class="dashboard-primary-column">
         <section class="panel dashboard-holdings-panel">
-          <div class="panel-header">
+          <div class="panel-header dashboard-holdings-header">
             <h2 class="panel-title">自选/持仓监控</h2>
+            <div class="holding-market-value">
+              <span>持仓市值</span>
+              <strong>{{ money(summary.holdingMarketValue) }} 元</strong>
+            </div>
             <button class="panel-link" @click="go('/holdings')">更多 ›</button>
           </div>
           <div class="panel-body">
@@ -864,6 +915,38 @@ function go(path: string) {
     </section>
       </div>
     </div>
+    <el-dialog v-model="cashDialogOpen" title="调整现金" width="440px">
+      <div class="cash-editor-form">
+        <label v-if="cashAccounts.length > 1">
+          <span>账户</span>
+          <el-select v-model="cashAccountId" @change="syncCashAmountDraft">
+            <el-option
+              v-for="account in cashAccounts"
+              :key="account.id"
+              :label="account.accountName"
+              :value="account.id"
+            />
+          </el-select>
+        </label>
+        <label>
+          <span>现金金额（元）</span>
+          <el-input-number
+            v-model="cashAmountDraft"
+            :min="0"
+            :precision="2"
+            :step="100"
+            controls-position="right"
+          />
+        </label>
+        <p>总资产将按“现金 + 持仓市值”自动重算，持仓收益与成本计算保持不变。</p>
+      </div>
+      <template #footer>
+        <button class="secondary-button" type="button" @click="cashDialogOpen = false">取消</button>
+        <button class="primary-button" type="button" :disabled="cashSaving" @click="saveCashAmount">
+          {{ cashSaving ? '保存中…' : '保存现金' }}
+        </button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -912,6 +995,80 @@ function go(path: string) {
 .ml-return-separator {
   color: var(--muted);
   font-weight: 600;
+}
+
+.cash-metric-tile {
+  width: 100%;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 160ms ease, transform 160ms ease;
+}
+
+.cash-metric-tile:hover {
+  border-color: rgba(78, 192, 216, 0.65);
+  transform: translateY(-1px);
+}
+
+.cash-metric-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cash-edit-hint {
+  color: #72c9d8;
+  font-size: 11px;
+}
+
+.dashboard-holdings-header {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 12px;
+}
+
+.dashboard-holdings-header .panel-link {
+  justify-self: end;
+}
+
+.holding-market-value {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.holding-market-value strong {
+  color: #dce8ee;
+  font-size: 14px;
+}
+
+.cash-editor-form {
+  display: grid;
+  gap: 18px;
+}
+
+.cash-editor-form label {
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.cash-editor-form :deep(.el-select),
+.cash-editor-form :deep(.el-input-number) {
+  width: 100%;
+}
+
+.cash-editor-form p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .signal-action-cell {
