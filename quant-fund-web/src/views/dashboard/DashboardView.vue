@@ -178,7 +178,7 @@ const trendStatusText = computed(() => activeRange.value === 'TODAY'
   : latestTrendPoint.value?.profitStatusText || '按已同步快照计算')
 const dailyProfitRate = computed(() => {
   if (!summary.value) return 0
-  return safeRatio(summary.value.dailyProfit, summary.value.totalAsset)
+  return safeRatio(summary.value.dailyProfit, summary.value.holdingMarketValue)
 })
 const currentPortfolioReturn = computed(() => {
   if (activeRange.value === 'TODAY') {
@@ -1035,16 +1035,39 @@ async function saveCashAmount() {
 
 .holding-market-value {
   display: inline-flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: center;
   gap: 8px;
   color: var(--muted);
   font-size: 12px;
+  white-space: nowrap;
+}
+
+.holding-market-value span {
+  color: #8eabb7;
+  font-weight: 600;
 }
 
 .holding-market-value strong {
-  color: #dce8ee;
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 10px;
+  border: 1px solid rgba(232, 190, 110, 0.46);
+  border-radius: 999px;
+  color: #ffe2a8;
+  background: rgba(218, 161, 62, 0.13);
+  box-shadow: inset 0 0 0 1px rgba(255, 236, 194, 0.04);
   font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.dashboard-holdings-table th:nth-child(3),
+.dashboard-holdings-table th:nth-child(6) {
+  min-width: 72px;
+  overflow-wrap: normal;
+  white-space: nowrap;
 }
 
 .cash-editor-form {

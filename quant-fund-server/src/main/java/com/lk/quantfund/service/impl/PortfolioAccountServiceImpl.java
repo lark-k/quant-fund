@@ -245,6 +245,10 @@ public class PortfolioAccountServiceImpl implements PortfolioAccountService {
                 .map(PortfolioAccount::getTotalAsset)
                 .map(this::valueOrZero)
                 .reduce(ZERO, BigDecimal::add);
+        BigDecimal holdingMarketValue = accounts.stream()
+                .map(account -> valueOrZero(account.getTotalAsset()).subtract(valueOrZero(account.getCashAmount())))
+                .map(this::maxZero)
+                .reduce(ZERO, BigDecimal::add);
         BigDecimal dailyProfit = accounts.stream()
                 .map(PortfolioAccount::getDailyProfit)
                 .map(this::valueOrZero)
@@ -257,7 +261,7 @@ public class PortfolioAccountServiceImpl implements PortfolioAccountService {
         snapshot.setDeleted(0);
         snapshot.setTotalAsset(scale(totalAsset));
         snapshot.setDailyProfit(scale(dailyProfit));
-        snapshot.setDailyProfitRate(rate(dailyProfit, totalAsset));
+        snapshot.setDailyProfitRate(rate(dailyProfit, holdingMarketValue));
         snapshot.setSourceName("PORTFOLIO_RECALCULATE");
         snapshot.setUpdateTime(now);
         portfolioIntradaySnapshotMapper.upsertByUserAndSnapshotTime(snapshot);

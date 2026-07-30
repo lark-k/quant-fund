@@ -224,7 +224,7 @@ class AnalyticsServiceImplTest {
         when(holdingSnapshotMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
         when(fundHoldingMapper.selectList(any(LambdaQueryWrapper.class)))
                 .thenReturn(List.of(holding), List.of(), List.of());
-        when(portfolioAccountService.summary()).thenReturn(summary());
+        when(portfolioAccountService.summary()).thenReturn(summaryWithCash());
         when(fundValuationService.estimate(Mockito.eq("510300"), Mockito.anyString(), Mockito.anyString(), Mockito.any()))
                 .thenReturn(new FundValuationResult("沪深300", new BigDecimal("-2.0000"), "TEST", "TEST", "TRADING"));
 
@@ -236,6 +236,7 @@ class AnalyticsServiceImplTest {
                     .singleElement()
                     .satisfies(day -> {
                         assertThat(day.dailyProfit()).isEqualByComparingTo("-200.0000");
+                        assertThat(day.dailyProfitRate()).isEqualByComparingTo("-2.0000");
                         assertThat(day.profitStatus()).isEqualTo("ESTIMATED");
                     });
         }
@@ -559,6 +560,7 @@ class AnalyticsServiceImplTest {
         snapshot.setHoldingId(10L);
         snapshot.setSnapshotDate(date);
         snapshot.setTotalAsset(new BigDecimal("10000.0000"));
+        snapshot.setHoldingAmount(new BigDecimal("10000.0000"));
         snapshot.setDailyProfit(new BigDecimal(dailyProfit));
         return snapshot;
     }
@@ -644,6 +646,23 @@ class AnalyticsServiceImplTest {
                 BigDecimal.ZERO,
                 BigDecimal.ZERO,
                 BigDecimal.ZERO,
+                1,
+                List.of()
+        );
+    }
+
+    private PortfolioSummaryVO summaryWithCash() {
+        return new PortfolioSummaryVO(
+                new BigDecimal("15000.0000"),
+                new BigDecimal("10000.0000"),
+                new BigDecimal("5000.0000"),
+                new BigDecimal("9500.0000"),
+                new BigDecimal("500.0000"),
+                new BigDecimal("5.0000"),
+                new BigDecimal("-200.0000"),
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                new BigDecimal("33.3333"),
                 1,
                 List.of()
         );

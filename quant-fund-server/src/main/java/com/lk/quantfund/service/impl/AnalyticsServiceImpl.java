@@ -125,7 +125,9 @@ public class AnalyticsServiceImpl implements AnalyticsService {
         boolean includeCurrentDay = todayTradingDay && (intradayDisplayWindow || todayProfit.compareTo(ZERO) != 0);
         boolean allOfficialNavUpdated = allOfficialNavUpdated(currentHoldings);
         List<ProfitTrendPointVO> trend = withIndexReturnRates(
-                withCurrentDay(trend(selectedSnapshots, currentHoldings, actualStart, actualEnd), actualStart, actualEnd, today, summary.totalAsset(), todayProfit, includeCurrentDay, allOfficialNavUpdated),
+                withCurrentDay(trend(selectedSnapshots, currentHoldings, actualStart, actualEnd), actualStart, actualEnd,
+                        today, summary.totalAsset(), summary.holdingMarketValue(), todayProfit,
+                        includeCurrentDay, allOfficialNavUpdated),
                 actualStart,
                 actualEnd,
                 actualIndexCode);
@@ -151,7 +153,7 @@ public class AnalyticsServiceImpl implements AnalyticsService {
                 selectedProfit,
                 selectedRangeProfitRate,
                 List.of(
-                        new ProfitPeriodStatVO("TODAY", todayProfit, rate(todayProfit, summary.totalAsset())),
+                        new ProfitPeriodStatVO("TODAY", todayProfit, rate(todayProfit, summary.holdingMarketValue())),
                         new ProfitPeriodStatVO("THIS_WEEK", weekProfit, rate(weekProfit, summary.totalAsset())),
                         new ProfitPeriodStatVO("THIS_MONTH", monthProfit, rate(monthProfit, summary.totalAsset())),
                         new ProfitPeriodStatVO("THIS_YEAR", yearProfit, rate(yearProfit, summary.totalAsset())),
@@ -184,9 +186,8 @@ public class AnalyticsServiceImpl implements AnalyticsService {
                 .filter(point -> isAShareIntradayMinute(point.time()))
                 .toList();
         PortfolioSummaryVO summary = portfolioAccountService.summary();
-        BigDecimal totalAsset = summary.totalAsset();
         BigDecimal currentDashboardDailyProfit = scale(summary.dailyProfit());
-        BigDecimal currentDashboardReturn = rate(currentDashboardDailyProfit, totalAsset);
+        BigDecimal currentDashboardReturn = rate(currentDashboardDailyProfit, summary.holdingMarketValue());
         List<PortfolioIntradaySnapshot> snapshots = portfolioIntradaySnapshotMapper.selectList(new LambdaQueryWrapper<PortfolioIntradaySnapshot>()
                 .eq(PortfolioIntradaySnapshot::getUserId, userId)
                 .eq(PortfolioIntradaySnapshot::getSnapshotDate, today)
@@ -284,7 +285,9 @@ public class AnalyticsServiceImpl implements AnalyticsService {
         BigDecimal todayProfit = todayTradingDay ? currentDailyProfit(currentHoldings, intradayDisplayWindow) : ZERO;
         boolean includeCurrentDay = todayTradingDay && (intradayDisplayWindow || todayProfit.compareTo(ZERO) != 0);
         boolean allOfficialNavUpdated = allOfficialNavUpdated(currentHoldings);
-        List<ProfitTrendPointVO> trend = withCurrentDay(trend(monthSnapshots, currentHoldings, start, end), start, end, today, summary.totalAsset(), todayProfit, includeCurrentDay, allOfficialNavUpdated);
+        List<ProfitTrendPointVO> trend = withCurrentDay(trend(monthSnapshots, currentHoldings, start, end), start, end,
+                today, summary.totalAsset(), summary.holdingMarketValue(), todayProfit,
+                includeCurrentDay, allOfficialNavUpdated);
         BigDecimal monthlyProfit = trend.stream()
                 .map(ProfitTrendPointVO::dailyProfit)
                 .reduce(ZERO, BigDecimal::add)
@@ -463,10 +466,14 @@ public class AnalyticsServiceImpl implements AnalyticsService {
                             .filter(value -> value != null)
                             .max(BigDecimal::compareTo)
                             .orElse(ZERO);
+                    BigDecimal holdingMarketValue = sum(entry.getValue().stream()
+                            .map(HoldingSnapshot::getHoldingAmount)
+                            .toList());
                     BigDecimal dailyProfit = sum(entry.getValue().stream().map(HoldingSnapshot::getDailyProfit).toList());
                     cumulative[0] = cumulative[0].add(dailyProfit).setScale(4, RoundingMode.HALF_UP);
                     ProfitStatus status = statusByDate.getOrDefault(entry.getKey(), snapshotProfitStatusResolver.snapshotSynced());
-                    return new ProfitTrendPointVO(entry.getKey(), totalAsset, dailyProfit, cumulative[0], rate(dailyProfit, totalAsset), null, status.code(), status.text());
+                    return new ProfitTrendPointVO(entry.getKey(), totalAsset, dailyProfit, cumulative[0],
+                            rate(dailyProfit, holdingMarketValue), null, status.code(), status.text());
                 })
                 .toList();
     }
@@ -484,7 +491,8 @@ public class AnalyticsServiceImpl implements AnalyticsService {
     }
 
     private List<ProfitTrendPointVO> withCurrentDay(List<ProfitTrendPointVO> trend, LocalDate startDate, LocalDate endDate,
-                                                    LocalDate today, BigDecimal totalAsset, BigDecimal todayProfit,
+                                                    LocalDate today, BigDecimal totalAsset,
+                                                    BigDecimal holdingMarketValue, BigDecimal todayProfit,
                                                     boolean includeCurrentDayEstimate,
                                                     boolean allOfficialNavUpdated) {
         if (!includeCurrentDayEstimate || today.isBefore(startDate) || today.isAfter(endDate)) {
@@ -510,7 +518,7 @@ public class AnalyticsServiceImpl implements AnalyticsService {
                 scale(totalAsset),
                 scale(todayProfit),
                 cumulativeBeforeToday.add(scale(todayProfit)).setScale(4, RoundingMode.HALF_UP),
-                rate(todayProfit, totalAsset),
+                rate(todayProfit, holdingMarketValue),
                 null,
                 "ESTIMATED",
                 "盘中预估，待正式净值确认"

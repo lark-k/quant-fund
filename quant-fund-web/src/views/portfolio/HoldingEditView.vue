@@ -627,7 +627,9 @@ async function deleteSelectedPlan() {
 function applySellShareRatio(ratio: number) {
   const holding = activeHolding.value
   if (!holding) return
-  tradeForm.value.tradeShare = Number((holding.holdingShare * ratio).toFixed(2))
+  tradeForm.value.tradeShare = ratio === 1
+    ? holding.holdingShare
+    : Number((holding.holdingShare * ratio).toFixed(2))
 }
 
 function syncSellAmountFromShare() {
