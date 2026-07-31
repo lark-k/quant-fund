@@ -502,11 +502,104 @@ class FundHoldingServiceImplTest {
         assertThat(saved.getDailyProfit()).isLessThan(BigDecimal.ZERO);
     }
 
+    @Test
+    void recalculateQdiiShouldKeepIntradayEstimateWhenLatestOfficialNavIsStale() {
+        LocalDate today = LocalDate.now();
+        LocalDate staleNavDate = today.minusDays(2);
+        TradingCalendarService tradingCalendarService = mock(TradingCalendarService.class);
+        FundHolding holding = holding();
+        holding.setFundCode("012922");
+        holding.setFundName("E Fund Global Growth Select QDII");
+        holding.setHoldingAmount(new BigDecimal("488.9693"));
+        holding.setHoldingShare(new BigDecimal("141.2349"));
+        holding.setHoldingCost(new BigDecimal("612.0140"));
+        holding.setLatestOfficialNav(new BigDecimal("3.4621"));
+        holding.setCurrentEstimateNav(new BigDecimal("3.4621"));
+        when(holdingMapper.selectOne(any())).thenReturn(holding);
+        when(holdingMapper.selectList(any())).thenReturn(List.of(holding));
+        when(fundQueryService.getHistoricalNav(any(), any(), any())).thenReturn(List.of(
+                navPoint(staleNavDate.minusDays(1), "3.5395"),
+                navPoint(staleNavDate, "3.4621")
+        ));
+        when(tradingCalendarService.nextTradingDay(staleNavDate)).thenReturn(today.minusDays(1));
+        when(tradingCalendarService.isIntradayEstimateDisplayWindow(any(LocalDateTime.class))).thenReturn(true);
+        when(fundQueryService.getIntradayEstimate("012922", false))
+                .thenReturn(new com.lk.quantfund.datasource.model.FundEstimateDTO(
+                        "012922",
+                        "E Fund Global Growth Select QDII",
+                        new BigDecimal("3.5583"),
+                        new BigDecimal("2.7800"),
+                        today,
+                        today.atTime(11, 0),
+                        "TEST",
+                        false,
+                        "{}"
+                ));
+        when(valuationService.estimate(any(), any(), any(), any()))
+                .thenReturn(new FundValuationResult("Overseas Fund", new BigDecimal("2.7800"), "TEST", "TEST", "TEST"));
+        FundHoldingServiceImpl service = service(today.atTime(11, 0), tradingCalendarService);
+        ArgumentCaptor<FundHolding> holdingCaptor = ArgumentCaptor.forClass(FundHolding.class);
+
+        try (MockedStatic<UserContext> userContext = Mockito.mockStatic(UserContext.class)) {
+            userContext.when(UserContext::getUserId).thenReturn(1L);
+            service.recalculate(100L);
+        }
+
+        verify(fundQueryService).getIntradayEstimate("012922", false);
+        verify(holdingMapper).updateById(holdingCaptor.capture());
+        FundHolding saved = holdingCaptor.getValue();
+        assertThat(saved.getLatestOfficialNav()).isEqualByComparingTo("3.4621");
+        assertThat(saved.getCurrentEstimateNav()).isEqualByComparingTo("3.5583");
+        assertThat(saved.getDailyProfit()).isGreaterThan(BigDecimal.ZERO);
+    }
+
+    @Test
+    void recalculateQdiiShouldApplyOfficialNavWhoseEffectiveDateIsToday() {
+        LocalDate today = LocalDate.now();
+        LocalDate navDate = today.minusDays(1);
+        TradingCalendarService tradingCalendarService = mock(TradingCalendarService.class);
+        FundHolding holding = holding();
+        holding.setFundCode("012922");
+        holding.setFundName("E Fund Global Growth Select QDII");
+        holding.setHoldingAmount(new BigDecimal("488.9693"));
+        holding.setHoldingShare(new BigDecimal("141.2349"));
+        holding.setHoldingCost(new BigDecimal("612.0140"));
+        holding.setLatestOfficialNav(new BigDecimal("3.4621"));
+        holding.setCurrentEstimateNav(new BigDecimal("3.5583"));
+        when(holdingMapper.selectOne(any())).thenReturn(holding);
+        when(holdingMapper.selectList(any())).thenReturn(List.of(holding));
+        when(fundQueryService.getHistoricalNav(any(), any(), any())).thenReturn(List.of(
+                navPoint(navDate.minusDays(1), "3.4621"),
+                navPoint(navDate, "3.5000")
+        ));
+        when(tradingCalendarService.nextTradingDay(navDate)).thenReturn(today);
+        when(valuationService.estimate(any(), any(), any(), any()))
+                .thenReturn(new FundValuationResult("Overseas Fund", BigDecimal.ZERO, "TEST", "TEST", "TEST"));
+        FundHoldingServiceImpl service = service(today.atTime(20, 0), tradingCalendarService);
+        ArgumentCaptor<FundHolding> holdingCaptor = ArgumentCaptor.forClass(FundHolding.class);
+
+        try (MockedStatic<UserContext> userContext = Mockito.mockStatic(UserContext.class)) {
+            userContext.when(UserContext::getUserId).thenReturn(1L);
+            service.recalculate(100L);
+        }
+
+        verify(fundQueryService, never()).getIntradayEstimate(any(), any(Boolean.class));
+        verify(holdingMapper).updateById(holdingCaptor.capture());
+        FundHolding saved = holdingCaptor.getValue();
+        assertThat(saved.getLatestOfficialNav()).isEqualByComparingTo("3.5000");
+        assertThat(saved.getCurrentEstimateNav()).isEqualByComparingTo("3.5000");
+        assertThat(saved.getDailyProfit()).isGreaterThan(BigDecimal.ZERO);
+    }
+
     private FundHoldingServiceImpl service() {
         return service(null);
     }
 
     private FundHoldingServiceImpl service(LocalDateTime fixedNow) {
+        return service(fixedNow, new TradingCalendarService(new QuantFundProperties()));
+    }
+
+    private FundHoldingServiceImpl service(LocalDateTime fixedNow, TradingCalendarService tradingCalendarService) {
         return new FundHoldingServiceImpl(
                 holdingMapper,
                 accountMapper,
@@ -515,7 +608,7 @@ class FundHoldingServiceImplTest {
                 strategyService,
                 fundQueryService,
                 valuationService,
-                new TradingCalendarService(new QuantFundProperties()),
+                tradingCalendarService,
                 snapshotMapper,
                 backfillService,
                 tradeRecordMapper

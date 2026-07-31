@@ -469,7 +469,10 @@ public class FundHoldingServiceImpl implements FundHoldingService {
     private void refreshMarketData(FundHolding holding, String previousFundCode, BigDecimal previousCurrentEstimateNav,
                                    boolean allowDisplayWindowFetch) {
         Optional<OfficialNavContext> officialNav = officialNavContext(holding.getFundCode());
-        if (officialNav.isPresent() && officialNavPublishedFor(holding, officialNav.get())) {
+        if (officialNav.isPresent()
+                && (allowDisplayWindowFetch
+                ? officialNavCountsAsToday(holding, officialNav.get())
+                : officialNavPublishedFor(holding, officialNav.get()))) {
             applyOfficialNav(holding, officialNav.get());
             return;
         }

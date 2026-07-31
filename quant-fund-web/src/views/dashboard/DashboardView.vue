@@ -13,7 +13,7 @@ import { returnTrendOption } from '@/components/charts/chartOptions'
 import { quantApi } from '@/api/quant'
 import { useDashboardStore } from '@/stores/dashboard'
 import { actionPercent, metricTone, money, percent, percentUnsigned, signed, toneClass } from '@/utils/format'
-import type { AiAnalysisReport, MarketSessionStatus, ProfitAnalysis, QuantSignal, StrategySignal } from '@/types/domain'
+import type { AiAnalysisReport, FundHolding, MarketSessionStatus, ProfitAnalysis, QuantSignal, StrategySignal } from '@/types/domain'
 
 const store = useDashboardStore()
 const router = useRouter()
@@ -537,10 +537,7 @@ async function refreshEstimate() {
         .map((holding) => holding.fundCode)
     )
     const pendingHoldings = holdings.filter((holding) => !officialUpdatedFundCodes.has(holding.fundCode))
-    const results = await Promise.allSettled(pendingHoldings.map(async (holding) => {
-      await quantApi.refreshEstimate(holding.fundCode).catch(() => undefined)
-      await quantApi.recalculateHolding(holding.id)
-    }))
+    const results = await refreshHoldingsSequentially(pendingHoldings)
     await store.fetchOverview()
     await loadReturnTrend()
     await loadQuantSignals()
@@ -588,6 +585,20 @@ async function syncOfficialNavWhenAllowed() {
     }
     throw error
   }
+}
+
+async function refreshHoldingsSequentially(holdings: FundHolding[]): Promise<PromiseSettledResult<void>[]> {
+  const results: PromiseSettledResult<void>[] = []
+  for (const holding of holdings) {
+    try {
+      await quantApi.refreshEstimate(holding.fundCode).catch(() => undefined)
+      await quantApi.recalculateHolding(holding.id)
+      results.push({ status: 'fulfilled', value: undefined })
+    } catch (reason) {
+      results.push({ status: 'rejected', reason })
+    }
+  }
+  return results
 }
 
 function isRepeatSubmitError(error: unknown) {
@@ -639,10 +650,7 @@ async function autoRefreshEstimate() {
         .map((holding) => holding.fundCode)
     )
     const pendingHoldings = overview.value.topHoldings.filter((holding) => !officialUpdatedFundCodes.has(holding.fundCode))
-    await Promise.allSettled(pendingHoldings.map(async (holding) => {
-      await quantApi.refreshEstimate(holding.fundCode).catch(() => undefined)
-      await quantApi.recalculateHolding(holding.id)
-    }))
+    await refreshHoldingsSequentially(pendingHoldings)
     await store.fetchOverview()
     await loadReturnTrend()
     await loadQuantSignals()

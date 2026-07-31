@@ -58,6 +58,7 @@ public class AnalyticsServiceImpl implements AnalyticsService {
 
     private static final BigDecimal ZERO = BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP);
     private static final BigDecimal HUNDRED = new BigDecimal("100.0000");
+    private static final BigDecimal MAX_CONNECTED_INTRADAY_RETURN_GAP = new BigDecimal("1.0000");
     private static final String DEFAULT_INDEX_CODE = "000300";
     private static final Map<String, String> SUPPORTED_INDICES = Map.of(
             "000300", "沪深300",
@@ -185,9 +186,12 @@ public class AnalyticsServiceImpl implements AnalyticsService {
         List<MarketIndexIntradayPointVO> indexPoints = marketDataService.intradayIndex(actualIndexCode).stream()
                 .filter(point -> isAShareIntradayMinute(point.time()))
                 .toList();
-        PortfolioSummaryVO summary = portfolioAccountService.summary();
-        BigDecimal currentDashboardDailyProfit = scale(summary.dailyProfit());
-        BigDecimal currentDashboardReturn = rate(currentDashboardDailyProfit, summary.holdingMarketValue());
+        boolean intradayDisplayWindow = tradingCalendarService.isIntradayEstimateDisplayWindow(currentTime);
+        BigDecimal currentDashboardDailyProfit = currentDailyProfit(holdings, intradayDisplayWindow);
+        BigDecimal holdingMarketValue = holdings.stream()
+                .map(this::effectiveHoldingAmount)
+                .reduce(ZERO, BigDecimal::add);
+        BigDecimal currentDashboardReturn = rate(currentDashboardDailyProfit, holdingMarketValue);
         List<PortfolioIntradaySnapshot> snapshots = portfolioIntradaySnapshotMapper.selectList(new LambdaQueryWrapper<PortfolioIntradaySnapshot>()
                 .eq(PortfolioIntradaySnapshot::getUserId, userId)
                 .eq(PortfolioIntradaySnapshot::getSnapshotDate, today)
@@ -195,6 +199,10 @@ public class AnalyticsServiceImpl implements AnalyticsService {
                 .stream()
                 .filter(snapshot -> isAShareIntradayMinute(snapshot.getSnapshotTime()))
                 .toList();
+        LocalDateTime liveTrendTime = livePortfolioTrendTime(currentTime);
+        if (liveTrendTime != null && currentDashboardDailyProfit.compareTo(ZERO) != 0) {
+            snapshots = connectedIntradaySnapshots(snapshots, currentDashboardReturn);
+        }
         Map<LocalDateTime, BigDecimal> indexReturnByTime = indexPoints.stream()
                 .collect(Collectors.toMap(
                         point -> point.time().withSecond(0).withNano(0),
@@ -207,7 +215,6 @@ public class AnalyticsServiceImpl implements AnalyticsService {
                         snapshot -> snapshot,
                         (left, right) -> right,
                         LinkedHashMap::new));
-        LocalDateTime liveTrendTime = livePortfolioTrendTime(currentTime);
         if (liveTrendTime != null && today.equals(liveTrendTime.toLocalDate())) {
             PortfolioIntradaySnapshot liveSnapshot = new PortfolioIntradaySnapshot();
             liveSnapshot.setSnapshotTime(liveTrendTime);
@@ -238,6 +245,42 @@ public class AnalyticsServiceImpl implements AnalyticsService {
             ));
         }
         return points;
+    }
+
+    private List<PortfolioIntradaySnapshot> connectedIntradaySnapshots(
+            List<PortfolioIntradaySnapshot> snapshots, BigDecimal currentReturn) {
+        if (snapshots.size() < 2 || currentReturn == null) {
+            return snapshots;
+        }
+        List<BigDecimal> connectedRates = new ArrayList<>();
+        connectedRates.add(scale(currentReturn));
+        Set<LocalDateTime> connectedTimes = new java.util.HashSet<>();
+        boolean expanded;
+        do {
+            expanded = false;
+            for (PortfolioIntradaySnapshot snapshot : snapshots) {
+                LocalDateTime snapshotTime = snapshot.getSnapshotTime();
+                BigDecimal snapshotRate = snapshot.getDailyProfitRate();
+                if (snapshotTime == null || snapshotRate == null || connectedTimes.contains(snapshotTime)) {
+                    continue;
+                }
+                BigDecimal candidateRate = scale(snapshotRate);
+                boolean connected = connectedRates.stream()
+                        .anyMatch(rate -> rate.subtract(candidateRate).abs()
+                                .compareTo(MAX_CONNECTED_INTRADAY_RETURN_GAP) <= 0);
+                if (connected) {
+                    connectedTimes.add(snapshotTime);
+                    connectedRates.add(candidateRate);
+                    expanded = true;
+                }
+            }
+        } while (expanded);
+        if (connectedTimes.isEmpty() || connectedTimes.size() == snapshots.size()) {
+            return snapshots;
+        }
+        return snapshots.stream()
+                .filter(snapshot -> connectedTimes.contains(snapshot.getSnapshotTime()))
+                .toList();
     }
 
     private LocalDateTime livePortfolioTrendTime(LocalDateTime time) {

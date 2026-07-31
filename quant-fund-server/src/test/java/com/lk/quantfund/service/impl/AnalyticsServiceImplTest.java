@@ -453,10 +453,10 @@ class AnalyticsServiceImplTest {
     }
 
     @Test
-    void intradayTrendShouldUseDashboardSummaryAsLatestPortfolioPoint() {
+    void intradayTrendShouldUseHoldingDerivedProfitAsLatestPortfolioPoint() {
         AnalyticsServiceImpl service = service(LocalDate.of(2026, 6, 25), LocalDateTime.of(2026, 6, 25, 10, 5));
-        when(fundHoldingMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(holding("0.0000")));
-        when(portfolioAccountService.summary()).thenReturn(summary("88.0000"));
+        when(fundHoldingMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(holding("88.0000")));
+        when(portfolioAccountService.summary()).thenReturn(summary("6.0000"));
         when(portfolioIntradaySnapshotMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(
                 portfolioSnapshot(LocalDateTime.of(2026, 6, 25, 10, 3), "30.0000", "0.3000")
         ));
@@ -478,9 +478,42 @@ class AnalyticsServiceImplTest {
     }
 
     @Test
+    void intradayTrendShouldHideDisconnectedPartialAccountSnapshots() {
+        AnalyticsServiceImpl service = service(LocalDate.of(2026, 6, 25), LocalDateTime.of(2026, 6, 25, 10, 5));
+        FundHolding holding = holding("77.0000");
+        holding.setHoldingAmount(new BigDecimal("1400.0000"));
+        when(fundHoldingMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(holding));
+        when(portfolioIntradaySnapshotMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(
+                portfolioSnapshot(LocalDateTime.of(2026, 6, 25, 10, 1), "75.0000", "5.3571"),
+                portfolioSnapshot(LocalDateTime.of(2026, 6, 25, 10, 2), "6.0000", "0.4286"),
+                portfolioSnapshot(LocalDateTime.of(2026, 6, 25, 10, 3), "76.0000", "5.4286"),
+                portfolioSnapshot(LocalDateTime.of(2026, 6, 25, 10, 4), "7.0000", "0.5000")
+        ));
+        when(marketDataService.intradayIndex("000300")).thenReturn(List.of(
+                indexIntraday(LocalDateTime.of(2026, 6, 25, 10, 1), "0.1000"),
+                indexIntraday(LocalDateTime.of(2026, 6, 25, 10, 2), "0.1100"),
+                indexIntraday(LocalDateTime.of(2026, 6, 25, 10, 3), "0.1200"),
+                indexIntraday(LocalDateTime.of(2026, 6, 25, 10, 4), "0.1300")
+        ));
+
+        try (MockedStatic<UserContext> userContext = Mockito.mockStatic(UserContext.class)) {
+            userContext.when(UserContext::getUserId).thenReturn(1L);
+            var points = service.intradayTrend("000300");
+
+            assertThat(points).extracting(point -> point.dailyProfit())
+                    .doesNotContain(new BigDecimal("6.0000"), new BigDecimal("7.0000"));
+            assertThat(points).filteredOn(point -> point.time().equals(LocalDateTime.of(2026, 6, 25, 10, 2)))
+                    .singleElement()
+                    .satisfies(point -> assertThat(point.dailyProfit()).isEqualByComparingTo("75.0000"));
+            assertThat(points.getLast().dailyProfit()).isEqualByComparingTo("77.0000");
+            assertThat(points.getLast().portfolioReturn()).isEqualByComparingTo("5.5000");
+        }
+    }
+
+    @Test
     void intradayTrendShouldClampLunchBreakLivePointToMorningClose() {
         AnalyticsServiceImpl service = service(LocalDate.of(2026, 6, 25), LocalDateTime.of(2026, 6, 25, 11, 45));
-        when(fundHoldingMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(holding("0.0000")));
+        when(fundHoldingMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(holding("77.0000")));
         when(portfolioAccountService.summary()).thenReturn(summary("77.0000"));
         when(portfolioIntradaySnapshotMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
 
