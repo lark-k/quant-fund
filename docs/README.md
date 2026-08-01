@@ -7,7 +7,7 @@
 ## 新用户从这里开始
 
 1. 阅读根目录 [README](../README.md) 了解项目能力和整体架构。
-2. 按[本地开发与联调指南](deploy/local-integration.md)启动 MySQL、Redis、量化引擎、后端和前端。
+2. 已有 Windows MySQL/Redis 时，按 [WSL Docker 一键启动](deploy/docker-wsl.md)启动三个应用；分别调试服务时使用[本地开发与联调指南](deploy/local-integration.md)。
 3. 通过后端 Knife4j `http://127.0.0.1:8080/doc.html` 查看实时接口定义。
 4. 需要理解模块边界时阅读[项目总体设计](01-project-overall-design.md)。
 
@@ -17,6 +17,7 @@
 | --- | --- | --- |
 | [项目总体设计](01-project-overall-design.md) | 三服务架构、核心数据流、模块边界和安全约束 | 现行 |
 | [本地开发与联调](deploy/local-integration.md) | 环境、数据库脚本、启动、配置、验证和排障 | 现行 |
+| [WSL Docker 一键启动](deploy/docker-wsl.md) | 三端容器化、复用 Windows MySQL/Redis、启动与排障 | 现行 |
 | [后端模块 README](../quant-fund-server/README.md) | Spring Boot 分层、配置、启动、API 和测试 | 现行 |
 | [前端模块 README](../quant-fund-web/README.md) | 页面、路由、Mock/真实接口、启动和测试 | 现行 |
 | [量化引擎 README](../quant-engine/README.md) | 规则模型、回测、LightGBM、API 和测试 | 现行 |

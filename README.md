@@ -75,71 +75,31 @@ flowchart LR
 
 ### 环境要求
 
-- JDK 21、Maven 3.9+
-- Python 3.11+
-- Node.js 与 npm
-- Docker Desktop / Docker Compose
+- WSL2 与 Ubuntu
+- Docker Desktop，并为 Ubuntu 开启 WSL Integration
+- Windows 本机已运行 MySQL 8.4 和 Redis 7.4
+- `quant-fund-server/.env` 已配置现有数据库账号、密码和其他私密变量
 
-以下命令以 Windows PowerShell 为例。
+### 一键启动三个应用
 
-### 1. 启动数据服务
+在 Ubuntu WSL 中执行：
 
-```powershell
-docker compose up -d mysql redis
+```bash
+cd /mnt/d/code/personal/quant-fund
+docker compose up -d --build --wait
 ```
 
-Compose 首次创建数据卷时只会自动执行 `001_schema.sql`。新环境还需按顺序执行 `003`–`010`：
+Compose 只启动 Vue、Spring Boot 和 FastAPI 三个应用容器。MySQL 与 Redis 继续使用 Windows 现有实例，不会创建数据库容器、执行初始化 SQL 或挂载 Windows 数据目录。
 
-```powershell
-$scripts = Get-ChildItem .\docs\sql\*.sql |
-  Where-Object Name -NotIn @('001_schema.sql', '002_seed_demo.sql') |
-  Sort-Object Name
+查看状态或停止：
 
-foreach ($script in $scripts) {
-  Get-Content -Raw -Encoding UTF8 $script.FullName |
-    docker compose exec -T mysql mysql -uroot -pquantfund_root_password quant_fund
-}
+```bash
+docker compose ps
+docker compose logs -f
+docker compose down
 ```
 
-需要演示账号时再导入可重复执行的 `002_seed_demo.sql`：
-
-```powershell
-Get-Content -Raw -Encoding UTF8 .\docs\sql\002_seed_demo.sql |
-  docker compose exec -T mysql mysql -uroot -pquantfund_root_password quant_fund
-```
-
-演示登录：`quantdemo` / `QuantFund2026`。
-
-以下三个应用服务请分别在新的 PowerShell 中从仓库根目录启动。
-
-### 2. 启动量化引擎
-
-```powershell
-cd .\quant-engine
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-uvicorn app.main:app --host 127.0.0.1 --port 8091 --reload
-```
-
-### 3. 启动后端
-
-```powershell
-cd .\quant-fund-server
-Copy-Item .env.docker.example .env
-mvn spring-boot:run
-```
-
-### 4. 启动前端
-
-```powershell
-cd .\quant-fund-web
-Copy-Item .env.example .env
-npm install
-npm run dev
-```
-
-打开 <http://127.0.0.1:5173>。完整的数据库、本机依赖、环境变量、真实 DeepSeek 和排障说明见[本地开发与联调指南](docs/deploy/local-integration.md)。
+打开 <http://127.0.0.1:5173>。完整说明见 [WSL Docker 一键启动](docs/deploy/docker-wsl.md)；需要分别启动各服务进行开发调试时，见[本地开发与联调指南](docs/deploy/local-integration.md)。
 
 ### 服务地址
 
@@ -189,7 +149,7 @@ quant-fund/
 │  └─ superpowers/       # 历史设计规格和实施计划
 ├─ quant-fund-web/qa-artifacts/ # 已纳入版本管理的视觉 QA 证据
 ├─ tools/                # 真实基金数据 smoke 脚本
-└─ compose.yaml          # MySQL / Redis
+└─ compose.yaml          # Web / Spring Boot / FastAPI
 ```
 
 ## 测试
@@ -222,6 +182,7 @@ node .\tools\real-fund-holding-smoke.mjs
 完整文档索引见 **[docs/README.md](docs/README.md)**。
 
 - [本地开发与联调](docs/deploy/local-integration.md)
+- [WSL Docker 一键启动](docs/deploy/docker-wsl.md)
 - [项目总体设计](docs/01-project-overall-design.md)
 - [后端模块](quant-fund-server/README.md)
 - [前端模块](quant-fund-web/README.md)
@@ -235,7 +196,7 @@ node .\tools\real-fund-holding-smoke.mjs
 - 外部基金数据来自公开接口，可能存在延迟、缺失或接口变化。
 - LightGBM 默认关闭，规则模型始终是主决策引擎。
 - AI 只解释结构化上下文，失败或输出不合法时降级为 `WATCH`。
-- 当前 Compose 只覆盖本地 MySQL/Redis，尚未提供生产级部署编排。
+- 当前 Compose 面向本机 WSL/Docker Desktop 联调，Windows MySQL/Redis 仍需独立维护，不是生产级部署编排。
 
 ## License
 

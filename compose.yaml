@@ -1,46 +1,83 @@
 name: quant-fund
 
 services:
-  mysql:
-    image: mysql:8.4
-    container_name: quantfund-mysql
+  quant-engine:
+    build:
+      context: ./quant-engine
+      dockerfile: Dockerfile
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: quantfund_root_password
-      MYSQL_DATABASE: quant_fund
-      MYSQL_USER: quantfund_app
-      MYSQL_PASSWORD: quantfund_app_password
       TZ: Asia/Shanghai
-    command:
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
-      - --default-time-zone=+08:00
+      QUANT_ENGINE_HOST: 0.0.0.0
+      QUANT_ENGINE_PORT: 8091
     ports:
-      - "3307:3306"
+      - "127.0.0.1:${QUANT_ENGINE_PORT:-8091}:8091"
     volumes:
-      - quantfund-mysql-data:/var/lib/mysql
-      - ./docs/sql/001_schema.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
+      - quant-engine-cache:/app/.cache
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$$MYSQL_USER -p$$MYSQL_PASSWORD --silent"]
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/api/v1/health', timeout=3)
       interval: 10s
       timeout: 5s
       retries: 12
+      start_period: 15s
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
 
-  redis:
-    image: redis:7.4-alpine
-    container_name: quantfund-redis
+  quant-fund-server:
+    build:
+      context: ./quant-fund-server
+      dockerfile: Dockerfile
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    env_file:
+      - ./quant-fund-server/.env
+    environment:
+      TZ: Asia/Shanghai
+      QUANTFUND_DB_URL: jdbc:mysql://host.docker.internal:${WINDOWS_MYSQL_PORT:-3306}/${WINDOWS_MYSQL_DATABASE:-quant_fund}?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+      QUANTFUND_REDIS_HOST: host.docker.internal
+      QUANTFUND_REDIS_PORT: ${WINDOWS_REDIS_PORT:-6379}
+      QUANT_ENGINE_BASE_URL: http://quant-engine:8091
     ports:
-      - "6380:6379"
-    volumes:
-      - quantfund-redis-data:/data
+      - "127.0.0.1:${SERVER_PORT:-8080}:8080"
+    depends_on:
+      quant-engine:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8080/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 40s
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  quant-fund-web:
+    build:
+      context: ./quant-fund-web
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${WEB_PORT:-5173}:80"
+    depends_on:
+      quant-fund-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1/"]
       interval: 10s
       timeout: 5s
       retries: 12
+      start_period: 10s
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
-  quantfund-mysql-data:
-  quantfund-redis-data:
+  quant-engine-cache:
