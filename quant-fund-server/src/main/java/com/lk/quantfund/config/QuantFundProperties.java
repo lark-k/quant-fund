@@ -122,7 +122,7 @@ public class QuantFundProperties {
         private int maxTokens = 1200;
         private boolean reasoningEnabled = false;
         @Min(1)
-        private int accountAnalysisConcurrency = 5;
+        private int accountAnalysisConcurrency = 3;
 
         public boolean isEnabled() {
             return enabled;

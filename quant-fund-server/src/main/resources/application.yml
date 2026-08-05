@@ -66,7 +66,7 @@ quantfund:
     timeout-ms: ${DEEPSEEK_TIMEOUT_MS:15000}
     max-tokens: ${DEEPSEEK_MAX_TOKENS:1200}
     reasoning-enabled: ${DEEPSEEK_REASONING_ENABLED:false}
-    account-analysis-concurrency: ${DEEPSEEK_ACCOUNT_ANALYSIS_CONCURRENCY:5}
+    account-analysis-concurrency: ${DEEPSEEK_ACCOUNT_ANALYSIS_CONCURRENCY:3}
   fund-data-source:
     timeout-ms: 5000
     refresh-interval-seconds: 120

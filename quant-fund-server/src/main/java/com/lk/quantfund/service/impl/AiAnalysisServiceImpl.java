@@ -113,8 +113,33 @@ public class AiAnalysisServiceImpl implements AiAnalysisService {
                                                              FundHolding holding,
                                                              QuantSignalVO quantSignal) {
         AiAnalysisContext context = buildContext(userId, account, holding, quantSignal);
-        AiAnalysisResult result = alignWithQuantSignal(aiAnalysisClient.analyze(context), quantSignal);
+        AiAnalysisResult result = alignWithQuantSignal(analyzeWithFallback(context), quantSignal);
         return toVO(saveReport(userId, context, result));
+    }
+
+    private AiAnalysisResult analyzeWithFallback(AiAnalysisContext context) {
+        try {
+            return aiAnalysisClient.analyze(context);
+        } catch (RuntimeException exception) {
+            log.warn("AI client failed unexpectedly for fund {}, saving fallback report: {}",
+                    context.fundCode(), exception.getMessage());
+            return new AiAnalysisResult(
+                    StrategyAction.WATCH,
+                    "建议观察",
+                    ZERO,
+                    ZERO,
+                    new BigDecimal("0.3000"),
+                    RiskLevel.MEDIUM,
+                    "15:00前",
+                    "AI 降级观察",
+                    List.of("AI 调用异常，已保留最新量化建议", readableMessage(exception)),
+                    List.of("当日估值只作为参考，晚间正式净值前不是最终净值"),
+                    "AI 分析暂不可用，使用量化结果生成保守解释。",
+                    "建议以最新量化结果为准并稍后重试 AI 分析。",
+                    true,
+                    null
+            );
+        }
     }
 
     private QuantSignalVO refreshStrategySignals(Long userId, Long holdingId) {
@@ -366,7 +391,7 @@ public class AiAnalysisServiceImpl implements AiAnalysisService {
         report.setDataSummary(result.dataSummary());
         report.setFinalConclusion(result.finalConclusion());
         report.setRequestPayload(writeJson(context));
-        report.setResponsePayload(result.rawResponse());
+        report.setResponsePayload(normalizeResponsePayload(result.rawResponse()));
         report.setFallbackUsed(result.fallbackUsed() ? 1 : 0);
         report.setAnalysisTime(now);
         report.setCreateTime(now);
@@ -499,6 +524,27 @@ public class AiAnalysisServiceImpl implements AiAnalysisService {
         } catch (JsonProcessingException exception) {
             return "{}";
         }
+    }
+
+    private String normalizeResponsePayload(String rawResponse) {
+        if (!StringUtils.hasText(rawResponse)) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(objectMapper.readTree(rawResponse));
+        } catch (JsonProcessingException exception) {
+            return writeJson(Map.of("rawResponse", rawResponse));
+        }
+    }
+
+    private String readableMessage(RuntimeException exception) {
+        if (StringUtils.hasText(exception.getMessage())) {
+            return exception.getMessage();
+        }
+        if (exception.getCause() != null && StringUtils.hasText(exception.getCause().getMessage())) {
+            return exception.getCause().getMessage();
+        }
+        return exception.getClass().getSimpleName();
     }
 
     private List<String> readStringList(String json) {

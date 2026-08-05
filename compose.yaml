@@ -10,6 +10,8 @@ services:
       TZ: Asia/Shanghai
       QUANT_ENGINE_HOST: 0.0.0.0
       QUANT_ENGINE_PORT: 8091
+      QUANT_ENGINE_ML_ENABLED: ${QUANT_ENGINE_ML_ENABLED:-true}
+      QUANT_ENGINE_ML_MODEL_DIR: ${QUANT_ENGINE_ML_MODEL_DIR:-/app/models}
     ports:
       - "127.0.0.1:${QUANT_ENGINE_PORT:-8091}:8091"
     volumes:
