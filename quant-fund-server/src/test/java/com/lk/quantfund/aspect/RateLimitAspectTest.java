@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.lk.quantfund.annotation.RateLimit;
@@ -15,28 +14,25 @@ import com.lk.quantfund.enums.ErrorCode;
 import com.lk.quantfund.exception.BusinessException;
 import jakarta.servlet.http.HttpServletRequest;
 import java.lang.reflect.Method;
-import java.time.Duration;
+import java.util.List;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.data.redis.core.script.RedisScript;
 
 class RateLimitAspectTest {
 
-    @SuppressWarnings("unchecked")
-    private final ValueOperations<String, String> valueOperations = mock(ValueOperations.class);
     private final StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
     private final HttpServletRequest request = mock(HttpServletRequest.class);
     private final RateLimitAspect aspect = new RateLimitAspect(redisTemplate, request);
 
     @Test
-    void limitShouldProceedAndSetWindowOnFirstRequest() throws Throwable {
+    void limitShouldProceedWhenAtomicCounterIsWithinWindow() throws Throwable {
         ProceedingJoinPoint joinPoint = joinPointFor("limited");
-        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.increment(RedisKeyConstants.rateLimitKey("42", "unit:test"))).thenReturn(1L);
+        mockCounter("42", "unit:test", "10000", 1L);
         when(joinPoint.proceed()).thenReturn("ok");
 
         Object result;
@@ -46,14 +42,12 @@ class RateLimitAspectTest {
         }
 
         assertThat(result).isEqualTo("ok");
-        verify(redisTemplate).expire(RedisKeyConstants.rateLimitKey("42", "unit:test"), Duration.ofSeconds(10));
     }
 
     @Test
     void limitShouldRejectWhenRequestCountExceedsLimit() {
         ProceedingJoinPoint joinPoint = joinPointFor("limited");
-        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.increment(RedisKeyConstants.rateLimitKey("42", "unit:test"))).thenReturn(3L);
+        mockCounter("42", "unit:test", "10000", 3L);
 
         try (MockedStatic<UserContext> userContext = Mockito.mockStatic(UserContext.class)) {
             userContext.when(UserContext::getUserId).thenReturn(42L);
@@ -68,8 +62,7 @@ class RateLimitAspectTest {
     void limitShouldUseRequestUriWhenBusinessKeyIsBlank() throws Throwable {
         ProceedingJoinPoint joinPoint = joinPointFor("uriLimited");
         when(request.getRequestURI()).thenReturn("/api/unit");
-        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.increment(RedisKeyConstants.rateLimitKey("42", "/api/unit"))).thenReturn(1L);
+        mockCounter("42", "/api/unit", "10000", 1L);
         when(joinPoint.proceed()).thenReturn("ok");
 
         try (MockedStatic<UserContext> userContext = Mockito.mockStatic(UserContext.class)) {
@@ -77,7 +70,15 @@ class RateLimitAspectTest {
             assertThat(aspect.limit(joinPoint)).isEqualTo("ok");
         }
 
-        verify(valueOperations).increment(eq(RedisKeyConstants.rateLimitKey("42", "/api/unit")));
+    }
+
+    @SuppressWarnings("unchecked")
+    private void mockCounter(String scope, String businessKey, String windowMillis, Long result) {
+        when(redisTemplate.execute(
+                any(RedisScript.class),
+                eq(List.of(RedisKeyConstants.rateLimitKey(scope, businessKey))),
+                eq(windowMillis)
+        )).thenReturn(result);
     }
 
     private static ProceedingJoinPoint joinPointFor(String methodName) {
