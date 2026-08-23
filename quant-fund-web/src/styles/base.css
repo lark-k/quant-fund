@@ -1035,6 +1035,16 @@ a {
   min-height: 0;
 }
 
+.ai-panel .visual-panel-body {
+  flex: 1;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.ai-panel .visual-footnote {
+  align-self: end;
+  justify-self: start;
+}
+
 .insight-stat-row {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1081,9 +1091,14 @@ a {
   scrollbar-color: #274451 transparent;
 }
 
-.ai-panel .visual-table-wrap,
 .strategy-panel .visual-table-wrap {
   max-height: 238px;
+}
+
+.ai-panel .visual-table-wrap {
+  min-height: 0;
+  height: 100%;
+  max-height: none;
 }
 
 .visual-table th {
