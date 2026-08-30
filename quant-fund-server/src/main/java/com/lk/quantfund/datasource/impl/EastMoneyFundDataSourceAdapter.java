@@ -603,11 +603,11 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter, Fu
         if (secids.isEmpty()) {
             return Map.of();
         }
-        String url = properties.getFundDataSource().getEastMoneyQuoteUrl()
-                + "?fltt=2&secids=" + String.join(",", secids)
-                + "&fields=f12,f14,f2,f3";
-        String body = get("stock_quotes", url);
         try {
+            String url = properties.getFundDataSource().getEastMoneyQuoteUrl()
+                    + "?fltt=2&secids=" + String.join(",", secids)
+                    + "&fields=f12,f14,f2,f3";
+            String body = get("stock_quotes", url);
             JsonNode diff = objectMapper.readTree(stripJsonp(body)).path("data").path("diff");
             Map<String, QuoteInfo> result = new HashMap<>();
             if (diff.isArray()) {

@@ -43,6 +43,39 @@ const router = createRouter({
   routes
 })
 
+const CHUNK_RELOAD_KEY_PREFIX = 'quantfund:chunk-reload:'
+const CHUNK_LOAD_ERROR_PATTERN = /Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module|Loading chunk [\w-]+ failed/i
+
+function chunkReloadKey(path: string) {
+  return `${CHUNK_RELOAD_KEY_PREFIX}${path}`
+}
+
+router.onError((error, to) => {
+  const message = error instanceof Error ? error.message : String(error)
+  if (!CHUNK_LOAD_ERROR_PATTERN.test(message)) return
+
+  const target = to.fullPath || window.location.pathname + window.location.search + window.location.hash
+  const reloadKey = chunkReloadKey(target)
+  try {
+    if (window.sessionStorage.getItem(reloadKey)) {
+      window.sessionStorage.removeItem(reloadKey)
+      return
+    }
+    window.sessionStorage.setItem(reloadKey, '1')
+  } catch {
+    // Reload is still safe when session storage is unavailable.
+  }
+  window.location.replace(target)
+})
+
+router.afterEach((to) => {
+  try {
+    window.sessionStorage.removeItem(chunkReloadKey(to.fullPath))
+  } catch {
+    // Ignore browsers that block session storage.
+  }
+})
+
 router.beforeEach((to) => {
   const auth = useAuthStore()
   if (to.meta.requiresAuth && !auth.isLoggedIn) {

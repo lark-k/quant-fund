@@ -409,4 +409,60 @@ class EastMoneyFundDataSourceAdapterTest {
         assertThat(themes.getFirst().themeType()).isEqualTo("TRACKING_INDEX");
         assertThat(themes.getFirst().estimatedRate()).isEqualByComparingTo("-3.41");
     }
+
+    @Test
+    void shouldKeepDisclosedHeavyStocksWhenLiveQuotesAreUnavailable() {
+        String heavyStocksHtml = """
+                <div><label>截止至：<font class='px12'>2026-06-30</font></label><table><tbody>
+                <tr><td>1</td><td><a href='//quote.eastmoney.com/unify/r/0.300502'>300502</a></td><td>新易盛</td><td>--</td><td>--</td><td>资讯</td><td>8.25%</td></tr>
+                </tbody></table></div>
+                """;
+        ExchangeFunction exchangeFunction = request -> {
+            if (request.url().toString().contains("FundArchivesDatas")) {
+                return Mono.just(ClientResponse.create(HttpStatus.OK).body(heavyStocksHtml).build());
+            }
+            return Mono.error(new RuntimeException("connection closed before response"));
+        };
+        WebClient webClient = WebClient.builder().exchangeFunction(exchangeFunction).build();
+        ApiCallLogService apiCallLogService = (provider, apiName, requestUrl, requestMethod, success, statusCode,
+                                               errorMessage, costTimeMs, fallbackUsed) -> { };
+        EastMoneyFundDataSourceAdapter adapter = new EastMoneyFundDataSourceAdapter(
+                webClient, new ObjectMapper(), new QuantFundProperties(), apiCallLogService);
+
+        List<FundStockHoldingDTO> stocks = adapter.getHeavyStocks("021180");
+
+        assertThat(stocks).hasSize(1);
+        assertThat(stocks.getFirst().stockCode()).isEqualTo("300502");
+        assertThat(stocks.getFirst().stockName()).isEqualTo("新易盛");
+        assertThat(stocks.getFirst().positionRate()).isEqualByComparingTo("8.25");
+        assertThat(stocks.getFirst().latestPrice()).isNull();
+        assertThat(stocks.getFirst().changeRate()).isNull();
+    }
+
+    @Test
+    void shouldBuildRelatedThemesFromHoldingsWhenLiveQuotesAreUnavailable() {
+        String heavyStocksHtml = """
+                <table><tbody>
+                <tr><td>1</td><td><a href='//quote.eastmoney.com/unify/r/0.300502'>300502</a></td><td>新易盛</td><td>--</td><td>--</td><td>资讯</td><td>8.25%</td></tr>
+                </tbody></table>
+                """;
+        ExchangeFunction exchangeFunction = request -> {
+            if (request.url().toString().contains("FundArchivesDatas")) {
+                return Mono.just(ClientResponse.create(HttpStatus.OK).body(heavyStocksHtml).build());
+            }
+            return Mono.error(new RuntimeException("connection closed before response"));
+        };
+        WebClient webClient = WebClient.builder().exchangeFunction(exchangeFunction).build();
+        ApiCallLogService apiCallLogService = (provider, apiName, requestUrl, requestMethod, success, statusCode,
+                                               errorMessage, costTimeMs, fallbackUsed) -> { };
+        EastMoneyFundDataSourceAdapter adapter = new EastMoneyFundDataSourceAdapter(
+                webClient, new ObjectMapper(), new QuantFundProperties(), apiCallLogService);
+
+        List<FundThemeDTO> themes = adapter.getRelatedThemes("021180");
+
+        assertThat(themes).hasSize(1);
+        assertThat(themes.getFirst().themeName()).isEqualTo("CPO");
+        assertThat(themes.getFirst().weight()).isEqualByComparingTo("8.25");
+        assertThat(themes.getFirst().estimatedRate()).isNull();
+    }
 }

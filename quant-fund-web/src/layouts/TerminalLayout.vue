@@ -94,15 +94,16 @@ onBeforeUnmount(() => {
 })
 
 async function loadMarketReadings() {
-  try {
-    const [readings, status] = await Promise.all([
-      quantApi.marketReadings(),
-      quantApi.marketStatus()
-    ])
+  const [readingsResult, statusResult] = await Promise.allSettled([
+    quantApi.marketReadings(),
+    quantApi.marketStatus()
+  ])
+  if (readingsResult.status === 'fulfilled') {
+    const readings = readingsResult.value
     marketReadings.value = readings
-    marketStatus.value = status
-  } catch {
-    marketReadings.value = []
+  }
+  if (statusResult.status === 'fulfilled') {
+    marketStatus.value = statusResult.value
   }
 }
 

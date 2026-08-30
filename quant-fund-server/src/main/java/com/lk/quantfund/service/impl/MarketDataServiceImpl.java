@@ -18,6 +18,8 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 
@@ -25,7 +27,19 @@ import org.springframework.web.reactive.function.client.WebClient;
 public class MarketDataServiceImpl implements MarketDataService {
 
     private static final String SOURCE_NAME = "EAST_MONEY";
+    private static final String TENCENT_FALLBACK_SOURCE_NAME = "TENCENT_QUOTE_FALLBACK";
+    private static final String HISTORY_FALLBACK_SOURCE_NAME = "EAST_MONEY_HISTORY_FALLBACK";
     private static final String DEFAULT_INDEX_SECIDS = "1.000001,0.399001,0.399006,1.000300,1.000905";
+    private static final String TENCENT_INDEX_QUERY = "s_sh000001,s_sz399001,s_sz399006,s_sh000300,s_sh000905";
+    private static final Pattern TENCENT_QUOTE_PATTERN = Pattern.compile("v_s_[^=]+=\\\"([^\\\"]*)\\\";");
+    private static final List<IndexTarget> DEFAULT_INDICES = List.of(
+            new IndexTarget("000001", "1.000001", "上证指数"),
+            new IndexTarget("399001", "0.399001", "深证成指"),
+            new IndexTarget("399006", "0.399006", "创业板指"),
+            new IndexTarget("000300", "1.000300", "沪深300"),
+            new IndexTarget("000905", "1.000905", "中证500")
+    );
+    private static final Duration MARKET_READINGS_CACHE_TTL = Duration.ofMinutes(5);
     private static final DateTimeFormatter COMPACT_DATE = DateTimeFormatter.BASIC_ISO_DATE;
     private static final DateTimeFormatter INTRADAY_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
@@ -33,6 +47,7 @@ public class MarketDataServiceImpl implements MarketDataService {
     private final QuantFundProperties properties;
     private final ObjectMapper objectMapper;
     private final MarketIndexDailyMapper marketIndexDailyMapper;
+    private volatile CachedMarketReadings cachedMarketReadings = CachedMarketReadings.empty();
 
     public MarketDataServiceImpl(WebClient.Builder webClientBuilder,
                                  QuantFundProperties properties,
@@ -47,24 +62,166 @@ public class MarketDataServiceImpl implements MarketDataService {
     @Override
     public List<MarketIndexVO> marketReadings() {
         try {
+            List<MarketIndexVO> live = parse(fetchLiveMarketReadings());
+            if (!live.isEmpty()) {
+                return rememberMarketReadings(live);
+            }
+        } catch (Exception ignored) {
+            // The live quote endpoint can silently close connections for a throttled network exit.
+        }
+
+        CachedMarketReadings current = cachedMarketReadings;
+        if (current.isFresh()) {
+            return current.values();
+        }
+
+        List<MarketIndexVO> fallback = fallbackMarketReadings();
+        if (!fallback.isEmpty()) {
+            return rememberMarketReadings(fallback);
+        }
+        return current.values();
+    }
+
+    private String fetchLiveMarketReadings() {
+        return webClientBuilder.build()
+                .get()
+                .uri(builder -> builder
+                        .scheme("https")
+                        .host("push2.eastmoney.com")
+                        .path("/api/qt/ulist.np/get")
+                        .queryParam("fltt", "2")
+                        .queryParam("secids", DEFAULT_INDEX_SECIDS)
+                        .queryParam("fields", "f12,f14,f2,f3,f4,f6")
+                        .build())
+                .retrieve()
+                .bodyToMono(String.class)
+                .timeout(Duration.ofMillis(properties.getFundDataSource().getTimeoutMs()))
+                .block();
+    }
+
+    private List<MarketIndexVO> fallbackMarketReadings() {
+        List<MarketIndexVO> tencentReadings = tencentMarketReadings();
+        if (!tencentReadings.isEmpty()) {
+            return tencentReadings;
+        }
+        return historicalMarketReadings();
+    }
+
+    private List<MarketIndexVO> tencentMarketReadings() {
+        try {
             String response = webClientBuilder.build()
                     .get()
                     .uri(builder -> builder
                             .scheme("https")
-                            .host("push2.eastmoney.com")
-                            .path("/api/qt/ulist.np/get")
-                            .queryParam("fltt", "2")
-                            .queryParam("secids", DEFAULT_INDEX_SECIDS)
-                            .queryParam("fields", "f12,f14,f2,f3,f4,f6")
+                            .host("qt.gtimg.cn")
+                            .path("/q")
+                            .queryParam("q", TENCENT_INDEX_QUERY)
                             .build())
                     .retrieve()
                     .bodyToMono(String.class)
                     .timeout(Duration.ofMillis(properties.getFundDataSource().getTimeoutMs()))
                     .block();
-            return parse(response);
-        } catch (Exception exception) {
+            return parseTencentReadings(response);
+        } catch (Exception ignored) {
             return List.of();
         }
+    }
+
+    private List<MarketIndexVO> parseTencentReadings(String response) {
+        if (response == null || response.isBlank()) {
+            return List.of();
+        }
+        List<MarketIndexVO> readings = new ArrayList<>();
+        Matcher matcher = TENCENT_QUOTE_PATTERN.matcher(response);
+        while (matcher.find()) {
+            String[] fields = matcher.group(1).split("~", -1);
+            if (fields.length < 6 || fields[2].isBlank()) {
+                continue;
+            }
+            try {
+                readings.add(new MarketIndexVO(
+                        fields[2],
+                        fields[1],
+                        decimal(fields[3]),
+                        decimal(fields[4]),
+                        decimal(fields[5]),
+                        fields.length > 9 ? decimal(fields[9]) : BigDecimal.ZERO,
+                        LocalDateTime.now(),
+                        TENCENT_FALLBACK_SOURCE_NAME
+                ));
+            } catch (RuntimeException ignored) {
+                // Ignore a malformed row without discarding the other market readings.
+            }
+        }
+        return readings;
+    }
+
+    private List<MarketIndexVO> historicalMarketReadings() {
+        LocalDate endDate = LocalDate.now();
+        LocalDate startDate = endDate.minusDays(14);
+        List<MarketIndexVO> readings = new ArrayList<>();
+        for (IndexTarget target : DEFAULT_INDICES) {
+            try {
+                String response = webClientBuilder.build()
+                        .get()
+                        .uri(builder -> builder
+                                .scheme("https")
+                                .host("push2his.eastmoney.com")
+                                .path("/api/qt/stock/kline/get")
+                                .queryParam("secid", target.secid())
+                                .queryParam("fields1", "f1,f2,f3,f4,f5,f6")
+                                .queryParam("fields2", "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61")
+                                .queryParam("klt", "101")
+                                .queryParam("fqt", "1")
+                                .queryParam("beg", startDate.format(COMPACT_DATE))
+                                .queryParam("end", endDate.format(COMPACT_DATE))
+                                .build())
+                        .retrieve()
+                        .bodyToMono(String.class)
+                        .timeout(Duration.ofMillis(properties.getFundDataSource().getTimeoutMs()))
+                        .block();
+                MarketIndexVO reading = parseFallbackReading(target, response);
+                if (reading != null) {
+                    readings.add(reading);
+                }
+            } catch (Exception ignored) {
+                // Keep the other indices available when one history request fails.
+            }
+        }
+        return readings;
+    }
+
+    private MarketIndexVO parseFallbackReading(IndexTarget target, String response) {
+        try {
+            JsonNode data = objectMapper.readTree(response).path("data");
+            JsonNode klines = data.path("klines");
+            if (!klines.isArray() || klines.isEmpty()) {
+                return null;
+            }
+            String[] fields = klines.get(klines.size() - 1).asText().split(",");
+            if (fields.length < 10) {
+                return null;
+            }
+            LocalDate tradeDate = LocalDate.parse(fields[0]);
+            return new MarketIndexVO(
+                    target.code(),
+                    data.path("name").asText(target.name()),
+                    decimal(fields[2]),
+                    decimal(fields[9]),
+                    decimal(fields[8]),
+                    fields.length > 6 ? decimal(fields[6]) : BigDecimal.ZERO,
+                    tradeDate.atTime(15, 0),
+                    HISTORY_FALLBACK_SOURCE_NAME
+            );
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private List<MarketIndexVO> rememberMarketReadings(List<MarketIndexVO> readings) {
+        List<MarketIndexVO> snapshot = List.copyOf(readings);
+        cachedMarketReadings = new CachedMarketReadings(snapshot, LocalDateTime.now());
+        return snapshot;
     }
 
     @Override
@@ -331,5 +488,19 @@ public class MarketDataServiceImpl implements MarketDataService {
             return BigDecimal.ZERO;
         }
         return new BigDecimal(value).setScale(4, RoundingMode.HALF_UP);
+    }
+
+    private record IndexTarget(String code, String secid, String name) {
+    }
+
+    private record CachedMarketReadings(List<MarketIndexVO> values, LocalDateTime refreshedAt) {
+        static CachedMarketReadings empty() {
+            return new CachedMarketReadings(List.of(), LocalDateTime.MIN);
+        }
+
+        boolean isFresh() {
+            return !values.isEmpty()
+                    && refreshedAt.plus(MARKET_READINGS_CACHE_TTL).isAfter(LocalDateTime.now());
+        }
     }
 }
