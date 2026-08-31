@@ -14,6 +14,7 @@ import com.lk.quantfund.service.ApiCallLogService;
 import java.time.LocalDate;
 import java.util.Optional;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.reactive.function.client.ExchangeFunction;
@@ -464,5 +465,101 @@ class EastMoneyFundDataSourceAdapterTest {
         assertThat(themes.getFirst().themeName()).isEqualTo("CPO");
         assertThat(themes.getFirst().weight()).isEqualByComparingTo("8.25");
         assertThat(themes.getFirst().estimatedRate()).isNull();
+    }
+
+    @Test
+    void shouldFallbackToTencentQuotesAcrossMarketsAndCacheResults() {
+        String heavyStocksHtml = """
+                <table><tbody>
+                <tr><td>1</td><td><a href='//quote.eastmoney.com/unify/r/1.688200'>688200</a></td><td>华峰测控</td><td>--</td><td>--</td><td>资讯</td><td>9.21%</td></tr>
+                <tr><td>2</td><td><a href='//quote.eastmoney.com/unify/r/116.00175'>00175</a></td><td>吉利汽车</td><td>--</td><td>--</td><td>资讯</td><td>5.00%</td></tr>
+                <tr><td>3</td><td><a href='//quote.eastmoney.com/unify/r/105.LRCX'>LRCX</a></td><td>泛林集团</td><td>--</td><td>--</td><td>资讯</td><td>4.00%</td></tr>
+                </tbody></table>
+                """;
+        String tencentQuotes = """
+                v_s_sh688200="1~华峰测控~688200~380.69~-8.34~-2.14~1265927~48357~~764.42~GP-A-KCB~100";
+                v_s_hk00175="100~吉利汽车~00175~17.650~-0.430~-2.38~10826819.0~191956245.920~~1903.6233";
+                v_s_usLRCX="200~泛林集团~LRCX.OQ~301.90~-16.68~-5.24~8059615~2459954385~3777.73810~";
+                """;
+        AtomicInteger eastMoneyQuoteRequests = new AtomicInteger();
+        AtomicInteger tencentQuoteRequests = new AtomicInteger();
+        AtomicReference<String> tencentUrl = new AtomicReference<>();
+        ExchangeFunction exchangeFunction = request -> {
+            String url = request.url().toString();
+            if (url.contains("FundArchivesDatas")) {
+                return Mono.just(ClientResponse.create(HttpStatus.OK).body(heavyStocksHtml).build());
+            }
+            if (url.contains("push2.eastmoney.com")) {
+                eastMoneyQuoteRequests.incrementAndGet();
+                return Mono.error(new RuntimeException("connection closed before response"));
+            }
+            if (url.contains("qt.gtimg.cn")) {
+                tencentQuoteRequests.incrementAndGet();
+                tencentUrl.set(url);
+                return Mono.just(ClientResponse.create(HttpStatus.OK).body(tencentQuotes).build());
+            }
+            return Mono.just(ClientResponse.create(HttpStatus.OK).body("{}").build());
+        };
+        WebClient webClient = WebClient.builder().exchangeFunction(exchangeFunction).build();
+        ApiCallLogService apiCallLogService = (provider, apiName, requestUrl, requestMethod, success, statusCode,
+                                               errorMessage, costTimeMs, fallbackUsed) -> { };
+        EastMoneyFundDataSourceAdapter adapter = new EastMoneyFundDataSourceAdapter(
+                webClient, new ObjectMapper(), new QuantFundProperties(), apiCallLogService);
+
+        List<FundStockHoldingDTO> first = adapter.getHeavyStocks("021180");
+        List<FundStockHoldingDTO> second = adapter.getHeavyStocks("021180");
+
+        assertThat(first).hasSize(3);
+        assertThat(first).extracting(FundStockHoldingDTO::stockCode)
+                .containsExactly("688200", "00175", "LRCX");
+        assertThat(first).extracting(FundStockHoldingDTO::changeRate)
+                .containsExactly(new java.math.BigDecimal("-2.14"), new java.math.BigDecimal("-2.38"), new java.math.BigDecimal("-5.24"));
+        assertThat(first.getFirst().latestPrice()).isEqualByComparingTo("380.69");
+        assertThat(second).isEqualTo(first);
+        assertThat(tencentUrl.get()).contains("s_sh688200").contains("s_hk00175").contains("s_usLRCX");
+        assertThat(eastMoneyQuoteRequests).hasValue(1);
+        assertThat(tencentQuoteRequests).hasValue(1);
+    }
+
+    @Test
+    void shouldUseTencentOnlyForQuotesMissingFromEastMoneyResponse() {
+        String heavyStocksHtml = """
+                <table><tbody>
+                <tr><td>1</td><td><a href='//quote.eastmoney.com/unify/r/1.688200'>688200</a></td><td>华峰测控</td><td>--</td><td>--</td><td>资讯</td><td>9.21%</td></tr>
+                <tr><td>2</td><td><a href='//quote.eastmoney.com/unify/r/0.002371'>002371</a></td><td>北方华创</td><td>--</td><td>--</td><td>资讯</td><td>9.09%</td></tr>
+                </tbody></table>
+                """;
+        String eastMoneyQuotes = """
+                {"data":{"diff":[{"f12":"688200","f14":"华峰测控","f2":380.69,"f3":-2.14}]}}
+                """;
+        String tencentQuotes = """
+                v_s_sz002371="51~北方华创~002371~684.36~-13.15~-1.89~20664~140963~~4966.33~GP-A~";
+                """;
+        AtomicReference<String> tencentUrl = new AtomicReference<>();
+        ExchangeFunction exchangeFunction = request -> {
+            String url = request.url().toString();
+            if (url.contains("FundArchivesDatas")) {
+                return Mono.just(ClientResponse.create(HttpStatus.OK).body(heavyStocksHtml).build());
+            }
+            if (url.contains("push2.eastmoney.com")) {
+                return Mono.just(ClientResponse.create(HttpStatus.OK).body(eastMoneyQuotes).build());
+            }
+            if (url.contains("qt.gtimg.cn")) {
+                tencentUrl.set(url);
+                return Mono.just(ClientResponse.create(HttpStatus.OK).body(tencentQuotes).build());
+            }
+            return Mono.just(ClientResponse.create(HttpStatus.OK).body("{}").build());
+        };
+        WebClient webClient = WebClient.builder().exchangeFunction(exchangeFunction).build();
+        ApiCallLogService apiCallLogService = (provider, apiName, requestUrl, requestMethod, success, statusCode,
+                                               errorMessage, costTimeMs, fallbackUsed) -> { };
+        EastMoneyFundDataSourceAdapter adapter = new EastMoneyFundDataSourceAdapter(
+                webClient, new ObjectMapper(), new QuantFundProperties(), apiCallLogService);
+
+        List<FundStockHoldingDTO> stocks = adapter.getHeavyStocks("021180");
+
+        assertThat(stocks).extracting(FundStockHoldingDTO::changeRate)
+                .containsExactly(new java.math.BigDecimal("-2.14"), new java.math.BigDecimal("-1.89"));
+        assertThat(tencentUrl.get()).contains("s_sz002371").doesNotContain("s_sh688200");
     }
 }

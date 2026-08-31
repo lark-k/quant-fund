@@ -30,6 +30,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.core.io.buffer.DataBuffer;
@@ -44,7 +45,10 @@ import org.springframework.web.reactive.function.BodyInserters;
 public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter, FundUniverseDataSourceAdapter {
 
     private static final String SOURCE_NAME = "EAST_MONEY";
+    private static final String TENCENT_SOURCE_NAME = "TENCENT";
     private static final String EAST_MONEY_REFERER = "https://fundf10.eastmoney.com/";
+    private static final String TENCENT_REFERER = "https://gu.qq.com/";
+    private static final String TENCENT_QUOTE_URL = "https://qt.gtimg.cn/q=";
     private static final String EAST_MONEY_MOBILE_FUND_DETAIL_URL =
             "https://fundmobapi.eastmoney.com/FundMApi/FundDetailInformation.ashx";
     private static final String BROWSER_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -56,7 +60,9 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter, Fu
     private static final Pattern CELL_PATTERN = Pattern.compile("<td[^>]*>(.*?)</td>", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
     private static final Pattern SECID_PATTERN = Pattern.compile("unify/r/([^'\" >]+)", Pattern.CASE_INSENSITIVE);
     private static final Pattern REPORT_DATE_PATTERN = Pattern.compile("截止至：<font[^>]*>(\\d{4}-\\d{2}-\\d{2})</font>");
+    private static final Pattern TENCENT_QUOTE_PATTERN = Pattern.compile("v_s_([^=]+)=\\\"([^\\\"]*)\\\";");
     private static final DateTimeFormatter COMPACT_DATE = DateTimeFormatter.BASIC_ISO_DATE;
+    private static final Duration QUOTE_CACHE_TTL = Duration.ofSeconds(30);
     private static final int HISTORICAL_NAV_PAGE_SIZE = 200;
     private static final int EAST_MONEY_LEGACY_PAGE_CAP = 20;
     private static final String ESTIMATE_FIELDS = "FCODE,SHORTNAME,GSZZL,GZTIME,GSZ";
@@ -65,6 +71,7 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter, Fu
     private final ObjectMapper objectMapper;
     private final QuantFundProperties properties;
     private final ApiCallLogService apiCallLogService;
+    private final Map<String, CachedQuote> quoteCache = new ConcurrentHashMap<>();
 
     public EastMoneyFundDataSourceAdapter(WebClient fundDataWebClient,
                                           ObjectMapper objectMapper,
@@ -603,6 +610,42 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter, Fu
         if (secids.isEmpty()) {
             return Map.of();
         }
+        Map<String, QuoteInfo> result = new HashMap<>();
+        List<String> unresolvedSecids = new ArrayList<>();
+        LocalDateTime now = LocalDateTime.now();
+        for (String secid : secids) {
+            CachedQuote cached = quoteCache.get(secid);
+            if (cached != null && cached.isFresh(now)) {
+                result.put(stockCode(secid), cached.quote());
+            } else {
+                unresolvedSecids.add(secid);
+            }
+        }
+        if (unresolvedSecids.isEmpty()) {
+            return result;
+        }
+
+        Map<String, QuoteInfo> eastMoneyQuotes = eastMoneyQuotes(unresolvedSecids);
+        result.putAll(eastMoneyQuotes);
+        List<String> fallbackSecids = unresolvedSecids.stream()
+                .filter(secid -> {
+                    QuoteInfo quote = eastMoneyQuotes.get(stockCode(secid));
+                    return quote == null || quote.changeRate() == null;
+                })
+                .toList();
+        if (!fallbackSecids.isEmpty()) {
+            result.putAll(tencentQuotes(fallbackSecids));
+        }
+        for (String secid : unresolvedSecids) {
+            QuoteInfo quote = result.get(stockCode(secid));
+            if (quote != null) {
+                quoteCache.put(secid, new CachedQuote(quote, now));
+            }
+        }
+        return result;
+    }
+
+    private Map<String, QuoteInfo> eastMoneyQuotes(List<String> secids) {
         try {
             String url = properties.getFundDataSource().getEastMoneyQuoteUrl()
                     + "?fltt=2&secids=" + String.join(",", secids)
@@ -622,6 +665,68 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter, Fu
         } catch (Exception exception) {
             return Map.of();
         }
+    }
+
+    private Map<String, QuoteInfo> tencentQuotes(List<String> secids) {
+        Map<String, String> stockCodeByTencentCode = new LinkedHashMap<>();
+        for (String secid : secids) {
+            String tencentCode = tencentQuoteCode(secid);
+            if (StringUtils.hasText(tencentCode)) {
+                stockCodeByTencentCode.put(tencentCode, stockCode(secid));
+            }
+        }
+        if (stockCodeByTencentCode.isEmpty()) {
+            return Map.of();
+        }
+        String query = stockCodeByTencentCode.keySet().stream()
+                .map(code -> "s_" + code)
+                .reduce((left, right) -> left + "," + right)
+                .orElse("");
+        try {
+            String body = getExternal(TENCENT_SOURCE_NAME, "stock_quotes_fallback",
+                    TENCENT_QUOTE_URL + query, TENCENT_REFERER, true);
+            Map<String, QuoteInfo> result = new HashMap<>();
+            Matcher matcher = TENCENT_QUOTE_PATTERN.matcher(body);
+            while (matcher.find()) {
+                String stockCode = stockCodeByTencentCode.get(matcher.group(1));
+                String[] fields = matcher.group(2).split("~", -1);
+                if (!StringUtils.hasText(stockCode) || fields.length < 6) {
+                    continue;
+                }
+                BigDecimal latestPrice = decimal(fields[3]);
+                BigDecimal changeRate = decimal(fields[5]);
+                if (latestPrice != null || changeRate != null) {
+                    result.put(stockCode, new QuoteInfo(fields[1], latestPrice, changeRate));
+                }
+            }
+            return result;
+        } catch (Exception exception) {
+            return Map.of();
+        }
+    }
+
+    private String tencentQuoteCode(String secid) {
+        if (!StringUtils.hasText(secid)) {
+            return null;
+        }
+        int separator = secid.indexOf('.');
+        if (separator <= 0 || separator == secid.length() - 1) {
+            return null;
+        }
+        String market = secid.substring(0, separator);
+        String code = secid.substring(separator + 1);
+        return switch (market) {
+            case "1" -> "sh" + code;
+            case "0" -> "sz" + code;
+            case "116" -> "hk" + code;
+            case "105", "106" -> "us" + code;
+            default -> null;
+        };
+    }
+
+    private String stockCode(String secid) {
+        int separator = secid == null ? -1 : secid.indexOf('.');
+        return separator >= 0 && separator < secid.length() - 1 ? secid.substring(separator + 1) : secid;
     }
 
     private String archiveContent(String body) throws Exception {
@@ -826,12 +931,16 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter, Fu
     }
 
     private String get(String apiName, String url) {
+        return getExternal(SOURCE_NAME, apiName, url, EAST_MONEY_REFERER, false);
+    }
+
+    private String getExternal(String provider, String apiName, String url, String referer, boolean fallbackUsed) {
         long start = System.currentTimeMillis();
         try {
             String body = fundDataWebClient.get()
                     .uri(url)
                     .header("User-Agent", BROWSER_USER_AGENT)
-                    .header("Referer", EAST_MONEY_REFERER)
+                    .header("Referer", referer)
                     .header("Accept", "application/json,text/javascript,*/*;q=0.01")
                     .exchangeToMono(response -> response.body((message, context) -> DataBufferUtils.join(message.getBody())
                                     .map(this::toBytes))
@@ -845,10 +954,12 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter, Fu
                             }))
                     .timeout(Duration.ofMillis(properties.getFundDataSource().getTimeoutMs()))
                     .block();
-            apiCallLogService.record(SOURCE_NAME, apiName, url, "GET", true, 200, null, System.currentTimeMillis() - start, false);
+            apiCallLogService.record(provider, apiName, url, "GET", true, 200, null,
+                    System.currentTimeMillis() - start, fallbackUsed);
             return body;
         } catch (RuntimeException exception) {
-            apiCallLogService.record(SOURCE_NAME, apiName, url, "GET", false, null, exception.getMessage(), System.currentTimeMillis() - start, false);
+            apiCallLogService.record(provider, apiName, url, "GET", false, null, exception.getMessage(),
+                    System.currentTimeMillis() - start, fallbackUsed);
             throw exception;
         }
     }
@@ -992,6 +1103,12 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter, Fu
     private record QuoteInfo(String name, BigDecimal latestPrice, BigDecimal changeRate) {
         static QuoteInfo empty() {
             return new QuoteInfo(null, null, null);
+        }
+    }
+
+    private record CachedQuote(QuoteInfo quote, LocalDateTime cachedAt) {
+        boolean isFresh(LocalDateTime now) {
+            return cachedAt.plus(QUOTE_CACHE_TTL).isAfter(now);
         }
     }
 
