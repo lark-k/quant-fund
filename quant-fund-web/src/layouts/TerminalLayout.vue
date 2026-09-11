@@ -2,7 +2,6 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import {
-  Bell,
   Calendar,
   DataAnalysis,
   DataLine,
@@ -19,6 +18,7 @@ import {
   UserFilled
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
+import NotificationBell from '@/components/NotificationBell.vue'
 import { quantApi } from '@/api/quant'
 import { money, percent, toneClass } from '@/utils/format'
 import type { MarketIndex, MarketSessionStatus } from '@/types/domain'
@@ -197,10 +197,7 @@ async function refreshEstimateFromHeader() {
           <span>{{ dateText }}</span>
         </div>
         <div class="header-user">
-          <button class="icon-button" aria-label="通知">
-            <el-icon><Bell /></el-icon>
-            <span class="notice-dot">8</span>
-          </button>
+          <NotificationBell />
           <RouterLink to="/profile" class="user-chip">
             <el-icon><UserFilled /></el-icon>
             <span>{{ auth.nickname }}</span>
