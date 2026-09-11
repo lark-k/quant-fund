@@ -124,7 +124,7 @@ public class DashboardServiceImpl implements DashboardService {
                 .filter(code -> code != null && !code.isBlank())
                 .collect(Collectors.toSet());
         Map<String, FundNavDaily> latestOfficialNavByFund = latestOfficialNavByFund(fundCodes);
-        Set<String> todayEstimateFundCodes = todayEstimateFundCodes(fundCodes, today);
+        Map<String, FundEstimateIntraday> todayEstimatesByFund = todayEstimatesByFund(fundCodes, today);
         Map<Long, BigDecimal> accountTotalAssetById = summary.accounts().stream()
                 .collect(Collectors.toMap(PortfolioAccountVO::id, PortfolioAccountVO::totalAsset, (left, right) -> left));
         List<FundHoldingVO> topHoldings = holdings.stream()
@@ -133,13 +133,13 @@ public class DashboardServiceImpl implements DashboardService {
                         holding,
                         intradayDisplayWindow,
                         latestOfficialNavByFund,
-                        todayEstimateFundCodes,
+                        todayEstimatesByFund,
                         accountTotalAssetById.getOrDefault(holding.getAccountId(), ZERO)
                 ))
                 .toList();
         PortfolioSummaryVO effectiveSummary = dashboardSummary(summary, holdings, latestOfficialNavByFund,
-                dashboardDailyProfit(holdings, intradayDisplayWindow, latestOfficialNavByFund, todayEstimateFundCodes),
-                intradayDisplayWindow, todayEstimateFundCodes);
+                dashboardDailyProfit(holdings, intradayDisplayWindow, latestOfficialNavByFund, todayEstimatesByFund),
+                intradayDisplayWindow, todayEstimatesByFund);
         List<StrategySignal> signals = activeHoldingIds.isEmpty()
                 ? List.of()
                 : strategySignalMapper.selectList(new LambdaQueryWrapper<StrategySignal>()
@@ -549,11 +549,13 @@ public class DashboardServiceImpl implements DashboardService {
 
     private FundHoldingVO toHoldingVO(FundHolding holding, boolean intradayDisplayWindow,
                                       Map<String, FundNavDaily> latestOfficialNavByFund,
-                                      Set<String> todayEstimateFundCodes,
+                                      Map<String, FundEstimateIntraday> todayEstimatesByFund,
                                       BigDecimal accountTotal) {
         FundNavDaily officialNav = latestOfficialNavByFund.get(holding.getFundCode());
-        boolean intradayFresh = intradayDataFreshToday(holding, todayEstimateFundCodes);
-        BigDecimal estimateRate = currentEstimateGrowthRate(holding, officialNav, intradayDisplayWindow, intradayFresh);
+        FundEstimateIntraday intradayEstimate = todayEstimatesByFund.get(holding.getFundCode());
+        boolean intradayFresh = intradayEstimate != null;
+        BigDecimal estimateRate = currentEstimateGrowthRate(
+                holding, officialNav, intradayEstimate, intradayDisplayWindow, intradayFresh);
         boolean intradayAllowed = intradayDisplayWindow && intradayFresh;
         boolean officialUpdated = officialNavUpdated(holding, officialNav);
         BigDecimal displayEstimateRate = officialUpdated || intradayAllowed ? estimateRate : ZERO;
@@ -573,7 +575,7 @@ public class DashboardServiceImpl implements DashboardService {
         }
         BigDecimal dailyProfit = officialUpdated
                 ? scale(holding.getDailyProfit())
-                : intradayAllowed ? displayDailyProfit(holding, valuation.themeRate()) : ZERO;
+                : intradayAllowed ? displayDailyProfit(holding, displayEstimateRate) : ZERO;
         BigDecimal holdingAmount = effectiveHoldingAmount(holding);
         BigDecimal holdingProfit = !officialUpdated && intradayAllowed
                 ? effectiveHoldingProfit(holding, officialNav, dailyProfit, true)
@@ -627,12 +629,22 @@ public class DashboardServiceImpl implements DashboardService {
     }
 
     private BigDecimal currentEstimateGrowthRate(FundHolding holding, FundNavDaily officialNav,
+                                                 FundEstimateIntraday intradayEstimate,
                                                  boolean intradayDisplayWindow, boolean intradayFresh) {
         if (officialNavUpdated(holding, officialNav) && officialNav.getDailyGrowthRate() != null) {
             return scale(officialNav.getDailyGrowthRate());
         }
         if (!intradayDisplayWindow || !intradayFresh) {
             return ZERO;
+        }
+        if (intradayEstimate != null && intradayEstimate.getEstimateGrowthRate() != null) {
+            return scale(intradayEstimate.getEstimateGrowthRate());
+        }
+        if (intradayEstimate != null && intradayEstimate.getEstimateNav() != null
+                && holding.getLatestOfficialNav() != null
+                && holding.getLatestOfficialNav().compareTo(BigDecimal.ZERO) > 0) {
+            return rate(intradayEstimate.getEstimateNav().subtract(holding.getLatestOfficialNav()),
+                    holding.getLatestOfficialNav());
         }
         if (holding.getCurrentEstimateNav() == null || holding.getLatestOfficialNav() == null
                 || holding.getLatestOfficialNav().compareTo(BigDecimal.ZERO) <= 0) {
@@ -676,19 +688,21 @@ public class DashboardServiceImpl implements DashboardService {
         return latest;
     }
 
-    private Set<String> todayEstimateFundCodes(Set<String> fundCodes, LocalDate today) {
+    private Map<String, FundEstimateIntraday> todayEstimatesByFund(Set<String> fundCodes, LocalDate today) {
         if (fundCodes.isEmpty()) {
-            return Set.of();
+            return Map.of();
         }
         LocalDateTime currentTime = now();
-        return fundEstimateIntradayMapper.selectList(new LambdaQueryWrapper<FundEstimateIntraday>()
-                        .in(FundEstimateIntraday::getFundCode, fundCodes)
-                        .eq(FundEstimateIntraday::getEstimateDate, today))
+        Map<String, FundEstimateIntraday> latest = new LinkedHashMap<>();
+        fundEstimateIntradayMapper.selectList(new LambdaQueryWrapper<FundEstimateIntraday>()
+                         .in(FundEstimateIntraday::getFundCode, fundCodes)
+                        .eq(FundEstimateIntraday::getEstimateDate, today)
+                        .orderByDesc(FundEstimateIntraday::getEstimateTime))
                 .stream()
                 .filter(estimate -> IntradayEstimateFreshness.isFresh(estimate, currentTime))
-                .map(FundEstimateIntraday::getFundCode)
-                .filter(code -> code != null && !code.isBlank())
-                .collect(Collectors.toSet());
+                .filter(estimate -> estimate.getFundCode() != null && !estimate.getFundCode().isBlank())
+                .forEach(estimate -> latest.putIfAbsent(estimate.getFundCode(), estimate));
+        return latest;
     }
 
     private boolean delayedOfficialNavFund(FundHolding holding) {
@@ -697,23 +711,23 @@ public class DashboardServiceImpl implements DashboardService {
 
     private BigDecimal dashboardDailyProfit(List<FundHolding> holdings, boolean intradayDisplayWindow,
                                             Map<String, FundNavDaily> latestOfficialNavByFund,
-                                            Set<String> todayEstimateFundCodes) {
+                                            Map<String, FundEstimateIntraday> todayEstimatesByFund) {
         return holdings.stream()
                 .map(holding -> holdingDailyProfit(holding, intradayDisplayWindow,
                         latestOfficialNavByFund.get(holding.getFundCode()),
-                        intradayDataFreshToday(holding, todayEstimateFundCodes)))
+                        todayEstimatesByFund.get(holding.getFundCode())))
                 .reduce(ZERO, BigDecimal::add);
     }
 
     private BigDecimal holdingDailyProfit(FundHolding holding, boolean intradayDisplayWindow,
-                                          FundNavDaily officialNav, boolean intradayFresh) {
+                                          FundNavDaily officialNav, FundEstimateIntraday intradayEstimate) {
+        boolean intradayFresh = intradayEstimate != null;
         boolean intradayAllowed = intradayDisplayWindow && intradayFresh;
         boolean officialUpdated = officialNavUpdated(holding, officialNav);
         if (!officialUpdated && intradayAllowed) {
-            BigDecimal estimateRate = currentEstimateGrowthRate(holding, officialNav, intradayDisplayWindow, intradayFresh);
-            FundValuationResult valuation = fundValuationService.estimate(
-                    holding.getFundCode(), holding.getFundName(), holding.getFundType(), estimateRate);
-            return displayDailyProfit(holding, valuation.themeRate());
+            BigDecimal estimateRate = currentEstimateGrowthRate(
+                    holding, officialNav, intradayEstimate, intradayDisplayWindow, intradayFresh);
+            return displayDailyProfit(holding, estimateRate);
         }
         return officialUpdated ? scale(holding.getDailyProfit()) : ZERO;
     }
@@ -731,15 +745,11 @@ public class DashboardServiceImpl implements DashboardService {
         return amountChangeByRate(effectiveHoldingAmount(holding), rate);
     }
 
-    private boolean intradayDataFreshToday(FundHolding holding, Set<String> todayEstimateFundCodes) {
-        return todayEstimateFundCodes.contains(holding.getFundCode());
-    }
-
     private PortfolioSummaryVO dashboardSummary(PortfolioSummaryVO summary, List<FundHolding> holdings,
-                                                Map<String, FundNavDaily> latestOfficialNavByFund,
-                                                BigDecimal dailyProfit,
-                                                boolean intradayDisplayWindow,
-                                                Set<String> todayEstimateFundCodes) {
+                                                 Map<String, FundNavDaily> latestOfficialNavByFund,
+                                                 BigDecimal dailyProfit,
+                                                 boolean intradayDisplayWindow,
+                                                 Map<String, FundEstimateIntraday> todayEstimatesByFund) {
         if (holdings.isEmpty()) {
             return dashboardSummary(summary, summary.holdingMarketValue(), summary.totalAsset(), summary.currentProfit(),
                     summary.equityPositionRate(), summary.bondPositionRate(), dailyProfit);
@@ -751,10 +761,12 @@ public class DashboardServiceImpl implements DashboardService {
         BigDecimal currentProfit = holdings.stream()
                 .map(holding -> {
                     FundNavDaily officialNav = latestOfficialNavByFund.get(holding.getFundCode());
-                    boolean intradayFresh = intradayDataFreshToday(holding, todayEstimateFundCodes);
+                    FundEstimateIntraday intradayEstimate = todayEstimatesByFund.get(holding.getFundCode());
+                    boolean intradayFresh = intradayEstimate != null;
                     boolean intradayAllowed = intradayDisplayWindow && intradayFresh;
                     boolean officialUpdated = officialNavUpdated(holding, officialNav);
-                    BigDecimal holdingDailyProfit = holdingDailyProfit(holding, intradayDisplayWindow, officialNav, intradayFresh);
+                    BigDecimal holdingDailyProfit = holdingDailyProfit(
+                            holding, intradayDisplayWindow, officialNav, intradayEstimate);
                     return effectiveHoldingProfit(holding, officialNav, holdingDailyProfit, !officialUpdated && intradayAllowed);
                 })
                 .reduce(ZERO, BigDecimal::add);

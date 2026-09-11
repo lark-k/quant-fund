@@ -21,6 +21,7 @@ import com.lk.quantfund.entity.TradeRecord;
 import com.lk.quantfund.enums.FundType;
 import com.lk.quantfund.exception.BusinessException;
 import com.lk.quantfund.mapper.AiAnalysisReportMapper;
+import com.lk.quantfund.mapper.FundEstimateIntradayMapper;
 import com.lk.quantfund.mapper.FundHoldingMapper;
 import com.lk.quantfund.mapper.HoldingSnapshotMapper;
 import com.lk.quantfund.mapper.PortfolioAccountMapper;
@@ -45,6 +46,7 @@ import org.mockito.Mockito;
 class FundHoldingServiceImplTest {
 
     private final FundHoldingMapper holdingMapper = mock(FundHoldingMapper.class);
+    private final FundEstimateIntradayMapper fundEstimateIntradayMapper = mock(FundEstimateIntradayMapper.class);
     private final PortfolioAccountMapper accountMapper = mock(PortfolioAccountMapper.class);
     private final AiAnalysisReportMapper aiAnalysisReportMapper = mock(AiAnalysisReportMapper.class);
     private final HoldingSnapshotMapper snapshotMapper = mock(HoldingSnapshotMapper.class);
@@ -73,6 +75,7 @@ class FundHoldingServiceImplTest {
                 .thenReturn(new FundValuationResult("TEST", BigDecimal.ZERO, "TEST", "TEST", "TEST"));
         FundHoldingServiceImpl service = new FundHoldingServiceImpl(
                 holdingMapper,
+                fundEstimateIntradayMapper,
                 accountMapper,
                 mock(AiAnalysisReportMapper.class),
                 portfolioAccountService,
@@ -123,6 +126,7 @@ class FundHoldingServiceImplTest {
         when(tradingCalendarService.nextTradingDay(navDate)).thenReturn(snapshotDate);
         FundHoldingServiceImpl service = new FundHoldingServiceImpl(
                 holdingMapper,
+                fundEstimateIntradayMapper,
                 accountMapper,
                 mock(AiAnalysisReportMapper.class),
                 portfolioAccountService,
@@ -168,6 +172,7 @@ class FundHoldingServiceImplTest {
         when(tradingCalendarService.nextTradingDay(navDate)).thenReturn(effectiveDate);
         FundHoldingServiceImpl service = new FundHoldingServiceImpl(
                 holdingMapper,
+                fundEstimateIntradayMapper,
                 accountMapper,
                 mock(AiAnalysisReportMapper.class),
                 portfolioAccountService,
@@ -602,6 +607,7 @@ class FundHoldingServiceImplTest {
     private FundHoldingServiceImpl service(LocalDateTime fixedNow, TradingCalendarService tradingCalendarService) {
         return new FundHoldingServiceImpl(
                 holdingMapper,
+                fundEstimateIntradayMapper,
                 accountMapper,
                 aiAnalysisReportMapper,
                 portfolioAccountService,

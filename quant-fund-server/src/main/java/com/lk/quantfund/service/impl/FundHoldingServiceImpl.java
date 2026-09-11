@@ -9,6 +9,7 @@ import com.lk.quantfund.dto.holding.ClearHoldingRequest;
 import com.lk.quantfund.dto.holding.CreateHoldingRequest;
 import com.lk.quantfund.dto.holding.UpdateHoldingRequest;
 import com.lk.quantfund.entity.AiAnalysisReport;
+import com.lk.quantfund.entity.FundEstimateIntraday;
 import com.lk.quantfund.entity.FundHolding;
 import com.lk.quantfund.entity.HoldingSnapshot;
 import com.lk.quantfund.entity.PortfolioAccount;
@@ -18,6 +19,7 @@ import com.lk.quantfund.enums.TradeStatus;
 import com.lk.quantfund.enums.TradeType;
 import com.lk.quantfund.exception.BusinessException;
 import com.lk.quantfund.mapper.AiAnalysisReportMapper;
+import com.lk.quantfund.mapper.FundEstimateIntradayMapper;
 import com.lk.quantfund.mapper.FundHoldingMapper;
 import com.lk.quantfund.mapper.HoldingSnapshotMapper;
 import com.lk.quantfund.mapper.PortfolioAccountMapper;
@@ -29,6 +31,7 @@ import com.lk.quantfund.service.FundQueryService;
 import com.lk.quantfund.service.PortfolioAccountService;
 import com.lk.quantfund.service.StrategyService;
 import com.lk.quantfund.service.analytics.OfficialNavTiming;
+import com.lk.quantfund.service.analytics.IntradayEstimateFreshness;
 import com.lk.quantfund.service.valuation.FundValuationResult;
 import com.lk.quantfund.service.valuation.FundValuationService;
 import com.lk.quantfund.vo.holding.FundHoldingVO;
@@ -55,6 +58,7 @@ public class FundHoldingServiceImpl implements FundHoldingService {
     private static final BigDecimal ONE_HUNDRED = new BigDecimal("100.0000");
 
     private final FundHoldingMapper fundHoldingMapper;
+    private final FundEstimateIntradayMapper fundEstimateIntradayMapper;
     private final PortfolioAccountMapper portfolioAccountMapper;
     private final AiAnalysisReportMapper aiAnalysisReportMapper;
     private final PortfolioAccountService portfolioAccountService;
@@ -67,6 +71,7 @@ public class FundHoldingServiceImpl implements FundHoldingService {
     private final TradeRecordMapper tradeRecordMapper;
 
     public FundHoldingServiceImpl(FundHoldingMapper fundHoldingMapper,
+                                  FundEstimateIntradayMapper fundEstimateIntradayMapper,
                                   PortfolioAccountMapper portfolioAccountMapper,
                                   AiAnalysisReportMapper aiAnalysisReportMapper,
                                   PortfolioAccountService portfolioAccountService,
@@ -78,6 +83,7 @@ public class FundHoldingServiceImpl implements FundHoldingService {
                                   HoldingSnapshotBackfillService holdingSnapshotBackfillService,
                                   TradeRecordMapper tradeRecordMapper) {
         this.fundHoldingMapper = fundHoldingMapper;
+        this.fundEstimateIntradayMapper = fundEstimateIntradayMapper;
         this.portfolioAccountMapper = portfolioAccountMapper;
         this.aiAnalysisReportMapper = aiAnalysisReportMapper;
         this.portfolioAccountService = portfolioAccountService;
@@ -683,17 +689,44 @@ public class FundHoldingServiceImpl implements FundHoldingService {
 
     private BigDecimal currentEstimateGrowthRate(FundHolding holding) {
         Optional<OfficialNavContext> officialNav = officialNavContext(holding.getFundCode());
-        if (officialNav.isPresent() && officialNavCountsAsToday(holding, officialNav.get()) && officialNav.get().dailyGrowthRate() != null) {
-            return scale(officialNav.get().dailyGrowthRate());
+        FundEstimateIntraday intradayEstimate = latestFreshIntradayEstimate(holding.getFundCode());
+        return currentEstimateGrowthRate(holding, officialNav.orElse(null), intradayEstimate);
+    }
+
+    private BigDecimal currentEstimateGrowthRate(FundHolding holding, OfficialNavContext officialNav,
+                                                 FundEstimateIntraday intradayEstimate) {
+        if (officialNav != null && officialNavCountsAsToday(holding, officialNav) && officialNav.dailyGrowthRate() != null) {
+            return scale(officialNav.dailyGrowthRate());
         }
-        if (!intradayEstimateAllowed(holding)) {
+        if (!intradayEstimateAllowed(holding) || intradayEstimate == null) {
             return ZERO;
+        }
+        if (intradayEstimate.getEstimateGrowthRate() != null) {
+            return scale(intradayEstimate.getEstimateGrowthRate());
+        }
+        if (intradayEstimate.getEstimateNav() != null && holding.getLatestOfficialNav() != null
+                && holding.getLatestOfficialNav().compareTo(BigDecimal.ZERO) > 0) {
+            return rate(intradayEstimate.getEstimateNav().subtract(holding.getLatestOfficialNav()),
+                    holding.getLatestOfficialNav());
         }
         if (holding.getCurrentEstimateNav() == null || holding.getLatestOfficialNav() == null
                 || holding.getLatestOfficialNav().compareTo(BigDecimal.ZERO) <= 0) {
             return ZERO;
         }
         return rate(holding.getCurrentEstimateNav().subtract(holding.getLatestOfficialNav()), holding.getLatestOfficialNav());
+    }
+
+    private FundEstimateIntraday latestFreshIntradayEstimate(String fundCode) {
+        if (!StringUtils.hasText(fundCode)) {
+            return null;
+        }
+        FundEstimateIntraday estimate = fundEstimateIntradayMapper.selectOne(
+                new LambdaQueryWrapper<FundEstimateIntraday>()
+                        .eq(FundEstimateIntraday::getFundCode, fundCode)
+                        .eq(FundEstimateIntraday::getEstimateDate, now().toLocalDate())
+                        .orderByDesc(FundEstimateIntraday::getEstimateTime)
+                        .last("LIMIT 1"));
+        return IntradayEstimateFreshness.isFresh(estimate, now()) ? estimate : null;
     }
 
     private BigDecimal accountTotal(Long accountId) {
@@ -727,11 +760,14 @@ public class FundHoldingServiceImpl implements FundHoldingService {
     }
 
     private FundHoldingVO toVO(FundHolding holding, BigDecimal accountTotal) {
-        BigDecimal estimateRate = currentEstimateGrowthRate(holding);
         OfficialNavContext officialNav = officialNavContext(holding.getFundCode()).orElse(null);
+        FundEstimateIntraday intradayEstimate = latestFreshIntradayEstimate(holding.getFundCode());
+        BigDecimal estimateRate = currentEstimateGrowthRate(holding, officialNav, intradayEstimate);
         boolean officialUpdated = officialNav != null && officialNavCountsAsToday(holding, officialNav);
-        boolean intradayAllowed = intradayEstimateAllowed(holding);
-        BigDecimal dailyProfit = officialUpdated || intradayAllowed ? valueOrZero(holding.getDailyProfit()) : ZERO;
+        boolean intradayAllowed = intradayEstimateAllowed(holding) && intradayEstimate != null;
+        BigDecimal dailyProfit = officialUpdated
+                ? valueOrZero(holding.getDailyProfit())
+                : intradayAllowed ? displayDailyProfit(holding, estimateRate) : ZERO;
         BigDecimal displayEstimateRate = officialUpdated || intradayAllowed ? estimateRate : ZERO;
         FundValuationResult valuation = fundValuationService.estimate(
                 holding.getFundCode(),
@@ -791,6 +827,19 @@ public class FundHoldingServiceImpl implements FundHoldingService {
 
     private BigDecimal displayHoldingAmount(FundHolding holding) {
         return valueOrZero(holding.getHoldingAmount());
+    }
+
+    private BigDecimal displayDailyProfit(FundHolding holding, BigDecimal estimateRate) {
+        BigDecimal storedDailyProfit = valueOrZero(holding.getDailyProfit());
+        BigDecimal rate = valueOrZero(estimateRate);
+        if (rate.compareTo(BigDecimal.ZERO) == 0) {
+            return storedDailyProfit;
+        }
+        if (storedDailyProfit.compareTo(BigDecimal.ZERO) != 0
+                && storedDailyProfit.signum() == rate.signum()) {
+            return storedDailyProfit;
+        }
+        return amountChangeByRate(displayHoldingAmount(holding), rate);
     }
 
     private FundValuationResult officialNavValuation(FundValuationResult valuation, BigDecimal officialRate) {

@@ -468,6 +468,56 @@ class EastMoneyFundDataSourceAdapterTest {
     }
 
     @Test
+    void shouldOnlyParseLatestReportTableWhenArchiveContainsMultipleQuarters() {
+        String heavyStocksHtml = """
+                <div><label>截止至：<font class='px12'>2026-06-30</font></label>
+                <table>
+                  <thead><tr><th>序号</th><th>股票代码</th><th>股票名称</th><th>最新价</th><th>涨跌幅</th><th>相关资讯</th><th>占净值比例</th><th>持股数（万股）</th><th>持仓市值（万元）</th></tr></thead>
+                  <tbody>
+                    <tr><td>1</td><td><a href='//quote.eastmoney.com/unify/r/1.688200'>688200</a></td><td>华峰测控</td><td></td><td></td><td>资讯</td><td>9.21%</td><td>10.63</td><td>5,580.92</td></tr>
+                    <tr><td>2</td><td><a href='//quote.eastmoney.com/unify/r/0.002371'>002371</a></td><td>北方华创</td><td></td><td></td><td>资讯</td><td>9.09%</td><td>6.23</td><td>5,509.22</td></tr>
+                  </tbody>
+                </table></div>
+                <div><label>截止至：<font class='px12'>2026-03-31</font></label>
+                <table>
+                  <thead><tr><th>序号</th><th>股票代码</th><th>股票名称</th><th>相关资讯</th><th>占净值比例</th><th>持股数（万股）</th><th>持仓市值（万元）</th></tr></thead>
+                  <tbody>
+                    <tr><td>1</td><td><a href='//quote.eastmoney.com/unify/r/116.00175'>00175</a></td><td>吉利汽车</td><td>资讯</td><td>7.91%</td><td>3.13</td><td>751.78</td></tr>
+                  </tbody>
+                </table></div>
+                """;
+        String quotes = """
+                {"data":{"diff":[
+                  {"f12":"688200","f14":"华峰测控","f2":380.69,"f3":3.10},
+                  {"f12":"002371","f14":"北方华创","f2":684.36,"f3":2.60}
+                ]}}
+                """;
+        ExchangeFunction exchangeFunction = request -> {
+            String url = request.url().toString();
+            if (url.contains("FundArchivesDatas")) {
+                return Mono.just(ClientResponse.create(HttpStatus.OK).body(heavyStocksHtml).build());
+            }
+            if (url.contains("ulist.np/get")) {
+                return Mono.just(ClientResponse.create(HttpStatus.OK).body(quotes).build());
+            }
+            return Mono.just(ClientResponse.create(HttpStatus.OK).body("{}").build());
+        };
+        WebClient webClient = WebClient.builder().exchangeFunction(exchangeFunction).build();
+        ApiCallLogService apiCallLogService = (provider, apiName, requestUrl, requestMethod, success, statusCode,
+                                               errorMessage, costTimeMs, fallbackUsed) -> { };
+        EastMoneyFundDataSourceAdapter adapter = new EastMoneyFundDataSourceAdapter(
+                webClient, new ObjectMapper(), new QuantFundProperties(), apiCallLogService);
+
+        List<FundStockHoldingDTO> stocks = adapter.getHeavyStocks("021180");
+
+        assertThat(stocks).extracting(FundStockHoldingDTO::stockCode)
+                .containsExactly("688200", "002371");
+        assertThat(stocks).extracting(FundStockHoldingDTO::positionRate)
+                .containsExactly(new java.math.BigDecimal("9.21"), new java.math.BigDecimal("9.09"));
+        assertThat(stocks).noneMatch(stock -> "00175".equals(stock.stockCode()));
+    }
+
+    @Test
     void shouldFallbackToTencentQuotesAcrossMarketsAndCacheResults() {
         String heavyStocksHtml = """
                 <table><tbody>

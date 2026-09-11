@@ -360,7 +360,7 @@ function openEdit(item: FundHolding) {
               <th>代码</th>
               <th>基金名称</th>
               <th>当日收益</th>
-              <th>关联板块/收益率</th>
+              <th>关联板块/当日估值</th>
               <th>持有收益/收益率</th>
               <th>持仓占比</th>
               <th>估值/净值</th>
@@ -383,7 +383,7 @@ function openEdit(item: FundHolding) {
               <td>
                 <div class="metric-pair">
                   <strong>{{ relatedThemeText(item.relatedThemeName) }}</strong>
-                  <span :class="toneClass(item.relatedThemeRate)">{{ percent(item.relatedThemeRate || 0) }}</span>
+                  <span :class="toneClass(item.currentEstimateGrowthRate)">{{ percent(item.currentEstimateGrowthRate || 0) }}</span>
                 </div>
               </td>
               <td>

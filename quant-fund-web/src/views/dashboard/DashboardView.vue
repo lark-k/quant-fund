@@ -734,7 +734,7 @@ async function saveCashAmount() {
                   <th style="width: 70px;">代码</th>
                   <th>基金名称</th>
                   <th>当日收益</th>
-                  <th>关联板块/收益率</th>
+                  <th>关联板块/当日估值</th>
                   <th>持有收益/收益率</th>
                   <th>持仓占比</th>
                 </tr>
@@ -755,7 +755,7 @@ async function saveCashAmount() {
                   <td>
                     <div class="metric-pair">
                       <strong>{{ relatedThemeText(holding.relatedThemeName) }}</strong>
-                      <span :class="toneClass(holding.relatedThemeRate || 0)">{{ percent(holding.relatedThemeRate || 0) }}</span>
+                      <span :class="toneClass(holding.currentEstimateGrowthRate || 0)">{{ percent(holding.currentEstimateGrowthRate || 0) }}</span>
                     </div>
                   </td>
                   <td>

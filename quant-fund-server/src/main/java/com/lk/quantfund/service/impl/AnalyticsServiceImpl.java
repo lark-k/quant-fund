@@ -387,47 +387,59 @@ public class AnalyticsServiceImpl implements AnalyticsService {
     }
 
     private BigDecimal currentDailyProfit(List<FundHolding> holdings, boolean intradayDisplayWindow) {
-        Set<String> todayEstimateFundCodes = todayEstimateFundCodes(holdings, today());
+        Map<String, FundEstimateIntraday> todayEstimatesByFund = todayEstimatesByFund(holdings, today());
         return sum(holdings.stream()
-                .map(holding -> currentDailyProfit(holding, intradayDisplayWindow, todayEstimateFundCodes))
+                .map(holding -> currentDailyProfit(holding, intradayDisplayWindow, todayEstimatesByFund))
                 .toList());
     }
 
     private BigDecimal currentTotalProfit(List<FundHolding> holdings, boolean intradayDisplayWindow) {
-        Set<String> todayEstimateFundCodes = todayEstimateFundCodes(holdings, today());
+        Map<String, FundEstimateIntraday> todayEstimatesByFund = todayEstimatesByFund(holdings, today());
         return sum(holdings.stream()
                 .map(holding -> {
                     FundNavDaily officialNav = latestOfficialNav(holding.getFundCode());
-                    boolean intradayFresh = intradayDataFreshToday(holding, todayEstimateFundCodes);
+                    FundEstimateIntraday intradayEstimate = todayEstimatesByFund.get(holding.getFundCode());
+                    boolean intradayFresh = intradayEstimate != null;
                     boolean intradayAllowed = intradayDisplayWindow && intradayFresh;
                     boolean officialUpdated = officialNavUpdated(holding, officialNav);
-                    BigDecimal dailyProfit = currentDailyProfit(holding, intradayDisplayWindow, todayEstimateFundCodes);
+                    BigDecimal dailyProfit = currentDailyProfit(holding, intradayDisplayWindow, todayEstimatesByFund);
                     return effectiveHoldingProfit(holding, dailyProfit, !officialUpdated && intradayAllowed);
                 })
                 .toList());
     }
 
-    private BigDecimal currentDailyProfit(FundHolding holding, boolean intradayDisplayWindow, Set<String> todayEstimateFundCodes) {
+    private BigDecimal currentDailyProfit(FundHolding holding, boolean intradayDisplayWindow,
+                                          Map<String, FundEstimateIntraday> todayEstimatesByFund) {
         FundNavDaily officialNav = latestOfficialNav(holding.getFundCode());
         if (officialNavUpdated(holding, officialNav)) {
             return scale(holding.getDailyProfit());
         }
-        if (intradayDisplayWindow && intradayDataFreshToday(holding, todayEstimateFundCodes)) {
-            BigDecimal estimateRate = currentEstimateGrowthRate(holding, officialNav, intradayDisplayWindow, true);
-            FundValuationResult valuation = fundValuationService.estimate(
-                    holding.getFundCode(), holding.getFundName(), holding.getFundType(), estimateRate);
-            return displayDailyProfit(holding, valuation.themeRate());
+        FundEstimateIntraday intradayEstimate = todayEstimatesByFund.get(holding.getFundCode());
+        if (intradayDisplayWindow && intradayEstimate != null) {
+            BigDecimal estimateRate = currentEstimateGrowthRate(
+                    holding, officialNav, intradayEstimate, intradayDisplayWindow, true);
+            return displayDailyProfit(holding, estimateRate);
         }
         return ZERO;
     }
 
     private BigDecimal currentEstimateGrowthRate(FundHolding holding, FundNavDaily officialNav,
+                                                 FundEstimateIntraday intradayEstimate,
                                                  boolean intradayDisplayWindow, boolean intradayFresh) {
         if (officialNavUpdated(holding, officialNav) && officialNav.getDailyGrowthRate() != null) {
             return scale(officialNav.getDailyGrowthRate());
         }
         if (!intradayDisplayWindow || !intradayFresh) {
             return ZERO;
+        }
+        if (intradayEstimate != null && intradayEstimate.getEstimateGrowthRate() != null) {
+            return scale(intradayEstimate.getEstimateGrowthRate());
+        }
+        if (intradayEstimate != null && intradayEstimate.getEstimateNav() != null
+                && holding.getLatestOfficialNav() != null
+                && holding.getLatestOfficialNav().compareTo(BigDecimal.ZERO) > 0) {
+            return rate(intradayEstimate.getEstimateNav().subtract(holding.getLatestOfficialNav()),
+                    holding.getLatestOfficialNav());
         }
         if (holding.getCurrentEstimateNav() == null || holding.getLatestOfficialNav() == null
                 || holding.getLatestOfficialNav().compareTo(BigDecimal.ZERO) <= 0) {
@@ -467,27 +479,25 @@ public class AnalyticsServiceImpl implements AnalyticsService {
         return scale(amount).multiply(rate).divide(HUNDRED, 4, RoundingMode.HALF_UP);
     }
 
-    private Set<String> todayEstimateFundCodes(List<FundHolding> holdings, LocalDate today) {
+    private Map<String, FundEstimateIntraday> todayEstimatesByFund(List<FundHolding> holdings, LocalDate today) {
         Set<String> fundCodes = holdings.stream()
                 .map(FundHolding::getFundCode)
                 .filter(code -> code != null && !code.isBlank())
                 .collect(Collectors.toSet());
         if (fundCodes.isEmpty()) {
-            return Set.of();
+            return Map.of();
         }
         LocalDateTime currentTime = now();
-        return fundEstimateIntradayMapper.selectList(new LambdaQueryWrapper<FundEstimateIntraday>()
+        Map<String, FundEstimateIntraday> latest = new LinkedHashMap<>();
+        fundEstimateIntradayMapper.selectList(new LambdaQueryWrapper<FundEstimateIntraday>()
                         .in(FundEstimateIntraday::getFundCode, fundCodes)
-                        .eq(FundEstimateIntraday::getEstimateDate, today))
+                        .eq(FundEstimateIntraday::getEstimateDate, today)
+                        .orderByDesc(FundEstimateIntraday::getEstimateTime))
                 .stream()
                 .filter(estimate -> IntradayEstimateFreshness.isFresh(estimate, currentTime))
-                .map(FundEstimateIntraday::getFundCode)
-                .filter(code -> code != null && !code.isBlank())
-                .collect(Collectors.toSet());
-    }
-
-    private boolean intradayDataFreshToday(FundHolding holding, Set<String> todayEstimateFundCodes) {
-        return todayEstimateFundCodes.contains(holding.getFundCode());
+                .filter(estimate -> estimate.getFundCode() != null && !estimate.getFundCode().isBlank())
+                .forEach(estimate -> latest.putIfAbsent(estimate.getFundCode(), estimate));
+        return latest;
     }
 
     private BigDecimal periodProfit(Long userId, LocalDate startDate, LocalDate today, BigDecimal todayProfit) {

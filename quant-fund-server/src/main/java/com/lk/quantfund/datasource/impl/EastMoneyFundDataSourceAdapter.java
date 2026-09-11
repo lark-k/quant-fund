@@ -56,6 +56,7 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter, Fu
     private static final Charset GB18030 = Charset.forName("GB18030");
     private static final BigDecimal ZERO = BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP);
     private static final Pattern JS_STRING_VAR = Pattern.compile("var\\s+%s\\s*=\\s*\"([^\"]*)\"");
+    private static final Pattern TABLE_PATTERN = Pattern.compile("<table[^>]*>(.*?)</table>", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
     private static final Pattern ROW_PATTERN = Pattern.compile("<tr[^>]*>(.*?)</tr>", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
     private static final Pattern CELL_PATTERN = Pattern.compile("<td[^>]*>(.*?)</td>", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
     private static final Pattern SECID_PATTERN = Pattern.compile("unify/r/([^'\" >]+)", Pattern.CASE_INSENSITIVE);
@@ -747,7 +748,9 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter, Fu
 
     private List<StockRow> parseStockRows(String fundCode, String html, LocalDate reportDate) {
         List<StockRow> rows = new ArrayList<>();
-        Matcher rowMatcher = ROW_PATTERN.matcher(html);
+        Matcher tableMatcher = TABLE_PATTERN.matcher(html);
+        String latestReportTable = tableMatcher.find() ? tableMatcher.group() : html;
+        Matcher rowMatcher = ROW_PATTERN.matcher(latestReportTable);
         while (rowMatcher.find()) {
             String row = rowMatcher.group(1);
             List<String> cells = cells(row);
@@ -757,7 +760,8 @@ public class EastMoneyFundDataSourceAdapter implements FundDataSourceAdapter, Fu
             String marketSecId = marketSecId(row);
             String stockCode = clean(cells.get(1));
             String stockName = clean(cells.get(2));
-            BigDecimal positionRate = decimal(clean(cells.get(6)));
+            String positionRateText = clean(cells.get(6));
+            BigDecimal positionRate = positionRateText.contains("%") ? decimal(positionRateText) : null;
             if (StringUtils.hasText(stockCode) && StringUtils.hasText(stockName) && positionRate != null) {
                 rows.add(new StockRow(fundCode, stockCode, stockName, positionRate, marketSecId, reportDate));
             }

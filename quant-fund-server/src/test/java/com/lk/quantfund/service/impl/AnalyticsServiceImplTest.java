@@ -623,7 +623,7 @@ class AnalyticsServiceImplTest {
         estimate.setFundCode(fundCode);
         estimate.setEstimateDate(estimateTime.toLocalDate());
         estimate.setEstimateTime(estimateTime);
-        estimate.setEstimateGrowthRate(BigDecimal.ONE);
+        estimate.setEstimateGrowthRate(null);
         estimate.setDelayed(0);
         return estimate;
     }
