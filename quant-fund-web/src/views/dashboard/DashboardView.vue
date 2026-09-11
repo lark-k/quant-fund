@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { InfoFilled } from '@element-plus/icons-vue'
@@ -8,14 +9,18 @@ import ActionTag from '@/components/common/ActionTag.vue'
 import DisclaimerBar from '@/components/common/DisclaimerBar.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
+import QuantSignalProgress from '@/components/common/QuantSignalProgress.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { returnTrendOption } from '@/components/charts/chartOptions'
 import { quantApi } from '@/api/quant'
 import { useDashboardStore } from '@/stores/dashboard'
+import { useQuantSignalsStore } from '@/stores/quantSignals'
 import { actionPercent, metricTone, money, percent, percentUnsigned, signed, toneClass } from '@/utils/format'
 import type { AiAnalysisReport, FundHolding, MarketSessionStatus, ProfitAnalysis, QuantSignal, StrategySignal } from '@/types/domain'
 
 const store = useDashboardStore()
+const quantStore = useQuantSignalsStore()
+const { signals: quantSignals, loading: quantLoading, loaded: quantLoaded, error: quantError } = storeToRefs(quantStore)
 const router = useRouter()
 type TrendRange = 'TODAY' | 'WEEK' | 'MONTH' | 'YEAR' | 'ALL'
 type BenchmarkIndex = '000300' | '000001' | '399006'
@@ -38,12 +43,10 @@ const activeRange = ref<TrendRange>('TODAY')
 const activeIndexCode = ref<BenchmarkIndex>('000300')
 const refreshing = ref(false)
 const trendLoading = ref(false)
-const quantLoading = ref(false)
 const quantGenerating = ref(false)
 const showAllStrategySignals = ref(false)
 const profitAnalysis = ref<ProfitAnalysis>()
 const intradayTrendPoints = ref<TrendPoint[]>([])
-const quantSignals = ref<QuantSignal[]>([])
 let refreshTimer: number | undefined
 let initialOverviewPromise: Promise<unknown> | null = null
 let lastOfficialNavSyncAt = 0
@@ -125,7 +128,7 @@ const quantWatchCount = computed(() => quantSignals.value.filter((item) => item.
 const visibleQuantSignals = computed(() => showAllStrategySignals.value ? quantSignals.value : quantSignals.value.slice(0, 5))
 const quantSignalCollapsed = computed(() => quantSignals.value.length > 5)
 const quantButtonBusy = computed(() => quantLoading.value || quantGenerating.value)
-const quantButtonText = computed(() => quantGenerating.value ? '生成中' : quantLoading.value ? '刷新中' : '生成')
+const quantButtonText = computed(() => quantGenerating.value ? '生成中' : quantLoading.value && !quantLoaded.value ? '刷新中' : '生成')
 const dashboardMlForecast = computed(() => {
   const predictions = quantSignals.value
     .map((signal) => parseSignalMetrics(signal.metricsJson))
@@ -251,16 +254,7 @@ async function loadReturnTrend() {
 }
 
 async function loadQuantSignals() {
-  quantLoading.value = true
-  try {
-    quantSignals.value = (await quantApi.quantSignals())
-      .slice()
-      .sort((left, right) => Date.parse(right.signalTime) - Date.parse(left.signalTime))
-  } catch {
-    quantSignals.value = []
-  } finally {
-    quantLoading.value = false
-  }
+  await quantStore.fetchSignals()
 }
 
 async function analyzeQuantAccount() {
@@ -280,14 +274,15 @@ async function analyzeQuantAccount() {
   }
   lastQuantGenerateStartedAt = Date.now()
   quantGenerating.value = true
-  quantLoading.value = true
   try {
     await quantApi.analyzeQuantAccount(accountId)
     await quantApi.generateAiAccountAnalysis(accountId)
-    quantSignals.value = (await quantApi.quantSignals({ accountId }))
-      .slice()
-      .sort((left, right) => Date.parse(right.signalTime) - Date.parse(left.signalTime))
+    await loadQuantSignals()
     await store.fetchOverview()
+    if (quantError.value) {
+      ElMessage.warning('建议已生成，但列表刷新失败，请点击重试')
+      return
+    }
     ElMessage.success('今日量化建议和 AI 解释已刷新')
   } catch (error) {
     if (isRepeatSubmitError(error)) {
@@ -296,7 +291,6 @@ async function analyzeQuantAccount() {
     }
     ElMessage.error(readableErrorMessage(error) || '生成今日量化建议失败，请稍后重试')
   } finally {
-    quantLoading.value = false
     quantGenerating.value = false
   }
 }
@@ -867,10 +861,11 @@ async function saveCashAmount() {
       </div>
       <div class="panel-body visual-panel-body">
         <div class="insight-stat-row compact">
-          <div><span>买卖/转换</span><strong>{{ quantBuySellCount }}</strong></div>
-          <div><span>观察/持有</span><strong>{{ quantWatchCount }}</strong></div>
-          <div><span>覆盖持仓</span><strong>{{ quantSignals.length }}</strong></div>
+          <div><span>买卖/转换</span><strong>{{ quantLoaded ? quantBuySellCount : '--' }}</strong></div>
+          <div><span>观察/持有</span><strong>{{ quantLoaded ? quantWatchCount : '--' }}</strong></div>
+          <div><span>覆盖持仓</span><strong>{{ quantLoaded ? quantSignals.length : '--' }}</strong></div>
         </div>
+        <QuantSignalProgress :loading="quantLoading && !quantLoaded" :failed="Boolean(quantError)" :compact="quantLoaded" />
         <div v-if="visibleQuantSignals.length" class="visual-table-wrap">
           <table class="visual-table signal-table">
             <thead>
@@ -914,11 +909,16 @@ async function saveCashAmount() {
             </tbody>
           </table>
         </div>
-        <EmptyState v-else title="暂无量化建议" description="点击生成后会调用规则多因子量化引擎。" />
+        <EmptyState v-else-if="!quantLoaded && quantError" title="量化建议加载失败" description="请点击下方重试。" />
+        <EmptyState v-else-if="!quantLoading" title="暂无量化建议" description="点击生成后会调用规则多因子量化引擎。" />
+        <div v-if="quantError" class="visual-footnote" role="status">
+          {{ quantLoaded ? '刷新失败，当前展示上次加载结果。' : quantError }}
+          <button class="panel-link" type="button" :disabled="quantButtonBusy" @click="loadQuantSignals">重试</button>
+        </div>
         <button v-if="quantSignalCollapsed" class="panel-link signal-toggle" type="button" @click="showAllStrategySignals = !showAllStrategySignals">
           {{ showAllStrategySignals ? '收起' : `展开全部（${quantSignals.length}）` }}
         </button>
-        <div class="visual-footnote">活跃 {{ activeSignalCount }} · 模型建议只做参考</div>
+        <div class="visual-footnote">活跃 {{ quantLoaded ? activeSignalCount : '--' }} · 模型建议只做参考</div>
       </div>
     </section>
       </div>
