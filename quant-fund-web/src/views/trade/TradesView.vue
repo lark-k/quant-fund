@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { quantApi } from '@/api/quant'
 import type { FundHolding, FundSearchResult, TradeRecord } from '@/types/domain'
@@ -33,6 +33,8 @@ const trades = ref<TradeRecord[]>([])
 const holdings = ref<FundHolding[]>([])
 const loading = ref(true)
 const filter = ref('ALL')
+const pageSize = 20
+const currentPage = ref(1)
 const dialogOpen = ref(false)
 const saving = ref(false)
 const settling = ref(false)
@@ -104,6 +106,19 @@ const filtered = computed(() => {
     if (current.tradeTypes?.length) return current.tradeTypes.includes(item.tradeType)
     return true
   })
+})
+
+const paginatedTrades = computed(() => {
+  const start = (currentPage.value - 1) * pageSize
+  return filtered.value.slice(start, start + pageSize)
+})
+
+watch(filter, () => {
+  currentPage.value = 1
+})
+
+watch(() => filtered.value.length, (total) => {
+  currentPage.value = Math.min(currentPage.value, Math.max(1, Math.ceil(total / pageSize)))
 })
 
 const totalAmount = computed(() => filtered.value.reduce((sum, item) => sum + item.tradeAmount, 0))
@@ -461,7 +476,7 @@ async function compensateDueRegularInvestTrades() {
               <tr><th>时间</th><th>基金</th><th>类型</th><th>状态</th><th>金额</th><th>份额</th><th>净值</th><th>手续费</th><th>备注</th><th>操作</th></tr>
             </thead>
             <tbody>
-              <tr v-for="item in filtered" :key="item.id">
+              <tr v-for="item in paginatedTrades" :key="item.id">
                 <td>{{ displayDateTime(item.tradeTime) }}</td>
                 <td>{{ item.fundCode }} · {{ item.fundName }}</td>
                 <td><ActionTag :action="actionForTrade(item.tradeType)" :text="tradeTypeLabel(item.tradeType)" /></td>
@@ -486,6 +501,14 @@ async function compensateDueRegularInvestTrades() {
             </tbody>
           </table>
           <EmptyState v-else title="暂无交易记录" description="当前筛选条件下还没有模拟交易记录。" />
+          <div v-if="filtered.length" class="trade-pagination">
+            <el-pagination
+              v-model:current-page="currentPage"
+              layout="prev, pager, next, total"
+              :page-size="pageSize"
+              :total="filtered.length"
+            />
+          </div>
         </template>
       </div>
     </section>
@@ -582,6 +605,26 @@ async function compensateDueRegularInvestTrades() {
 </template>
 
 <style scoped>
+.trade-pagination {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 14px;
+}
+
+.trade-pagination :deep(.el-pagination) {
+  --el-pagination-bg-color: var(--surface);
+  --el-pagination-text-color: var(--text);
+  --el-pagination-button-color: var(--text);
+  --el-pagination-button-disabled-color: var(--muted-2);
+  --el-pagination-button-disabled-bg-color: var(--surface);
+  --el-pagination-hover-color: var(--blue);
+  --el-text-color-regular: var(--muted);
+}
+
+.trade-pagination :deep(.el-pager li.is-active) {
+  background: var(--surface-3);
+}
+
 .convert-search {
   display: grid;
   grid-template-columns: 1fr auto;
