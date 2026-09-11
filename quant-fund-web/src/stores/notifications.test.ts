@@ -2,6 +2,7 @@ import { createPinia, disposePinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { quantApi } from '@/api/quant'
 import { useAuthStore } from '@/stores/auth'
+import { useQuantSignalsStore } from './quantSignals'
 import { signalTimestamp, useNotificationsStore } from './notifications'
 import type { QuantSignal, UserProfile } from '@/types/domain'
 
@@ -136,6 +137,41 @@ describe('suggestion notifications', () => {
     await store.refresh()
     expect(store.items).toHaveLength(2)
     expect(store.error).toBe('')
+  })
+
+  it.each(['dashboard', 'notifications'])('shares the initial request when %s loads first', async (first) => {
+    const dashboard = useQuantSignalsStore()
+    const notifications = useNotificationsStore()
+    let resolve!: (value: QuantSignal[]) => void
+    vi.mocked(quantApi.quantSignals).mockReturnValue(new Promise((done) => { resolve = done }))
+    const requests = first === 'dashboard'
+      ? [dashboard.fetchSignals(), notifications.refresh()]
+      : [notifications.refresh(), dashboard.fetchSignals()]
+    await Promise.resolve()
+    expect(quantApi.quantSignals).toHaveBeenCalledTimes(1)
+    resolve([signal(1)])
+    await Promise.all(requests)
+    expect(dashboard.loaded).toBe(true)
+    expect(dashboard.signals).toEqual([signal(1)])
+    expect(notifications.items).toHaveLength(1)
+    expect(notifications.error).toBe('')
+  })
+
+  it('shares a failed first load and recovers both consumers on retry', async () => {
+    const dashboard = useQuantSignalsStore()
+    const notifications = useNotificationsStore()
+    vi.mocked(quantApi.quantSignals).mockRejectedValueOnce(new Error('timeout')).mockResolvedValueOnce([signal(1)])
+    await Promise.all([dashboard.fetchSignals(), notifications.refresh()])
+    expect(quantApi.quantSignals).toHaveBeenCalledTimes(1)
+    expect(dashboard.loaded).toBe(false)
+    expect(dashboard.error).toBeTruthy()
+    expect(notifications.error).toBeTruthy()
+    await Promise.all([notifications.refresh(), dashboard.fetchSignals()])
+    expect(quantApi.quantSignals).toHaveBeenCalledTimes(2)
+    expect(dashboard.signals).toEqual([signal(1)])
+    expect(notifications.items).toHaveLength(1)
+    expect(dashboard.error).toBe('')
+    expect(notifications.error).toBe('')
   })
 
   it('merges other tabs’ read state before updating a message', () => {

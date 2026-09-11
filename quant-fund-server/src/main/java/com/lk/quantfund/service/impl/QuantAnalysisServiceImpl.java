@@ -209,27 +209,16 @@ public class QuantAnalysisServiceImpl implements QuantAnalysisService {
     @Override
     public List<QuantSignalVO> latestSignals(Long accountId, Long holdingId, String fundCode, StrategyAction action) {
         Long userId = UserContext.getUserId();
-        LambdaQueryWrapper<QuantSignal> wrapper = new LambdaQueryWrapper<QuantSignal>()
-                .eq(QuantSignal::getUserId, userId);
         if (accountId != null) {
             loadOwnedAccount(userId, accountId);
-            wrapper.eq(QuantSignal::getAccountId, accountId);
         }
         if (holdingId != null) {
             loadOwnedHolding(userId, holdingId);
-            wrapper.eq(QuantSignal::getHoldingId, holdingId);
         }
-        if (StringUtils.hasText(fundCode)) {
-            wrapper.eq(QuantSignal::getFundCode, fundCode.trim());
-        }
-        if (action != null) {
-            wrapper.eq(QuantSignal::getAction, action.name());
-        }
-        wrapper.orderByDesc(QuantSignal::getSignalTime).orderByDesc(QuantSignal::getId);
-        Map<Long, QuantSignal> latestByHolding = new LinkedHashMap<>();
-        quantSignalMapper.selectList(wrapper).forEach(signal ->
-                latestByHolding.putIfAbsent(signal.getHoldingId(), signal));
-        return latestByHolding.values().stream().map(this::toVO).toList();
+        return quantSignalMapper.selectLatestSignals(userId, accountId, holdingId,
+                        StringUtils.hasText(fundCode) ? fundCode.trim() : null,
+                        action == null ? null : action.name())
+                .stream().map(this::toVO).toList();
     }
 
     @Override

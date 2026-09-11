@@ -1,7 +1,7 @@
 import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
-import { quantApi } from '@/api/quant'
 import { useAuthStore } from '@/stores/auth'
+import { useQuantSignalsStore } from '@/stores/quantSignals'
 import type { QuantSignal } from '@/types/domain'
 
 export interface SignalNotification {
@@ -41,6 +41,7 @@ function isNotification(value: unknown): value is SignalNotification {
 
 export const useNotificationsStore = defineStore('notifications', () => {
   const auth = useAuthStore()
+  const quantSignals = useQuantSignalsStore()
   const items = ref<SignalNotification[]>([])
   const loading = ref(false)
   const loaded = ref(false)
@@ -131,12 +132,11 @@ export const useNotificationsStore = defineStore('notifications', () => {
     const version = sessionVersion
     loading.value = true
     error.value = ''
-    inFlight = Promise.resolve().then(() => {
+    inFlight = quantSignals.fetchSignals().then(() => {
       if (version !== sessionVersion) return
-      return quantApi.quantSignals()
-    }).then((signals) => {
-      if (version !== sessionVersion || !signals) return
-      ingestSignals(signals)
+      if (quantSignals.error) throw new Error(quantSignals.error)
+      if (!quantSignals.loaded) return
+      ingestSignals(quantSignals.signals)
       loaded.value = true
     }).catch(() => {
       if (version === sessionVersion) error.value = '通知同步失败，点击重试'
