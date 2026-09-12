@@ -26,6 +26,8 @@ dist/
 *.pem
 *.key
 # 临时缓存
+.firecrawl/
+design-qa.md
 tmp/
 .tmp/
 .cache/

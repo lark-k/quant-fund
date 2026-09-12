@@ -60,10 +60,9 @@
 | 文档/目录 | 说明 |
 | --- | --- |
 | [本地 smoke 记录](qa/local-smoke-2026-06-24.md) | 2026-06-24 当时环境的验证快照，不代表当前持续测试结果 |
-| [设计 QA 清单](../design-qa.md) | 视觉方向确认和实现检查记录 |
-| [`quant-fund-web/qa-artifacts/`](../quant-fund-web/qa-artifacts/) | 已纳入版本管理的前端视觉 QA 截图与诊断结果 |
+| [前端展示图](../quant-fund-web/qa-artifacts/readme-dashboard.png) | README 使用的仪表盘截图 |
 
-仓库根目录的 `qa-artifacts/` 是本地临时测试产物，已被 Git 忽略，不作为 GitHub 文档资源。
+`.firecrawl/`、`.tmp/`、`design-qa.md` 和 `qa-artifacts/` 中的测试截图与诊断结果仅保留在本地，由 Git 忽略；唯一保留跟踪的 QA 图片是 `quant-fund-web/qa-artifacts/readme-dashboard.png`，供 README 展示使用。
 
 ## 历史设计与实施记录
 

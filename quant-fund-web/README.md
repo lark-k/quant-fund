@@ -96,7 +96,7 @@ npm run preview         # 预览生产构建
 
 ## 视觉 QA
 
-`qa-artifacts/visual-qa` 保存桌面、平板和手机页面截图，`scripts/visual-qa.mjs` 用于自动捕获页面。历史截图是特定版本的视觉证据，不替代当前功能测试。
+`scripts/visual-qa.mjs` 用于自动捕获桌面、平板和手机页面截图，生成到本地 `qa-artifacts/visual-qa` 目录。QA 截图与诊断结果由 Git 忽略，仓库仅保留 README 使用的 `qa-artifacts/readme-dashboard.png`。本地截图是特定版本的视觉证据，不替代当前功能测试。
 
 如果 Windows 环境执行 `npm run build` 时在 Vite/esbuild 子进程阶段出现 `spawn EPERM`，先运行 `npm run typecheck` 排除类型问题，再在允许启动子进程的终端执行构建。
 

@@ -147,7 +147,7 @@ quant-fund/
 │  ├─ sql/               # 001~010 数据库脚本
 │  ├─ qa/                # QA 记录
 │  └─ superpowers/       # 历史设计规格和实施计划
-├─ quant-fund-web/qa-artifacts/ # 已纳入版本管理的视觉 QA 证据
+├─ quant-fund-web/qa-artifacts/ # 仅跟踪 README 展示图，其他 QA 产物留在本地
 ├─ tools/                # 真实基金数据 smoke 脚本
 └─ compose.yaml          # Web / Spring Boot / FastAPI
 ```
