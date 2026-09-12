@@ -1,0 +1,21 @@
+{
+  "frames": 169,
+  "firstSourceFrame": 36,
+  "lastSourceFrame": 204,
+  "sourceFps": 24,
+  "frameZero": "open",
+  "lastFrame": "closed",
+  "variants": {
+    "desktop": [
+      1280,
+      720
+    ],
+    "mobile": [
+      768,
+      432
+    ]
+  },
+  "entry": "enter.mp4",
+  "entrySpeed": 2,
+  "audio": false
+}
