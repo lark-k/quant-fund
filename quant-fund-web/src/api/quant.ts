@@ -7,6 +7,7 @@ import type {
   BacktestNavRefreshResponse,
   BacktestRunRequest,
   ClearHoldingRequest,
+  CumulativeProfitOverview,
   DashboardOverview,
   DataSourceConfig,
   DataSourceConfigRequest,
@@ -54,6 +55,9 @@ import type {
 } from '@/types/domain'
 
 export const quantApi = {
+  cumulativeProfit(): Promise<CumulativeProfitOverview> {
+    return USE_MOCK ? mockApi.cumulativeProfit() : http.get('/dashboard/cumulative-profit')
+  },
   dashboard(): Promise<DashboardOverview> {
     return USE_MOCK ? mockApi.dashboard() : http.get('/dashboard/overview')
   },

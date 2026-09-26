@@ -166,6 +166,12 @@ holdings.forEach((holding) => {
   holding.positionRate = total > 0 ? holding.holdingAmount / total * 100 : 0
 })
 
+// Demo-only settled values. Personal opening balances are never embedded in the frontend.
+const cumulativeMock = new Map(holdings.map(h => [`${h.accountId}:${h.fundCode}`, {
+  accountId: h.accountId, fundCode: h.fundCode, cumulativeProfit: h.holdingProfit,
+  officialNavDate: h.officialNavDate || null
+}]))
+
 export const portfolios: PortfolioAccount[] = [
   {
     id: 1,
@@ -1037,6 +1043,16 @@ function page<T>(records: T[], pageNo = 1, pageSize = 20): PageResponse<T> {
 }
 
 export const mockApi = {
+  async cumulativeProfit() {
+    const funds = [...cumulativeMock.values()].map(f => ({ ...f,
+      archived: !holdings.some(h => h.accountId === f.accountId && h.fundCode === f.fundCode)
+    }))
+    return {
+      totalCumulativeProfit: funds.reduce((sum, f) => sum + f.cumulativeProfit, 0),
+      historicalProfit: funds.filter(f => f.archived).reduce((sum, f) => sum + f.cumulativeProfit, 0),
+      funds
+    }
+  },
   async login(username: string, password: string): Promise<LoginResult> {
     if (!username || !password) throw new Error('请输入用户名和密码')
     return { token: 'mock-quantfund-token', user: mockUser }
@@ -1155,6 +1171,10 @@ export const mockApi = {
       disclaimer: DISCLAIMER
     }
     holdings.unshift(saved)
+    const cumulativeKey = `${saved.accountId}:${saved.fundCode}`
+    if (!cumulativeMock.has(cumulativeKey)) cumulativeMock.set(cumulativeKey, {
+      accountId: saved.accountId, fundCode: saved.fundCode, cumulativeProfit: 0, officialNavDate: null
+    })
     return saved
   },
   async updateHolding(id: number, request: HoldingUpdateRequest) {
@@ -1211,6 +1231,10 @@ export const mockApi = {
     const clearedNav = existing.currentEstimateNav || existing.latestOfficialNav || (clearedShare > 0 ? clearedAmount / clearedShare : 0)
     const tradeAmount = request?.tradeAmount ?? clearedAmount
     const tradeFee = request?.tradeFee ?? 0
+    const cumulative = cumulativeMock.get(`${existing.accountId}:${existing.fundCode}`)
+    if (cumulative && (clearedAmount > 0 || clearedShare > 0)) {
+      cumulative.cumulativeProfit += tradeAmount - tradeFee - clearedAmount
+    }
     if (clearedAmount > 0 || clearedShare > 0) {
       trades.unshift({
         id: Date.now(),
@@ -1264,6 +1288,11 @@ export const mockApi = {
       const finalRate = [4.52, -0.09, 1.81, -7.81, 2.53][index] ?? holding.currentEstimateGrowthRate
       const previousNav = holding.latestOfficialNav || holding.currentEstimateNav || 1
       const finalNav = previousNav * (1 + finalRate / 100)
+      const cumulative = cumulativeMock.get(`${holding.accountId}:${holding.fundCode}`)
+      if (cumulative) {
+        cumulative.cumulativeProfit += holding.holdingShare * (finalNav - previousNav)
+        cumulative.officialNavDate = today
+      }
       holding.latestOfficialNav = finalNav
       holding.currentEstimateNav = finalNav
       holding.currentEstimateGrowthRate = finalRate

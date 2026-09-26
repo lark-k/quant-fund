@@ -22,6 +22,16 @@ const store = useDashboardStore()
 const quantStore = useQuantSignalsStore()
 const { signals: quantSignals, loading: quantLoading, loaded: quantLoaded, error: quantError } = storeToRefs(quantStore)
 const router = useRouter()
+const cumulativeByFund = computed(() => new Map(store.cumulative?.funds.map(item => [`${item.accountId}:${item.fundCode}`, item]) || []))
+const cumulativeOf = (holding: FundHolding) => cumulativeByFund.value.get(`${holding.accountId}:${holding.fundCode}`)
+const cumulativeText = (holding: FundHolding) => {
+  const value = cumulativeOf(holding)
+  return value ? signed(value.cumulativeProfit) : '—'
+}
+const cumulativeHint = (holding: FundHolding) => {
+  const value = cumulativeOf(holding)
+  return store.cumulativeError || (value?.officialNavDate ? `正式净值更新至 ${value.officialNavDate}；含历次买卖收益` : '随正式净值更新，含历次买卖收益')
+}
 type TrendRange = 'TODAY' | 'WEEK' | 'MONTH' | 'YEAR' | 'ALL'
 type BenchmarkIndex = '000300' | '000001' | '399006'
 type TrendPoint = {
@@ -695,7 +705,8 @@ async function saveCashAmount() {
   <div v-else-if="overview && summary" class="screen-grid dashboard-grid">
     <div class="metric-row dashboard-kpis">
       <MetricTile label="总资产（元）" :value="money(summary.totalAsset)" sub-label="总投入" :delta="money(summary.totalInvestAmount)" tone="neutral" />
-      <MetricTile label="总收益（元）" :value="signed(summary.currentProfit)" sub-label="总收益率" :delta="percent(summary.currentProfitRate)" :tone="metricTone(summary.currentProfit)" />
+      <MetricTile label="总持有收益（元）" :value="signed(summary.currentProfit)" sub-label="总持有收益率" :delta="percent(summary.currentProfitRate)" :tone="metricTone(summary.currentProfit)" />
+      <MetricTile label="总累计收益（元）" :value="store.cumulative ? signed(store.cumulative.totalCumulativeProfit) : '—'" :sub-label="store.cumulativeError || '历史收益结转'" :delta="store.cumulative ? signed(store.cumulative.historicalProfit) : '—'" :tone="metricTone(store.cumulative?.totalCumulativeProfit || 0)" title="随正式净值更新，包含已清仓及已删除基金的历史收益" />
       <MetricTile label="当日收益（元）" :value="signed(summary.dailyProfit)" sub-label="当日收益率" :delta="percent(dailyProfitRate)" :tone="metricTone(summary.dailyProfit)" />
       <button class="metric-tile cash-metric-tile" type="button" aria-label="修改现金金额" @click="openCashEditor">
         <div class="metric-label cash-metric-label">
@@ -721,8 +732,12 @@ async function saveCashAmount() {
             </div>
             <button class="panel-link" @click="go('/holdings')">更多 ›</button>
           </div>
-          <div class="panel-body">
+          <div class="panel-body cumulative-holdings-scroll">
             <table v-if="overview.topHoldings.length" class="terminal-table dashboard-holdings-table">
+              <colgroup>
+                <col style="width: 10%" /><col style="width: 20%" /><col style="width: 12%" />
+                <col style="width: 15%" /><col style="width: 16%" /><col style="width: 16%" /><col style="width: 11%" />
+              </colgroup>
               <thead>
                 <tr>
                   <th style="width: 70px;">代码</th>
@@ -730,6 +745,7 @@ async function saveCashAmount() {
                   <th>当日收益</th>
                   <th>关联板块/当日估值</th>
                   <th>持有收益/收益率</th>
+                  <th>累计收益</th>
                   <th>持仓占比</th>
                 </tr>
               </thead>
@@ -738,14 +754,15 @@ async function saveCashAmount() {
                   <td>{{ holding.fundCode }}</td>
                   <td>
                     <div class="holding-name-cell">
-                      <span>{{ holding.fundName }}</span>
+                      <span :title="holding.fundName">{{ holding.fundName }}</span>
                       <div class="holding-meta-row">
+                        <strong v-if="holding.holdingShare === 0 && holding.holdingAmount === 0" class="cleared-badge">已清仓</strong>
                         <strong v-if="holding.officialNavUpdated" class="updated-badge">{{ updatedBadgeText(holding.officialNavDate) }}</strong>
                         <strong class="holding-amount-badge">￥{{ money(holding.holdingAmount) }}</strong>
                       </div>
                     </div>
                   </td>
-                  <td :class="toneClass(holding.dailyProfit)">{{ signed(holding.dailyProfit) }}</td>
+                  <td :class="toneClass(holding.dailyProfit)" :title="signed(holding.dailyProfit)">{{ signed(holding.dailyProfit) }}</td>
                   <td>
                     <div class="metric-pair">
                       <strong>{{ relatedThemeText(holding.relatedThemeName) }}</strong>
@@ -758,6 +775,7 @@ async function saveCashAmount() {
                       <span :class="toneClass(holding.holdingProfitRate)">{{ percent(holding.holdingProfitRate) }}</span>
                     </div>
                   </td>
+                  <td :title="cumulativeHint(holding)"><strong :class="toneClass(cumulativeOf(holding)?.cumulativeProfit || 0)">{{ cumulativeText(holding) }}</strong></td>
                   <td>{{ percent(holding.positionRate || safeRatio(holding.holdingAmount, summary.totalAsset)) }}</td>
                 </tr>
               </tbody>
@@ -1071,11 +1089,47 @@ async function saveCashAmount() {
   line-height: 1;
 }
 
-.dashboard-holdings-table th:nth-child(3),
-.dashboard-holdings-table th:nth-child(6) {
-  min-width: 72px;
-  overflow-wrap: normal;
+.cumulative-holdings-scroll {
+  max-height: 440px;
+  overflow: auto;
+  min-width: 0;
+}
+
+.dashboard-holdings-table {
+  table-layout: fixed;
+  min-width: 540px;
+}
+
+.dashboard-holdings-table th,
+.dashboard-holdings-table td {
+  padding-left: 5px;
+  padding-right: 5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.dashboard-holdings-table .metric-pair {
+  min-width: 0;
+}
+
+.dashboard-holdings-table td:nth-child(1),
+.dashboard-holdings-table td:nth-child(3),
+.dashboard-holdings-table td:nth-child(5),
+.dashboard-holdings-table td:nth-child(6),
+.dashboard-holdings-table td:nth-child(7) {
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: clamp(10px, .85vw, 12px);
+}
+
+.dashboard-holdings-table .metric-pair strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cleared-badge {
+  color: var(--muted);
+  font-size: 10px;
 }
 
 .cash-editor-form {

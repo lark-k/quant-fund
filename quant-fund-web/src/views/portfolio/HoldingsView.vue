@@ -3,13 +3,25 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { quantApi } from '@/api/quant'
-import { SIMULATED_TRADE_NOTICE, type ClearHoldingRequest, type FundHolding, type FundSearchMode, type FundSearchResult, type PortfolioAccount } from '@/types/domain'
+import { SIMULATED_TRADE_NOTICE, type ClearHoldingRequest, type CumulativeProfitOverview, type FundHolding, type FundSearchMode, type FundSearchResult, type PortfolioAccount } from '@/types/domain'
 import DisclaimerBar from '@/components/common/DisclaimerBar.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import { money, percent, signed, toneClass } from '@/utils/format'
 
 const holdings = ref<FundHolding[]>([])
 const portfolios = ref<PortfolioAccount[]>([])
+const cumulative = ref<CumulativeProfitOverview | null>(null)
+const cumulativeError = ref('')
+const cumulativeByFund = computed(() => new Map(cumulative.value?.funds.map(item => [`${item.accountId}:${item.fundCode}`, item]) || []))
+const cumulativeOf = (holding: FundHolding) => cumulativeByFund.value.get(`${holding.accountId}:${holding.fundCode}`)
+const cumulativeText = (holding: FundHolding) => {
+  const value = cumulativeOf(holding)
+  return value ? signed(value.cumulativeProfit) : '—'
+}
+const cumulativeHint = (holding: FundHolding) => {
+  const value = cumulativeOf(holding)
+  return cumulativeError.value || (value?.officialNavDate ? `正式净值更新至 ${value.officialNavDate}；含历次买卖收益` : '随正式净值更新，含历次买卖收益')
+}
 const keyword = ref('')
 const searchKeyword = ref('')
 const searchMode = ref<FundSearchMode>('FUZZY')
@@ -91,8 +103,19 @@ async function loadInitialData() {
     holdings.value = holdingList
     portfolios.value = accountList
     selectedAccountId.value = accountList[0]?.id
+    await loadCumulativeProfit()
   } finally {
     loading.value = false
+  }
+}
+
+async function loadCumulativeProfit() {
+  try {
+    cumulative.value = await quantApi.cumulativeProfit()
+    cumulativeError.value = ''
+  } catch {
+    cumulative.value = null
+    cumulativeError.value = '累计收益暂未更新，请稍后重试'
   }
 }
 
@@ -215,6 +238,7 @@ async function deleteHolding(item: FundHolding) {
     await quantApi.deleteHolding(item.id)
     holdings.value = holdings.value.filter((holding) => holding.id !== item.id)
     ElMessage.success('持仓已删除')
+    await loadCumulativeProfit()
   } finally {
     deletingId.value = undefined
   }
@@ -260,6 +284,7 @@ async function saveClearHolding() {
     clearDialogOpen.value = false
     clearTarget.value = undefined
     ElMessage.success('持仓已清仓，历史记录已保留')
+    await loadCumulativeProfit()
   } finally {
     clearingId.value = undefined
   }
@@ -275,7 +300,7 @@ function openEdit(item: FundHolding) {
 </script>
 
 <template>
-  <div class="screen-grid">
+  <div class="screen-grid holdings-screen">
     <section class="panel fund-search-panel">
       <div class="panel-header">
         <div>
@@ -344,10 +369,10 @@ function openEdit(item: FundHolding) {
           </div>
           <div class="skeleton-table">
             <div class="skeleton-row skeleton-head">
-              <i v-for="item in 8" :key="`head-${item}`"></i>
+              <i v-for="item in 9" :key="`head-${item}`"></i>
             </div>
             <div v-for="row in 5" :key="`row-${row}`" class="skeleton-row">
-              <i v-for="cell in 8" :key="`cell-${row}-${cell}`"></i>
+              <i v-for="cell in 9" :key="`cell-${row}-${cell}`"></i>
             </div>
           </div>
           <div class="skeleton-hint">
@@ -362,6 +387,7 @@ function openEdit(item: FundHolding) {
               <th>当日收益</th>
               <th>关联板块/当日估值</th>
               <th>持有收益/收益率</th>
+              <th>累计收益</th>
               <th>持仓占比</th>
               <th>估值/净值</th>
               <th>操作</th>
@@ -372,7 +398,7 @@ function openEdit(item: FundHolding) {
               <td>{{ item.fundCode }}</td>
               <td>
                 <div class="holding-name-cell">
-                  <span>{{ item.fundName }}</span>
+                  <span :title="item.fundName">{{ item.fundName }}</span>
                   <div class="holding-meta-row">
                     <strong v-if="item.officialNavUpdated" class="updated-badge">{{ updatedBadgeText(item.officialNavDate) }}</strong>
                     <strong class="holding-amount-badge">￥{{ money(item.holdingAmount) }}</strong>
@@ -391,6 +417,9 @@ function openEdit(item: FundHolding) {
                   <strong :class="toneClass(item.holdingProfit)">{{ signed(item.holdingProfit) }}</strong>
                   <span :class="toneClass(item.holdingProfitRate)">{{ percent(item.holdingProfitRate) }}</span>
                 </div>
+              </td>
+              <td class="cumulative-profit-cell" :title="cumulativeHint(item)">
+                <strong :class="toneClass(cumulativeOf(item)?.cumulativeProfit || 0)">{{ cumulativeText(item) }}</strong>
               </td>
               <td>{{ percent(item.positionRate || 0) }}</td>
               <td>{{ navText(item.currentEstimateNav) }} / {{ navText(item.latestOfficialNav) }}</td>
@@ -435,3 +464,17 @@ function openEdit(item: FundHolding) {
     <DisclaimerBar simulated />
   </div>
 </template>
+
+<style scoped>
+.holdings-screen .holding-name-cell > span {
+  max-width: clamp(150px, 19vw, 300px);
+}
+
+.cumulative-profit-cell {
+  white-space: nowrap;
+}
+
+.holdings-screen .skeleton-row {
+  grid-template-columns: 0.72fr 2fr 0.9fr 1.2fr 1.2fr 0.9fr 0.8fr 0.9fr 1.5fr;
+}
+</style>

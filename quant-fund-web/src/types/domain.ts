@@ -450,6 +450,18 @@ export interface AiAnalysisReport {
   disclaimer: string
 }
 
+export interface CumulativeProfitOverview {
+  totalCumulativeProfit: number
+  historicalProfit: number
+  funds: {
+    accountId: number
+    fundCode: string
+    cumulativeProfit: number
+    officialNavDate: string | null
+    archived: boolean
+  }[]
+}
+
 export interface DashboardOverview {
   summary: PortfolioSummary
   topHoldings: FundHolding[]

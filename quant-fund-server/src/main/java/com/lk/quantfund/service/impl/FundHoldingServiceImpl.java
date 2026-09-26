@@ -70,6 +70,9 @@ public class FundHoldingServiceImpl implements FundHoldingService {
     private final HoldingSnapshotBackfillService holdingSnapshotBackfillService;
     private final TradeRecordMapper tradeRecordMapper;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.lk.quantfund.service.CumulativeProfitService cumulativeProfitService;
+
     public FundHoldingServiceImpl(FundHoldingMapper fundHoldingMapper,
                                   FundEstimateIntradayMapper fundEstimateIntradayMapper,
                                   PortfolioAccountMapper portfolioAccountMapper,
@@ -115,6 +118,7 @@ public class FundHoldingServiceImpl implements FundHoldingService {
         holding.setUpdateTime(now);
         holding.setDeleted(0);
         fundHoldingMapper.insert(holding);
+        if (cumulativeProfitService != null) cumulativeProfitService.rebase(holding);
         portfolioAccountService.recalculateOwnedAccount(userId, request.accountId());
         refreshStrategySignals(userId, holding.getId());
         return toVO(holding);
@@ -125,6 +129,7 @@ public class FundHoldingServiceImpl implements FundHoldingService {
     public FundHoldingVO update(Long holdingId, UpdateHoldingRequest request) {
         Long userId = UserContext.getUserId();
         FundHolding holding = loadOwnedHolding(userId, holdingId);
+        if (cumulativeProfitService != null) cumulativeProfitService.capture(holding);
         Long oldAccountId = holding.getAccountId();
         String oldFundCode = holding.getFundCode();
         BigDecimal previousCurrentEstimateNav = holding.getCurrentEstimateNav();
@@ -137,6 +142,7 @@ public class FundHoldingServiceImpl implements FundHoldingService {
         recalculateEntity(holding);
         holding.setUpdateTime(LocalDateTime.now());
         fundHoldingMapper.updateById(holding);
+        if (cumulativeProfitService != null) cumulativeProfitService.rebase(holding);
         portfolioAccountService.recalculateOwnedAccount(userId, holding.getAccountId());
         if (!oldAccountId.equals(holding.getAccountId())) {
             portfolioAccountService.recalculateOwnedAccount(userId, oldAccountId);
@@ -150,6 +156,7 @@ public class FundHoldingServiceImpl implements FundHoldingService {
     public void delete(Long holdingId) {
         Long userId = UserContext.getUserId();
         FundHolding holding = loadOwnedHolding(userId, holdingId);
+        if (cumulativeProfitService != null) cumulativeProfitService.archive(holding);
         aiAnalysisReportMapper.delete(new LambdaQueryWrapper<AiAnalysisReport>()
                 .eq(AiAnalysisReport::getUserId, userId)
                 .eq(AiAnalysisReport::getHoldingId, holdingId));
@@ -216,6 +223,7 @@ public class FundHoldingServiceImpl implements FundHoldingService {
         record.setUpdateTime(now);
         record.setDeleted(0);
         tradeRecordMapper.insert(record);
+        if (cumulativeProfitService != null) cumulativeProfitService.completedTrade(holding, record, now.toLocalDate());
     }
 
     private BigDecimal clearNav(FundHolding holding, BigDecimal amount, BigDecimal share) {

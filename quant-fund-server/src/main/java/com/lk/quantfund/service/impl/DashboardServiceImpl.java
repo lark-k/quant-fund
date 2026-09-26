@@ -128,7 +128,6 @@ public class DashboardServiceImpl implements DashboardService {
         Map<Long, BigDecimal> accountTotalAssetById = summary.accounts().stream()
                 .collect(Collectors.toMap(PortfolioAccountVO::id, PortfolioAccountVO::totalAsset, (left, right) -> left));
         List<FundHoldingVO> topHoldings = holdings.stream()
-                .limit(10)
                 .map(holding -> toHoldingVO(
                         holding,
                         intradayDisplayWindow,

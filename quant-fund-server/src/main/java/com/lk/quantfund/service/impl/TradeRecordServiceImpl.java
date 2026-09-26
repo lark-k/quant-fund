@@ -50,6 +50,9 @@ public class TradeRecordServiceImpl implements TradeRecordService {
     private final FundQueryService fundQueryService;
     private final TradingCalendarService tradingCalendarService;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.lk.quantfund.service.CumulativeProfitService cumulativeProfitService;
+
     public TradeRecordServiceImpl(TradeRecordMapper tradeRecordMapper,
                                   FundHoldingMapper fundHoldingMapper,
                                   PortfolioAccountMapper portfolioAccountMapper,
@@ -246,7 +249,11 @@ public class TradeRecordServiceImpl implements TradeRecordService {
         if (officialNav.isEmpty()) {
             return false;
         }
-        FundHolding holding = record.getHoldingId() == null ? null : ensureHoldingOwned(record.getUserId(), record.getHoldingId());
+        // Pending transactions must still settle against a soft-deleted holding's original book.
+        FundHolding holding = record.getHoldingId() == null ? null : fundHoldingMapper.selectOwnedIncludingDeleted(record.getUserId(), record.getHoldingId());
+        if (holding == null && record.getHoldingId() != null) {
+            holding = ensureHoldingOwned(record.getUserId(), record.getHoldingId());
+        }
         if (holding == null) {
             holding = findHolding(record.getUserId(), record.getAccountId(), record.getFundCode());
         }
@@ -481,7 +488,9 @@ public class TradeRecordServiceImpl implements TradeRecordService {
         TradeType tradeType = TradeType.valueOf(record.getTradeType());
         if (isIncreaseTrade(tradeType)) {
             FundHolding target = holding == null ? createHoldingFromTrade(userId, record) : holding;
+            if (cumulativeProfitService != null) cumulativeProfitService.capture(target);
             increaseHolding(target, record);
+            if (cumulativeProfitService != null) cumulativeProfitService.completedTrade(target, record, applicationDate(record.getTradeTime()));
             fundHoldingMapper.updateById(target);
             record.setHoldingId(target.getId());
             tradeRecordMapper.updateById(record);
@@ -492,7 +501,9 @@ public class TradeRecordServiceImpl implements TradeRecordService {
             );
             return;
         }
+        if (cumulativeProfitService != null && holding != null) cumulativeProfitService.capture(holding);
         decreaseHolding(holding, record);
+        if (cumulativeProfitService != null) cumulativeProfitService.completedTrade(holding, record, applicationDate(record.getTradeTime()));
         fundHoldingMapper.updateById(holding);
         portfolioAccountService.adjustCashAmountOwnedAccount(
                 userId,

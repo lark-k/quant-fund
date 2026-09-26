@@ -447,7 +447,7 @@ class DashboardServiceImplMarketStatusTest {
     }
 
     @Test
-    void overviewSummaryDailyProfitShouldIncludeHoldingsBeyondTopTen() {
+    void overviewShouldExposeAllHoldingsForScrollableLifetimeProfitDisplayWithoutChangingDailyTotals() {
         LocalDate fixedToday = LocalDate.of(2026, 6, 25);
         PortfolioAccountService portfolioAccountService = mock(PortfolioAccountService.class);
         FundHoldingMapper fundHoldingMapper = mock(FundHoldingMapper.class);
@@ -491,7 +491,7 @@ class DashboardServiceImplMarketStatusTest {
             userContext.when(UserContext::getUserId).thenReturn(1L);
             var overview = service.overview();
 
-            assertThat(overview.topHoldings()).hasSize(10);
+            assertThat(overview.topHoldings()).hasSize(11);
             assertThat(overview.summary().dailyProfit()).isEqualByComparingTo("110.0000");
             assertThat(overview.profitTrend()).singleElement()
                     .satisfies(point -> assertThat(point.dailyProfit()).isEqualByComparingTo("110.0000"));
