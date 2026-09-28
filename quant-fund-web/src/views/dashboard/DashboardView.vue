@@ -66,7 +66,6 @@ const activeIndexCode = ref<BenchmarkIndex>('000300')
 const refreshing = ref(false)
 const trendLoading = ref(false)
 const quantGenerating = ref(false)
-const showAllStrategySignals = ref(false)
 const profitAnalysis = ref<ProfitAnalysis>()
 const intradayTrendPoints = ref<TrendPoint[]>([])
 let refreshTimer: number | undefined
@@ -142,13 +141,8 @@ const buySellSuggestionCount = computed(() => {
 const watchSuggestionCount = computed(() => {
   return overview.value?.todayAiSuggestions.filter((item) => item.action === 'WATCH' || item.action === 'HOLD').length || 0
 })
-const activeSignalCount = computed(() => {
-  return quantSignals.value.filter((item) => item.action !== 'HOLD' && item.action !== 'WATCH').length
-})
 const quantBuySellCount = computed(() => quantSignals.value.filter((item) => item.action === 'BUY' || item.action === 'SELL' || item.action === 'CONVERT').length)
 const quantWatchCount = computed(() => quantSignals.value.filter((item) => item.action === 'WATCH' || item.action === 'HOLD').length)
-const visibleQuantSignals = computed(() => showAllStrategySignals.value ? quantSignals.value : quantSignals.value.slice(0, 5))
-const quantSignalCollapsed = computed(() => quantSignals.value.length > 5)
 const quantButtonBusy = computed(() => quantLoading.value || quantGenerating.value)
 const quantButtonText = computed(() => quantGenerating.value ? '生成中' : quantLoading.value && !quantLoaded.value ? '刷新中' : '生成')
 const dashboardMlForecast = computed(() => {
@@ -192,7 +186,6 @@ const strategySignalGroups = computed<StrategySignalGroup[]>(() => {
     })
     .sort((a, b) => Date.parse(b.latest.signalTime) - Date.parse(a.latest.signalTime))
 })
-const visibleStrategySignalGroups = computed(() => showAllStrategySignals.value ? strategySignalGroups.value : strategySignalGroups.value.slice(0, 5))
 const strategySignalCollapsed = computed(() => strategySignalGroups.value.length > 5)
 const latestTrendPoint = computed(() => {
   const trend = overview.value?.profitTrend || []
@@ -468,12 +461,6 @@ function parseSignalMetrics(value?: string | null) {
 function numberMetric(value: unknown) {
   const numberValue = Number(value)
   return Number.isFinite(numberValue) ? numberValue : null
-}
-
-function updatedBadgeText(date?: string | null) {
-  if (!date) return '已更新'
-  const today = new Date().toISOString().slice(0, 10)
-  return date === today ? '已更新' : `已更新至 ${date.slice(5)}`
 }
 
 function relatedThemeText(theme?: string | null) {
@@ -771,7 +758,7 @@ async function saveCashAmount() {
                       <span :title="holding.fundName">{{ holding.fundName }}</span>
                       <div class="holding-meta-row">
                         <strong v-if="holding.holdingShare === 0 && holding.holdingAmount === 0" class="cleared-badge">已清仓</strong>
-                        <strong v-if="holding.officialNavUpdated" class="updated-badge">{{ updatedBadgeText(holding.officialNavDate) }}</strong>
+                        <strong v-if="holding.officialNavUpdated" class="updated-badge">已更新</strong>
                         <strong class="holding-amount-badge">￥{{ money(holding.holdingAmount) }}</strong>
                       </div>
                     </div>
@@ -880,7 +867,6 @@ async function saveCashAmount() {
           </table>
         </div>
         <EmptyState v-else title="暂无 AI 建议" description="生成新的 AI 分析后会在此展示。" />
-        <div class="visual-footnote">{{ overview.disclaimer }}</div>
       </div>
     </section>
       </div>
@@ -898,13 +884,13 @@ async function saveCashAmount() {
           <div><span>覆盖持仓</span><strong>{{ quantLoaded ? quantSignals.length : '--' }}</strong></div>
         </div>
         <QuantSignalProgress :loading="quantLoading && !quantLoaded" :failed="Boolean(quantError)" :compact="quantLoaded" />
-        <div v-if="visibleQuantSignals.length" class="visual-table-wrap">
+        <div v-if="quantSignals.length" class="visual-table-wrap">
           <table class="visual-table signal-table">
             <thead>
               <tr><th>基金</th><th>动作</th><th>总分</th><th class="ml-return-head">未来20个净值样本预计收益</th><th>信号风险</th><th>置信</th><th>时间</th></tr>
             </thead>
             <tbody>
-              <tr v-for="signal in visibleQuantSignals" :key="signal.id">
+              <tr v-for="signal in quantSignals" :key="signal.id">
                 <td class="visual-name-cell">{{ displaySignalFund(signal) }}</td>
                 <td class="signal-action-cell">
                   <div class="signal-action-line">
@@ -947,10 +933,6 @@ async function saveCashAmount() {
           {{ quantLoaded ? '刷新失败，当前展示上次加载结果。' : quantError }}
           <button class="panel-link" type="button" :disabled="quantButtonBusy" @click="loadQuantSignals">重试</button>
         </div>
-        <button v-if="quantSignalCollapsed" class="panel-link signal-toggle" type="button" @click="showAllStrategySignals = !showAllStrategySignals">
-          {{ showAllStrategySignals ? '收起' : `展开全部（${quantSignals.length}）` }}
-        </button>
-        <div class="visual-footnote">活跃 {{ quantLoaded ? activeSignalCount : '--' }} · 模型建议只做参考</div>
       </div>
     </section>
       </div>

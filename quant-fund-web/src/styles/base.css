@@ -1004,11 +1004,6 @@ a {
   -webkit-line-clamp: 2;
 }
 
-.signal-toggle {
-  justify-self: start;
-  width: fit-content;
-}
-
 .disclaimer-bar {
   display: flex;
   align-items: center;
@@ -1037,12 +1032,7 @@ a {
 
 .ai-panel .visual-panel-body {
   flex: 1;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-}
-
-.ai-panel .visual-footnote {
-  align-self: end;
-  justify-self: start;
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .insight-stat-row {
@@ -3456,6 +3446,52 @@ button:disabled {
 
 .el-overlay {
   background: rgba(0, 0, 0, 0.66);
+}
+
+@media (min-width: 1181px) {
+  .terminal-main:has(.dashboard-grid) {
+    padding-bottom: 12px;
+  }
+
+  .dashboard-grid {
+    min-height: calc(100vh - 60px);
+    grid-template-rows: auto minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .dashboard-workspace {
+    grid-template-rows: auto minmax(480px, 1fr);
+  }
+
+  .return-trend-panel,
+  .strategy-panel {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .return-trend-tabs,
+  .return-trend-panel > .panel-header,
+  .strategy-panel > .panel-header {
+    flex-shrink: 0;
+  }
+
+  .return-trend-body,
+  .strategy-panel .visual-panel-body {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+  }
+
+  .return-trend-body .base-chart {
+    flex: 1;
+    min-height: 290px;
+  }
+
+  .strategy-panel .visual-table-wrap {
+    flex: 1 1 0;
+    min-height: 290px;
+    max-height: none;
+  }
 }
 
 @media (max-width: 1180px) {
