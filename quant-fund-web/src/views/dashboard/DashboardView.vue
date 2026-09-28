@@ -9,16 +9,28 @@ import ActionTag from '@/components/common/ActionTag.vue'
 import DisclaimerBar from '@/components/common/DisclaimerBar.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
+import HoldingSortHeader from '@/components/common/HoldingSortHeader.vue'
 import QuantSignalProgress from '@/components/common/QuantSignalProgress.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { returnTrendOption } from '@/components/charts/chartOptions'
 import { quantApi } from '@/api/quant'
 import { useDashboardStore } from '@/stores/dashboard'
+import { sortHoldings, useHoldingSortStore, type HoldingSortKey, type SortDirection } from '@/stores/holdingSort'
 import { useQuantSignalsStore } from '@/stores/quantSignals'
 import { actionPercent, metricTone, money, percent, percentUnsigned, signed, toneClass } from '@/utils/format'
 import type { AiAnalysisReport, FundHolding, MarketSessionStatus, ProfitAnalysis, QuantSignal, StrategySignal } from '@/types/domain'
 
 const store = useDashboardStore()
+const holdingSortStore = useHoldingSortStore()
+const sortedHoldings = computed(() => sortHoldings(store.overview?.topHoldings || [], holdingSortStore.sort,
+  holding => cumulativeOf(holding)?.cumulativeProfit))
+function setHoldingSort(key: HoldingSortKey, direction: SortDirection) {
+  holdingSortStore.setSort(key, direction)
+  if (holdingSortStore.storageWarning) ElMessage.warning(holdingSortStore.storageWarning)
+}
+function holdingAriaSort(...keys: HoldingSortKey[]): 'ascending' | 'descending' | undefined {
+  return keys.includes(holdingSortStore.sort.key) ? (holdingSortStore.sort.direction === 'asc' ? 'ascending' : 'descending') : undefined
+}
 const quantStore = useQuantSignalsStore()
 const { signals: quantSignals, loading: quantLoading, loaded: quantLoaded, error: quantError } = storeToRefs(quantStore)
 const router = useRouter()
@@ -735,22 +747,24 @@ async function saveCashAmount() {
           <div class="panel-body cumulative-holdings-scroll">
             <table v-if="overview.topHoldings.length" class="terminal-table dashboard-holdings-table">
               <colgroup>
-                <col style="width: 10%" /><col style="width: 20%" /><col style="width: 12%" />
-                <col style="width: 15%" /><col style="width: 16%" /><col style="width: 16%" /><col style="width: 11%" />
+                <col style="width: 9%" /><col style="width: 20%" /><col style="width: 12%" />
+                <col style="width: 18%" /><col style="width: 18%" /><col style="width: 13%" /><col style="width: 10%" />
               </colgroup>
               <thead>
                 <tr>
                   <th style="width: 70px;">代码</th>
-                  <th>基金名称</th>
-                  <th>当日收益</th>
+                  <th :aria-sort="holdingAriaSort('holdingAmount')">
+                    <HoldingSortHeader label="基金名称" sort-label="持有金额" field="holdingAmount" :sort="holdingSortStore.sort" @change="setHoldingSort" />
+                  </th>
+                  <th :aria-sort="holdingAriaSort('dailyProfit')"><HoldingSortHeader label="当日收益" field="dailyProfit" :sort="holdingSortStore.sort" @change="setHoldingSort" /></th>
                   <th>关联板块/当日估值</th>
-                  <th>持有收益/收益率</th>
-                  <th>累计收益</th>
+                  <th :aria-sort="holdingAriaSort('holdingProfit')"><HoldingSortHeader label="持有收益/收益率" sort-label="持有收益金额" field="holdingProfit" :sort="holdingSortStore.sort" @change="setHoldingSort" /></th>
+                  <th :aria-sort="holdingAriaSort('cumulativeProfit')"><HoldingSortHeader label="累计收益" field="cumulativeProfit" :sort="holdingSortStore.sort" @change="setHoldingSort" /></th>
                   <th>持仓占比</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="holding in overview.topHoldings" :key="holding.id">
+                <tr v-for="holding in sortedHoldings" :key="holding.id">
                   <td>{{ holding.fundCode }}</td>
                   <td>
                     <div class="holding-name-cell">
@@ -1097,7 +1111,7 @@ async function saveCashAmount() {
 
 .dashboard-holdings-table {
   table-layout: fixed;
-  min-width: 540px;
+  min-width: 650px;
 }
 
 .dashboard-holdings-table th,
@@ -1109,6 +1123,11 @@ async function saveCashAmount() {
 
 .dashboard-holdings-table .metric-pair {
   min-width: 0;
+}
+
+.dashboard-holdings-table th {
+  white-space: nowrap;
+  overflow-wrap: normal;
 }
 
 .dashboard-holdings-table td:nth-child(1),
