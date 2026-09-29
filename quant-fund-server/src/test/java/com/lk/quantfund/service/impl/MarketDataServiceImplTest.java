@@ -30,6 +30,38 @@ class MarketDataServiceImplTest {
     private final MarketIndexDailyMapper marketIndexDailyMapper = mock(MarketIndexDailyMapper.class);
 
     @Test
+    void marketReadingsShouldRequestStar50AndOrderLiveQuotesForDisplay() {
+        AtomicReference<ClientRequest> request = new AtomicReference<>();
+        ExchangeFunction exchangeFunction = clientRequest -> {
+            request.set(clientRequest);
+            String body = """
+                    {"data":{"diff":[
+                    {"f12":"399001","f14":"深证成指","f2":12901.95,"f3":0.34},
+                    {"f12":"000905","f14":"中证500","f2":7439.63,"f3":0.50},
+                    {"f12":"000688","f14":"科创50","f2":1569.34,"f3":0.86,"f4":13.36},
+                    {"f12":"000001","f14":"上证指数","f2":3830.45,"f3":0.18},
+                    {"f12":"000300","f14":"沪深300","f2":4345.21,"f3":0.10},
+                    {"f12":"399006","f14":"创业板指","f2":3142.56,"f3":0.09}
+                    ]}}
+                    """;
+            return Mono.just(ClientResponse.create(HttpStatus.OK).body(body).build());
+        };
+        MarketDataServiceImpl service = new MarketDataServiceImpl(
+                WebClient.builder().exchangeFunction(exchangeFunction),
+                new QuantFundProperties(), new ObjectMapper(), marketIndexDailyMapper
+        );
+
+        var readings = service.marketReadings();
+
+        assertThat(request.get().url().getQuery()).contains("secids=1.000001,0.399006,1.000688,0.399001,1.000300,1.000905");
+        assertThat(readings).extracting(reading -> reading.code())
+                .containsExactly("000001", "399006", "000688", "399001", "000300", "000905");
+        assertThat(readings.get(2).name()).isEqualTo("科创50");
+        assertThat(readings.get(2).latestPrice()).isEqualByComparingTo("1569.34");
+        assertThat(readings.get(2).changeRate()).isEqualByComparingTo("0.86");
+    }
+
+    @Test
     void marketReadingsShouldFallbackToTencentQuotesWhenEastMoneyLiveConnectionCloses() {
         AtomicInteger historyRequests = new AtomicInteger();
         ExchangeFunction exchangeFunction = request -> {
@@ -37,12 +69,14 @@ class MarketDataServiceImplTest {
                 return Mono.error(new RuntimeException("connection closed before response"));
             }
             if ("qt.gtimg.cn".equals(request.url().getHost())) {
+                assertThat(request.url().getQuery()).contains("s_sh000688");
                 String body = """
                         v_s_sh000001="1~上证指数~000001~3952.18~-4.39~-0.11~510581645~97036515~~701350.87~ZS~";
                         v_s_sz399001="51~深证成指~399001~13953.07~-95.81~-0.68~630346080~113134987~~447661.54~ZS~";
                         v_s_sz399006="51~创业板指~399006~3424.40~-48.95~-1.41~186154222~54425510~~185993.81~ZS~";
                         v_s_sh000300="1~沪深300~000300~4609.18~-21.10~-0.46~180989495~54981348~~551688.28~ZS~";
                         v_s_sh000905="1~中证500~000905~7895.45~-50.88~-0.64~171070479~37630398~~174278.51~ZS~";
+                        v_s_sh000688="1~科创50~000688~1569.34~13.36~0.86~7516951~6452995~~56281.73~ZS~";
                         """;
                 return Mono.just(ClientResponse.create(HttpStatus.OK).body(body).build());
             }
@@ -59,7 +93,10 @@ class MarketDataServiceImplTest {
         var readings = service.marketReadings();
 
         assertThat(historyRequests).hasValue(0);
-        assertThat(readings).hasSize(5);
+        assertThat(readings).extracting(reading -> reading.code())
+                .containsExactly("000001", "399006", "000688", "399001", "000300", "000905");
+        assertThat(readings.get(2).latestPrice()).isEqualByComparingTo("1569.34");
+        assertThat(readings.get(2).changeRate()).isEqualByComparingTo("0.86");
         assertThat(readings.getFirst().name()).isEqualTo("上证指数");
         assertThat(readings.getFirst().latestPrice()).isEqualByComparingTo("3952.1800");
         assertThat(readings.getFirst().changeRate()).isEqualByComparingTo("-0.1100");
@@ -91,10 +128,10 @@ class MarketDataServiceImplTest {
 
         var readings = service.marketReadings();
 
-        assertThat(historyRequests).hasValue(5);
-        assertThat(readings).hasSize(5);
+        assertThat(historyRequests).hasValue(6);
+        assertThat(readings).hasSize(6);
         assertThat(readings).extracting(reading -> reading.code())
-                .containsExactly("000001", "399001", "399006", "000300", "000905");
+                .containsExactly("000001", "399006", "000688", "399001", "000300", "000905");
         assertThat(readings.getFirst().latestPrice()).isEqualByComparingTo("4010.0000");
         assertThat(readings.getFirst().changeRate()).isEqualByComparingTo("0.2500");
         assertThat(readings.getFirst().sourceName()).isEqualTo("EAST_MONEY_HISTORY_FALLBACK");

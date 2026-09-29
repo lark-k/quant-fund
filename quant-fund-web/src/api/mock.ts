@@ -1080,8 +1080,10 @@ export const mockApi = {
   async marketReadings() {
     return [
       { code: '000001', name: '上证指数', latestPrice: 4110.81, changeValue: 4.56, changeRate: 0.11, turnover: 1514193285000.4, updateTime: new Date().toISOString(), sourceName: 'MOCK' },
-      { code: '399001', name: '深证成指', latestPrice: 16051.32, changeValue: 197.12, changeRate: 1.24, turnover: 1770135015355.8, updateTime: new Date().toISOString(), sourceName: 'MOCK' },
       { code: '399006', name: '创业板指', latestPrice: 4251.42, changeValue: 59.23, changeRate: 1.41, turnover: 853839664922.36, updateTime: new Date().toISOString(), sourceName: 'MOCK' },
+      { code: '000688', name: '科创50', latestPrice: 1569.34, changeValue: 13.36, changeRate: 0.86, turnover: 64529947381.6, updateTime: new Date().toISOString(), sourceName: 'MOCK' },
+      { code: '399001', name: '深证成指', latestPrice: 16051.32, changeValue: 197.12, changeRate: 1.24, turnover: 1770135015355.8, updateTime: new Date().toISOString(), sourceName: 'MOCK' },
+      { code: '000300', name: '沪深300', latestPrice: 4345.21, changeValue: 4.45, changeRate: 0.10, turnover: 334950785525.6, updateTime: new Date().toISOString(), sourceName: 'MOCK' },
       { code: '000905', name: '中证500', latestPrice: 8842.94, changeValue: 154.35, changeRate: 1.78, turnover: 684019604157.1, updateTime: new Date().toISOString(), sourceName: 'MOCK' }
     ]
   },

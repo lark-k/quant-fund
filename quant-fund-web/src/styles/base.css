@@ -127,6 +127,20 @@ a {
   font-size: 12px;
 }
 
+.index-row {
+  gap: 4px;
+}
+
+.index-row > span {
+  flex: 0 0 2em;
+  width: 2em;
+}
+
+.index-row b,
+.index-row em {
+  white-space: nowrap;
+}
+
 .index-row b {
   color: var(--red);
   font-size: 14px;

@@ -17,6 +17,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -29,13 +30,14 @@ public class MarketDataServiceImpl implements MarketDataService {
     private static final String SOURCE_NAME = "EAST_MONEY";
     private static final String TENCENT_FALLBACK_SOURCE_NAME = "TENCENT_QUOTE_FALLBACK";
     private static final String HISTORY_FALLBACK_SOURCE_NAME = "EAST_MONEY_HISTORY_FALLBACK";
-    private static final String DEFAULT_INDEX_SECIDS = "1.000001,0.399001,0.399006,1.000300,1.000905";
-    private static final String TENCENT_INDEX_QUERY = "s_sh000001,s_sz399001,s_sz399006,s_sh000300,s_sh000905";
+    private static final String DEFAULT_INDEX_SECIDS = "1.000001,0.399006,1.000688,0.399001,1.000300,1.000905";
+    private static final String TENCENT_INDEX_QUERY = "s_sh000001,s_sz399006,s_sh000688,s_sz399001,s_sh000300,s_sh000905";
     private static final Pattern TENCENT_QUOTE_PATTERN = Pattern.compile("v_s_[^=]+=\\\"([^\\\"]*)\\\";");
     private static final List<IndexTarget> DEFAULT_INDICES = List.of(
             new IndexTarget("000001", "1.000001", "上证指数"),
-            new IndexTarget("399001", "0.399001", "深证成指"),
             new IndexTarget("399006", "0.399006", "创业板指"),
+            new IndexTarget("000688", "1.000688", "科创50"),
+            new IndexTarget("399001", "0.399001", "深证成指"),
             new IndexTarget("000300", "1.000300", "沪深300"),
             new IndexTarget("000905", "1.000905", "中证500")
     );
@@ -219,7 +221,10 @@ public class MarketDataServiceImpl implements MarketDataService {
     }
 
     private List<MarketIndexVO> rememberMarketReadings(List<MarketIndexVO> readings) {
-        List<MarketIndexVO> snapshot = List.copyOf(readings);
+        List<String> indexCodes = DEFAULT_INDICES.stream().map(IndexTarget::code).toList();
+        List<MarketIndexVO> snapshot = readings.stream()
+                .sorted(Comparator.comparingInt(reading -> indexCodes.indexOf(reading.code())))
+                .toList();
         cachedMarketReadings = new CachedMarketReadings(snapshot, LocalDateTime.now());
         return snapshot;
     }
