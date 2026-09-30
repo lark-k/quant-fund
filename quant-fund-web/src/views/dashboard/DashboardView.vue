@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -21,6 +21,13 @@ import { actionPercent, metricTone, money, percent, percentUnsigned, signed, ton
 import type { AiAnalysisReport, FundHolding, MarketSessionStatus, ProfitAnalysis, QuantSignal, StrategySignal } from '@/types/domain'
 
 const store = useDashboardStore()
+const FundQuoteDialog = defineAsyncComponent(() => import('@/components/fund/FundQuoteDialog.vue'))
+const quoteOpen = ref(false)
+const quoteHolding = ref<FundHolding | null>(null)
+function openFundQuote(holding: FundHolding) {
+  quoteHolding.value = holding
+  quoteOpen.value = true
+}
 const holdingSortStore = useHoldingSortStore()
 const sortedHoldings = computed(() => sortHoldings(store.overview?.topHoldings || [], holdingSortStore.sort,
   holding => cumulativeOf(holding)?.cumulativeProfit))
@@ -755,7 +762,7 @@ async function saveCashAmount() {
                   <td>{{ holding.fundCode }}</td>
                   <td>
                     <div class="holding-name-cell">
-                      <span :title="holding.fundName">{{ holding.fundName }}</span>
+                      <button class="holding-quote-link" type="button" :title="`查看 ${holding.fundName} 行情`" @click="openFundQuote(holding)">{{ holding.fundName }}</button>
                       <div class="holding-meta-row">
                         <strong v-if="holding.holdingShare === 0 && holding.holdingAmount === 0" class="cleared-badge">已清仓</strong>
                         <strong v-if="holding.officialNavUpdated" class="updated-badge">已更新</strong>
@@ -937,6 +944,7 @@ async function saveCashAmount() {
     </section>
       </div>
     </div>
+    <FundQuoteDialog v-if="quoteHolding" v-model="quoteOpen" :holding="overview.topHoldings.find(item => item.id === quoteHolding?.id) || quoteHolding" :holdings="overview.topHoldings" @select="quoteHolding = $event" />
     <el-dialog v-model="cashDialogOpen" title="调整现金" width="440px">
       <div class="cash-editor-form">
         <label v-if="cashAccounts.length > 1">
@@ -973,6 +981,9 @@ async function saveCashAmount() {
 </template>
 
 <style scoped>
+.holding-quote-link { display: block; width: 100%; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.holding-quote-link:hover { color: #8dc8ff; text-decoration: underline; }
+.holding-quote-link:focus-visible { outline: 2px solid #8dc8ff; outline-offset: 3px; }
 .ml-forecast-pill {
   display: inline-flex;
   align-items: center;
