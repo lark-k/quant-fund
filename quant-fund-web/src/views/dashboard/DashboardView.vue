@@ -2,6 +2,7 @@
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
+import { isAShareEstimateRefreshAllowed } from '@/utils/marketSession'
 import { ElMessage } from 'element-plus'
 import { InfoFilled } from '@element-plus/icons-vue'
 import MetricTile from '@/components/common/MetricTile.vue'
@@ -484,20 +485,6 @@ async function loadMarketStatus() {
 
 function aShareMarket(status: MarketSessionStatus | null) {
   return status?.markets.find((item) => item.market === 'A股') || null
-}
-
-function isAShareTrading(status: MarketSessionStatus | null) {
-  return aShareMarket(status)?.trading === true
-}
-
-function isAShareEstimateRefreshAllowed(status: MarketSessionStatus | null) {
-  if (isAShareTrading(status)) return true
-  if (!status) return false
-  const now = new Date()
-  const day = now.getDay()
-  if (day === 0 || day === 6) return false
-  const minutes = now.getHours() * 60 + now.getMinutes()
-  return minutes >= 9 * 60 + 30 && minutes <= 15 * 60
 }
 
 function isOfficialNavAutoRefreshWindow() {
