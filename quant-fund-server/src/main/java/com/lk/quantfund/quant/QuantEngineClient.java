@@ -11,6 +11,8 @@ import java.util.List;
 
 public interface QuantEngineClient {
 
+    com.fasterxml.jackson.databind.JsonNode navTechnical(String operation, Object request);
+
     QuantAnalyzeResponse analyze(QuantAnalyzeRequest request);
 
     List<QuantAnalyzeResponse> analyzeBatch(List<QuantAnalyzeRequest> requests);

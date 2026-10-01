@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { analyzeFundTechnicals, shanghaiDateTime } from './fundTechnicalAdvice'
+import { analyzeFundTechnicals, shanghaiDateTime } from './fundTechnicalAdvice.reference'
 import type { QuoteNav } from './fundQuote'
 import type { MarketSessionStatus } from '@/types/domain'
 const now = new Date('2026-09-30T06:00:00Z')

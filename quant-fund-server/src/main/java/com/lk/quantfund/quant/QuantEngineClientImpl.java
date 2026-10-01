@@ -50,6 +50,27 @@ public class QuantEngineClientImpl implements QuantEngineClient {
     }
 
     @Override
+    public com.fasterxml.jackson.databind.JsonNode navTechnical(String operation, Object request) {
+        if (!List.of("analyze", "backtest").contains(operation)) throw new IllegalArgumentException("Unknown NAV operation");
+        try { return post("nav_technical_" + operation, "/api/v1/nav-technical/" + operation, request,
+                com.fasterxml.jackson.databind.JsonNode.class,
+                Duration.ofMillis(properties.getQuantEngine().getBacktestTimeoutMs())); }
+        catch (QuantEngineException ex) {
+            // Expose validation details, not internal connection errors or request bodies.
+            for (Throwable cause = ex; cause != null; cause = cause.getCause()) {
+                String message = cause.getMessage();
+                if (message == null || !message.contains("{\"detail\":")) continue;
+                try {
+                    var detail = new com.fasterxml.jackson.databind.ObjectMapper().readTree(message.substring(message.indexOf("{\"detail\":"))).path("detail");
+                    String reason = detail.isTextual() ? detail.asText() : detail.isArray() && !detail.isEmpty() ? detail.get(0).path("msg").asText() : "回测参数或净值数据无效";
+                    throw new com.lk.quantfund.exception.BusinessException(com.lk.quantfund.enums.ErrorCode.BAD_REQUEST, reason);
+                } catch (com.fasterxml.jackson.core.JsonProcessingException ignored) { break; }
+            }
+            throw new com.lk.quantfund.exception.BusinessException(com.lk.quantfund.enums.ErrorCode.BAD_REQUEST, "技术分析引擎暂不可用，请稍后重试；已保存的回测仍可查看。");
+        }
+    }
+
+    @Override
     public List<QuantAnalyzeResponse> analyzeBatch(List<QuantAnalyzeRequest> requests) {
         QuantAnalyzeBatchRequest batchRequest = new QuantAnalyzeBatchRequest(
                 "qf-batch-" + UUID.randomUUID(),

@@ -8,6 +8,8 @@ async (page) => {
     const { USE_MOCK } = await import('/src/api/http.ts')
     if (!USE_MOCK) throw new Error('Mock dev only')
     const { fundQuoteApi } = await import('/src/api/fundQuote.ts')
+    const { navTechnicalApi } = await import('/src/api/navTechnical.ts')
+    const { analyzeFundTechnicals } = await import('/src/utils/fundTechnicalAdvice.reference.ts')
     const { shanghaiDateTime } = await import('/src/utils/fundTechnicalAdvice.ts')
     const dates = [], d = new Date('2026-09-29T00:00:00Z')
     while (dates.length < 200) { if (d.getUTCDay() !== 0 && d.getUTCDay() !== 6) dates.unshift(d.toISOString().slice(0, 10)); d.setUTCDate(d.getUTCDate() - 1) }
@@ -20,6 +22,8 @@ async (page) => {
     }
     fundQuoteApi.info = async code => ({ fundCode: code, fundName: '测试基金', fundType: 'MIXED' })
     fundQuoteApi.marketStatus = async () => ({ primaryStatusText: 'A股交易中', trading: true, updateTime: shanghaiDateTime(), markets: [{ market: 'A股', statusText: 'A股交易中', trading: true }] })
+    // UI lifecycle fixture only. Python parity/replay is covered by nav-backtest-check.js.
+    navTechnicalApi.analyze = async id => analyzeFundTechnicals({ rows: await fundQuoteApi.nav(String(id)), fundType: 'MIXED', market: await fundQuoteApi.marketStatus(), now: new Date() })
   })
   await page.locator('.holding-quote-link').first().click()
   await page.locator('.fund-quote-chart canvas').waitFor()
@@ -38,7 +42,7 @@ async (page) => {
   assert(await popup.locator('.technical-evidence article').count() === 4, 'Missing numerical evidence')
   assert(await page.evaluate(n => window.adviceQa.calls.length === n + 1, baseline), 'Did not fetch fresh NAV')
   await popup.getByText('计算口径与判断规则 · NAV-TA v1', { exact: true }).click()
-  assert(await popup.getByText(/尚未进行策略回测/).isVisible(), 'Rule limitations missing')
+  assert(await popup.getByText(/单次回测不代表已通过样本外验证/).isVisible(), 'Rule limitations missing')
   await popup.getByText('计算口径与判断规则 · NAV-TA v1', { exact: true }).click()
   await page.screenshot({ path: 'output/playwright/fund-advice-desktop.png', animations: 'disabled' })
   await page.evaluate(() => window.adviceQa.mode = 'short')
