@@ -22,6 +22,7 @@ import { actionPercent, metricTone, money, percent, percentUnsigned, signed, ton
 import type { AiAnalysisReport, FundHolding, MarketSessionStatus, ProfitAnalysis, QuantSignal, StrategySignal } from '@/types/domain'
 
 const store = useDashboardStore()
+const FundCashDialog = defineAsyncComponent(() => import('@/components/fund/FundCashDialog.vue'))
 const FundQuoteDialog = defineAsyncComponent(() => import('@/components/fund/FundQuoteDialog.vue'))
 const quoteOpen = ref(false)
 const quoteHolding = ref<FundHolding | null>(null)
@@ -126,9 +127,6 @@ const overview = computed(() => store.overview)
 const summary = computed(() => overview.value?.summary)
 const cashAccounts = computed(() => summary.value?.accounts || [])
 const cashDialogOpen = ref(false)
-const cashSaving = ref(false)
-const cashAccountId = ref<number>()
-const cashAmountDraft = ref(0)
 const trendPoints = computed<TrendPoint[]>(() => {
   if (activeRange.value === 'TODAY') {
     return intradayTrendPoints.value
@@ -661,35 +659,7 @@ function go(path: string) {
 }
 
 function openCashEditor() {
-  const account = cashAccounts.value[0]
-  if (!account) {
-    ElMessage.warning('暂无可调整现金的账户')
-    return
-  }
-  cashAccountId.value = account.id
-  cashAmountDraft.value = account.cashAmount
   cashDialogOpen.value = true
-}
-
-function syncCashAmountDraft(accountId: number) {
-  const account = cashAccounts.value.find((item) => item.id === accountId)
-  cashAmountDraft.value = account?.cashAmount || 0
-}
-
-async function saveCashAmount() {
-  if (!cashAccountId.value || !Number.isFinite(cashAmountDraft.value) || cashAmountDraft.value < 0) {
-    ElMessage.warning('请输入有效的现金金额')
-    return
-  }
-  cashSaving.value = true
-  try {
-    await quantApi.updatePortfolioCash(cashAccountId.value, cashAmountDraft.value)
-    await store.fetchOverview()
-    cashDialogOpen.value = false
-    ElMessage.success('现金金额已更新')
-  } finally {
-    cashSaving.value = false
-  }
 }
 </script>
 
@@ -932,38 +902,7 @@ async function saveCashAmount() {
       </div>
     </div>
     <FundQuoteDialog v-if="quoteHolding" v-model="quoteOpen" :holding="overview.topHoldings.find(item => item.id === quoteHolding?.id) || quoteHolding" :holdings="overview.topHoldings" @select="quoteHolding = $event" />
-    <el-dialog v-model="cashDialogOpen" title="调整现金" width="440px">
-      <div class="cash-editor-form">
-        <label v-if="cashAccounts.length > 1">
-          <span>账户</span>
-          <el-select v-model="cashAccountId" @change="syncCashAmountDraft">
-            <el-option
-              v-for="account in cashAccounts"
-              :key="account.id"
-              :label="account.accountName"
-              :value="account.id"
-            />
-          </el-select>
-        </label>
-        <label>
-          <span>现金金额（元）</span>
-          <el-input-number
-            v-model="cashAmountDraft"
-            :min="0"
-            :precision="2"
-            :step="100"
-            controls-position="right"
-          />
-        </label>
-        <p>总资产将按“现金 + 持仓市值”自动重算，持仓收益与成本计算保持不变。</p>
-      </div>
-      <template #footer>
-        <button class="secondary-button" type="button" @click="cashDialogOpen = false">取消</button>
-        <button class="primary-button" type="button" :disabled="cashSaving" @click="saveCashAmount">
-          {{ cashSaving ? '保存中…' : '保存现金' }}
-        </button>
-      </template>
-    </el-dialog>
+    <FundCashDialog v-model="cashDialogOpen" :accounts="cashAccounts" @saved="store.fetchOverview()" />
   </div>
 </template>
 

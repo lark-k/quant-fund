@@ -73,6 +73,9 @@ public class FundHoldingServiceImpl implements FundHoldingService {
     @org.springframework.beans.factory.annotation.Autowired
     private com.lk.quantfund.service.CumulativeProfitService cumulativeProfitService;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.lk.quantfund.service.FundCashService fundCashService;
+
     public FundHoldingServiceImpl(FundHoldingMapper fundHoldingMapper,
                                   FundEstimateIntradayMapper fundEstimateIntradayMapper,
                                   PortfolioAccountMapper portfolioAccountMapper,
@@ -169,6 +172,10 @@ public class FundHoldingServiceImpl implements FundHoldingService {
     public FundHoldingVO clear(Long holdingId, ClearHoldingRequest request) {
         Long userId = UserContext.getUserId();
         FundHolding holding = loadOwnedHolding(userId, holdingId);
+        if (fundCashService != null) {
+            fundCashService.lock(userId, holding.getAccountId());
+            holding = loadOwnedHolding(userId, holdingId);
+        }
         BigDecimal clearedAmount = valueOrZero(holding.getHoldingAmount());
         BigDecimal clearedShare = valueOrZero(holding.getHoldingShare());
         BigDecimal clearedNav = clearNav(holding, clearedAmount, clearedShare);
@@ -178,7 +185,7 @@ public class FundHoldingServiceImpl implements FundHoldingService {
         LocalDateTime now = LocalDateTime.now();
         if (clearedAmount.compareTo(BigDecimal.ZERO) > 0 || clearedShare.compareTo(BigDecimal.ZERO) > 0) {
             insertClearTrade(userId, holding, tradeAmount, clearedShare, clearedNav, tradeFee, remark, now);
-            portfolioAccountService.adjustCashAmountOwnedAccount(
+            if (fundCashService == null) portfolioAccountService.adjustCashAmountOwnedAccount(
                     userId,
                     holding.getAccountId(),
                     maxZero(tradeAmount.subtract(tradeFee))
@@ -223,6 +230,7 @@ public class FundHoldingServiceImpl implements FundHoldingService {
         record.setUpdateTime(now);
         record.setDeleted(0);
         tradeRecordMapper.insert(record);
+        if (fundCashService != null) fundCashService.completed(record);
         if (cumulativeProfitService != null) cumulativeProfitService.completedTrade(holding, record, now.toLocalDate());
     }
 

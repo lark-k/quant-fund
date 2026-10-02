@@ -45,6 +45,28 @@ import org.mockito.Mockito;
 
 class FundHoldingServiceImplTest {
 
+    @Test
+    void clearingHoldingCreditsItsFundCashWithoutDoubleCredit() {
+        var h = holding();
+        when(holdingMapper.selectOne(any())).thenReturn(h);
+        when(accountMapper.selectById(any())).thenReturn(account());
+        when(valuationService.estimate(any(), any(), any(), any())).thenReturn(new FundValuationResult("TEST", BigDecimal.ZERO, "TEST", "TEST", "TEST"));
+        var service = service(LocalDateTime.of(2026, 10, 2, 12, 0));
+        var cash = mock(com.lk.quantfund.service.FundCashService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "fundCashService", cash);
+        when(cash.completed(any())).thenReturn(true);
+        try (MockedStatic<UserContext> context = Mockito.mockStatic(UserContext.class)) {
+            context.when(UserContext::getUserId).thenReturn(1L);
+            service.clear(100L, null);
+        }
+        var record = ArgumentCaptor.forClass(TradeRecord.class);
+        verify(cash).completed(record.capture());
+        assertThat(record.getValue().getTradeType()).isEqualTo("SELL");
+        assertThat(record.getValue().getFundCode()).isEqualTo(h.getFundCode());
+        verify(portfolioAccountService, never()).adjustCashAmountOwnedAccount(any(), any(), any());
+        assertThat(h.getHoldingAmount()).isZero();
+    }
+
     private final FundHoldingMapper holdingMapper = mock(FundHoldingMapper.class);
     private final FundEstimateIntradayMapper fundEstimateIntradayMapper = mock(FundEstimateIntradayMapper.class);
     private final PortfolioAccountMapper accountMapper = mock(PortfolioAccountMapper.class);

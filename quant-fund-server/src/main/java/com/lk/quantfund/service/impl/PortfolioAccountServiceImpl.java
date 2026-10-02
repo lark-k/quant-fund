@@ -36,6 +36,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class PortfolioAccountServiceImpl implements PortfolioAccountService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.lk.quantfund.service.FundCashService fundCashService;
 
     private static final BigDecimal ZERO = BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP);
     private static final BigDecimal ONE_HUNDRED = new BigDecimal("100.0000");
@@ -92,6 +94,10 @@ public class PortfolioAccountServiceImpl implements PortfolioAccountService {
     @Transactional(rollbackFor = Exception.class)
     public PortfolioAccountVO updateCashAmount(Long accountId, UpdateCashAmountRequest request) {
         Long userId = UserContext.getUserId();
+        if (fundCashService != null) {
+            fundCashService.lock(userId, accountId);
+            if (fundCashService.initialized(accountId)) throw new BusinessException(ErrorCode.BAD_REQUEST, "请通过基金现金分配调整余额");
+        }
         PortfolioAccount account = loadOwnedAccount(userId, accountId);
         account.setCashAmount(scale(request.cashAmount()));
         account.setUpdateTime(LocalDateTime.now());
@@ -182,6 +188,7 @@ public class PortfolioAccountServiceImpl implements PortfolioAccountService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void recalculateOwnedAccount(Long userId, Long accountId) {
+        if (fundCashService != null) fundCashService.lock(userId, accountId);
         PortfolioAccount account = loadOwnedAccount(userId, accountId);
         List<FundHolding> holdings = fundHoldingMapper.selectList(new LambdaQueryWrapper<FundHolding>()
                 .eq(FundHolding::getUserId, userId)

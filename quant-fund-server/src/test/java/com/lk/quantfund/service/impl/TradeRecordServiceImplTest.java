@@ -39,6 +39,47 @@ import org.mockito.Mockito;
 class TradeRecordServiceImplTest {
 
     @Test
+    void completedBuyUsesFundCashOnceAndSkipsLegacyAccountDeduction() {
+        var trades = mock(TradeRecordMapper.class);
+        var holdings = mock(FundHoldingMapper.class);
+        var accounts = mock(PortfolioAccountMapper.class);
+        var portfolios = mock(PortfolioAccountService.class);
+        when(accounts.selectOne(any())).thenReturn(account());
+        when(holdings.selectOne(any())).thenReturn(holding());
+        var service = service(trades, holdings, accounts, portfolios);
+        var cash = mock(com.lk.quantfund.service.FundCashService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "fundCashService", cash);
+        when(cash.completed(any())).thenReturn(true);
+        try (MockedStatic<UserContext> context = Mockito.mockStatic(UserContext.class)) {
+            context.when(UserContext::getUserId).thenReturn(1L);
+            service.create(completedRequest("BUY", "120.00", "100.0000", "1.2000", "1.50"));
+        }
+        var record = ArgumentCaptor.forClass(TradeRecord.class);
+        verify(cash).completed(record.capture());
+        assertThat(record.getValue().getFundCode()).isEqualTo("000001");
+        assertThat(record.getValue().getTradeAmount()).isEqualByComparingTo("120");
+        assertThat(record.getValue().getTradeFee()).isEqualByComparingTo("1.5");
+        verify(portfolios, never()).adjustCashAmountOwnedAccount(any(), any(), any());
+        verify(holdings).updateById(any(FundHolding.class));
+    }
+
+    @Test
+    void mismatchedHoldingAndFundCannotDebitAnotherFund() {
+        var trades = mock(TradeRecordMapper.class);
+        var holdings = mock(FundHoldingMapper.class);
+        var accounts = mock(PortfolioAccountMapper.class);
+        var other = holding(); other.setFundCode("999999");
+        when(accounts.selectOne(any())).thenReturn(account());
+        when(holdings.selectOne(any())).thenReturn(other);
+        var service = service(trades, holdings, accounts, mock(PortfolioAccountService.class));
+        try (MockedStatic<UserContext> context = Mockito.mockStatic(UserContext.class)) {
+            context.when(UserContext::getUserId).thenReturn(1L);
+            assertThatThrownBy(() -> service.create(completedRequest("BUY", "120", "100", "1.2", "0"))).isInstanceOf(BusinessException.class);
+        }
+        verify(trades, never()).insert(any(TradeRecord.class));
+    }
+
+    @Test
     void createShouldRejectMissingTradeType() {
         TradeRecordServiceImpl tradeRecordService = new TradeRecordServiceImpl(
                 mock(TradeRecordMapper.class),
@@ -113,7 +154,7 @@ class TradeRecordServiceImplTest {
         inHolding.setFundCode("000002");
         inHolding.setFundName("Target Fund");
         when(accountMapper.selectOne(any())).thenReturn(account());
-        when(holdingMapper.selectOne(any())).thenReturn(outHolding, outHolding, outHolding, inHolding);
+        when(holdingMapper.selectOne(any())).thenReturn(outHolding, outHolding, inHolding);
         doAnswer(invocation -> {
             TradeRecord record = invocation.getArgument(0);
             record.setId(record.getTradeType().equals("CONVERT_OUT") ? 200L : 201L);

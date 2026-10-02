@@ -53,6 +53,11 @@ public class TradeRecordServiceImpl implements TradeRecordService {
     @org.springframework.beans.factory.annotation.Autowired
     private com.lk.quantfund.service.CumulativeProfitService cumulativeProfitService;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.lk.quantfund.service.FundCashService fundCashService;
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.transaction.PlatformTransactionManager transactionManager;
+
     public TradeRecordServiceImpl(TradeRecordMapper tradeRecordMapper,
                                   FundHoldingMapper fundHoldingMapper,
                                   PortfolioAccountMapper portfolioAccountMapper,
@@ -70,6 +75,7 @@ public class TradeRecordServiceImpl implements TradeRecordService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public TradeRecordVO create(TradeRecordRequest request) {
         if (request.tradeType() == null) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "trade type is required");
@@ -83,6 +89,7 @@ public class TradeRecordServiceImpl implements TradeRecordService {
         Long userId = UserContext.getUserId();
         ensurePositiveAmount(request.tradeAmount());
         ensureAccountOwned(userId, request.accountId());
+        if (fundCashService != null) fundCashService.lock(userId, request.accountId());
         TradeStatus status = request.tradeStatus() == null ? TradeStatus.COMPLETED : request.tradeStatus();
         validateRelatedTrade(userId, request, tradeType);
         FundHolding holding = resolveHoldingForTrade(userId, request, tradeType);
@@ -138,6 +145,10 @@ public class TradeRecordServiceImpl implements TradeRecordService {
     @Transactional(rollbackFor = Exception.class)
     public void deleteProcessing(Long tradeId) {
         TradeRecord record = loadOwnedTrade(UserContext.getUserId(), tradeId);
+        if (fundCashService != null) {
+            fundCashService.lock(record.getUserId(), record.getAccountId());
+            record = loadOwnedTrade(UserContext.getUserId(), tradeId);
+        }
         if (!TradeStatus.PROCESSING.name().equals(record.getTradeStatus())) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "only pending trade record can be deleted");
         }
@@ -230,7 +241,14 @@ public class TradeRecordServiceImpl implements TradeRecordService {
                 .orderByAsc(TradeRecord::getTradeTime));
         for (TradeRecord record : records) {
             try {
-                if (settleProcessingTrade(record, today)) {
+                boolean settled;
+                if (transactionManager == null) settled = settleProcessingTrade(record, today);
+                else {
+                    var tx = new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+                    tx.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+                    settled = Boolean.TRUE.equals(tx.execute(status -> settleProcessingTrade(record, today)));
+                }
+                if (settled) {
                     result.success();
                 }
             } catch (RuntimeException exception) {
@@ -241,6 +259,13 @@ public class TradeRecordServiceImpl implements TradeRecordService {
     }
 
     private boolean settleProcessingTrade(TradeRecord record, LocalDate today) {
+        if (fundCashService != null) {
+            fundCashService.lock(record.getUserId(), record.getAccountId());
+            record = tradeRecordMapper.selectOne(new LambdaQueryWrapper<TradeRecord>()
+                    .eq(TradeRecord::getId, record.getId()).eq(TradeRecord::getUserId, record.getUserId())
+                    .last("LIMIT 1 FOR UPDATE"));
+            if (record == null || !TradeStatus.PROCESSING.name().equals(record.getTradeStatus())) return false;
+        }
         TradeSettlement settlement = tradeSettlement(record);
         if (today.isBefore(settlement.settleDate())) {
             return false;
@@ -275,6 +300,9 @@ public class TradeRecordServiceImpl implements TradeRecordService {
             FundHolding holding = ensureHoldingOwned(userId, request.holdingId());
             if (!holding.getAccountId().equals(request.accountId())) {
                 throw new BusinessException(ErrorCode.BAD_REQUEST, "holding does not belong to the selected account");
+            }
+            if (!holding.getFundCode().equals(request.fundCode().trim())) {
+                throw new BusinessException(ErrorCode.BAD_REQUEST, "基金代码与持仓不一致");
             }
             return holding;
         }
@@ -485,6 +513,7 @@ public class TradeRecordServiceImpl implements TradeRecordService {
     }
 
     private void applyCompletedTrade(Long userId, TradeRecord record, FundHolding holding) {
+        if (fundCashService != null && !fundCashService.completed(record)) return;
         TradeType tradeType = TradeType.valueOf(record.getTradeType());
         if (isIncreaseTrade(tradeType)) {
             FundHolding target = holding == null ? createHoldingFromTrade(userId, record) : holding;
@@ -494,7 +523,7 @@ public class TradeRecordServiceImpl implements TradeRecordService {
             fundHoldingMapper.updateById(target);
             record.setHoldingId(target.getId());
             tradeRecordMapper.updateById(record);
-            portfolioAccountService.adjustCashAmountOwnedAccount(
+            if (fundCashService == null) portfolioAccountService.adjustCashAmountOwnedAccount(
                     userId,
                     record.getAccountId(),
                     valueOrZero(record.getTradeAmount()).add(valueOrZero(record.getTradeFee())).negate()
@@ -505,7 +534,7 @@ public class TradeRecordServiceImpl implements TradeRecordService {
         decreaseHolding(holding, record);
         if (cumulativeProfitService != null) cumulativeProfitService.completedTrade(holding, record, applicationDate(record.getTradeTime()));
         fundHoldingMapper.updateById(holding);
-        portfolioAccountService.adjustCashAmountOwnedAccount(
+        if (fundCashService == null) portfolioAccountService.adjustCashAmountOwnedAccount(
                 userId,
                 record.getAccountId(),
                 maxZero(valueOrZero(record.getTradeAmount()).subtract(valueOrZero(record.getTradeFee())))
