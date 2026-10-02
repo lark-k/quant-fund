@@ -35,8 +35,8 @@ class FundCashServiceTest {
     @BeforeEach void setup() throws Exception {
         jdbc.execute("DROP ALL OBJECTS"); // Dedicated H2 database only.
         jdbc.execute("CREATE TABLE portfolio_account(id BIGINT PRIMARY KEY,user_id BIGINT, cash_amount DECIMAL(20,4),deleted INT DEFAULT 0,update_time TIMESTAMP)");
-        jdbc.execute("CREATE TABLE fund_holding(id BIGINT PRIMARY KEY,user_id BIGINT,account_id BIGINT,fund_code VARCHAR(20),fund_name VARCHAR(200),deleted INT DEFAULT 0)");
-        jdbc.execute("CREATE TABLE trade_record(id BIGINT PRIMARY KEY,user_id BIGINT,account_id BIGINT,fund_code VARCHAR(20),trade_type VARCHAR(30),trade_status VARCHAR(30),trade_amount DECIMAL(20,4),trade_fee DECIMAL(20,4),deleted INT DEFAULT 0)");
+        jdbc.execute("CREATE TABLE fund_holding(id BIGINT PRIMARY KEY,user_id BIGINT,account_id BIGINT,fund_code VARCHAR(20),fund_name VARCHAR(200),holding_share DECIMAL(20,4) DEFAULT 0,holding_amount DECIMAL(20,4) DEFAULT 0,deleted INT DEFAULT 0)");
+        jdbc.execute("CREATE TABLE trade_record(id BIGINT PRIMARY KEY,user_id BIGINT,account_id BIGINT,fund_code VARCHAR(20),trade_type VARCHAR(30),trade_status VARCHAR(30),trade_amount DECIMAL(20,4),trade_fee DECIMAL(20,4),trade_time TIMESTAMP,update_time TIMESTAMP,related_trade_id BIGINT,deleted INT DEFAULT 0)");
         for(String sql:Files.readString(Path.of("../docs/sql/014_fund_cash.sql")).split(";")) if(!sql.isBlank()) jdbc.execute(sql);
         jdbc.update("INSERT INTO portfolio_account(id,user_id,cash_amount) VALUES(10,1,1000),(20,2,400)");
         jdbc.update("INSERT INTO fund_holding(id,user_id,account_id,fund_code,fund_name) VALUES(1,1,10,'000001','基金甲'),(2,1,10,'000002','基金乙'),(3,2,20,'000001','他人基金')");
@@ -125,5 +125,33 @@ class FundCashServiceTest {
             assertThat(List.of(a.get(10,TimeUnit.SECONDS),b.get(10,TimeUnit.SECONDS))).containsExactlyInAnyOrder(true,false);
         }
         assertThat(balance("000001")).isEqualByComparingTo("500");
+    }
+    @Test void analysisSnapshotAggregatesOnlyOwnedFundAndNeverMutatesMoneyOrTrades() {
+        var before=allocate();
+        jdbc.update("UPDATE fund_holding SET holding_share=10,holding_amount=20 WHERE id=1");
+        jdbc.update("INSERT INTO fund_holding(id,user_id,account_id,fund_code,fund_name,holding_share,holding_amount) VALUES(4,1,10,'000001','同基金',5,10)");
+        jdbc.update("INSERT INTO trade_record(id,user_id,account_id,fund_code,trade_type,trade_status,trade_time,update_time) VALUES(1,1,10,'000001','BUY','COMPLETED','2026-09-20 10:00:00','2026-09-22 10:00:00'),(2,1,10,'000002','BUY','PROCESSING','2026-09-30 10:00:00','2026-09-30 10:00:00')");
+        int events=jdbc.queryForObject("SELECT COUNT(*) FROM fund_cash_event",Integer.class);
+        for(int i=0;i<2;i++) {
+            var context=service.analysisContext(1L,10L,"000001");
+            assertThat(context.cashBalance()).isEqualByComparingTo("600");
+            assertThat(context.holdingShares()).isEqualByComparingTo("15");
+            assertThat(context.holdingAmount()).isEqualByComparingTo("30");
+            assertThat(context.lastTradeDate()).isEqualTo("2026-09-22");
+            assertThat(context.pendingTrades()).isZero();
+        }
+        assertThat(service.get(1L,10L)).isEqualTo(before);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM fund_cash_event",Integer.class)).isEqualTo(events);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM trade_record",Integer.class)).isEqualTo(2);
+        assertThatThrownBy(()->service.analysisContext(2L,10L,"000001")).isInstanceOf(BusinessException.class);
+        jdbc.update("UPDATE trade_record SET related_trade_id=1 WHERE id=2");
+        assertThat(service.analysisContext(1L,10L,"000001").pendingTrades()).isEqualTo(1);
+    }
+    @Test void analysisDoesNotInitializeAnUnallocatedLegacyAccount() {
+        var context=service.analysisContext(1L,10L,"000001");
+        assertThat(context.cashBalance()).isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM fund_cash_account",Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM fund_cash_balance",Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("SELECT cash_amount FROM portfolio_account WHERE id=10",BigDecimal.class)).isEqualByComparingTo("1000");
     }
 }

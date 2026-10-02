@@ -17,6 +17,17 @@ class Nav(BaseModel):
     sourceName: str | None = None
 
 
+class ExecutionContext(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False, extra='forbid')
+    cashBalance: float
+    holdingShares: float = Field(ge=0)
+    holdingAmount: float = Field(ge=0)
+    pendingTrades: int = Field(ge=0)
+    lastTradeDate: date | None = None
+    snapshotVersion: int = Field(ge=0)
+    snapshotAt: datetime
+
+
 class AnalysisRequest(BaseModel):
     rows: list[Nav] = Field(max_length=4000)
     fundType: str
@@ -24,6 +35,7 @@ class AnalysisRequest(BaseModel):
     trading: bool
     hasHolding: bool = True
     tradingDates: list[str] | None = Field(default=None, max_length=4000)
+    execution: ExecutionContext | None = None
 
 
 class ReplayRequest(BaseModel):
@@ -60,7 +72,8 @@ class ReplayRequest(BaseModel):
 
 @router.post('/analyze')
 def analyze_endpoint(request: AnalysisRequest):
-    return live_analysis([r.model_dump(mode='json') for r in request.rows], request.fundType, request.evaluatedAt, request.trading, request.hasHolding, request.tradingDates)
+    return live_analysis([r.model_dump(mode='json') for r in request.rows], request.fundType, request.evaluatedAt, request.trading, request.hasHolding, request.tradingDates,
+                         request.execution.model_dump(mode='json') if request.execution else None)
 
 
 @router.post('/backtest')

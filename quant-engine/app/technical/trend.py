@@ -127,13 +127,13 @@ RULES = [
     '回撤刹车：距最近 60 点最高值回撤至少 18%，且低于 MA20，转为 20%；刹车后恢复还需连续 3 点高于 MA20 且 MA20 高于 5 点前。',
     '未形成新确认时保持既有目标；不因 RSI 偏高或一次 MACD 死叉单独减仓。',
     '执行须偏离目标超过 5 个百分点，且距上次实际成交至少 3 个净值观察日；每次最多使用 50% 可用现金或卖出 50% 已确认份额，向目标调节。查询建议不视为成交。',
-    '目标比例相对该基金专属策略资金，非全部账户资金。实时窗口未登记策略现金与执行台账，只提供条件式方向；回测按独立模拟账本执行。',
+    '目标比例相对该基金持仓与专属现金，非全部账户资金。接入基金资金账本时计算执行参考金额；未接入时仅提供条件式方向。回测按独立模拟账本执行。',
     '回测默认期初 100%、申购费 0.15%、分档赎回费 1.5% / 0.5% / 0%；披露国内 1 / QDII 2 点，确认 1 点，到账 3 点。这些是假设，可编辑，不是实际费用。',
     '该版本经用户审核启用；历史比较参与过选参，不能视为独立样本外验证。收益与回撤可能均扩大。'
 ]
 
 
-def live_analysis(rows, fund_type, now, trading=True, has_holding=True, trading_dates=None):
+def live_analysis(rows, fund_type, now, trading=True, has_holding=True, trading_dates=None, execution=None):
     """Reconstruct the latched trend state, never infer per-fund cash from account wealth.
 
     Live NAVs are already disclosed. Historical state uses the same conservative
@@ -183,4 +183,7 @@ def live_analysis(rows, fund_type, now, trading=True, has_holding=True, trading_
         dict(label='执行条件待核对', value='仓位偏离 >5 个百分点 · 成交间隔 ≥3 点', tone='neutral', explanation='未登记该基金专属现金、待到账款、已确认份额与最近策略成交，不能核实仓位或冷却期。以上为条件式建议，无具体下单金额。'),
         dict(label='MACD / RSI / 周 K', value=quality['evidence'][1]['value'] + ' · ' + quality['evidence'][3]['value'], tone='neutral', explanation='趋势仍成立时不因 RSI 偏高提前卖出；趋势恢复后允许按目标分批重新买入。')]
     signal['notes'] += [f"历史目标从 {signal['stateStart']} 起重建，初始目标 100%；不同起点的回测在确认趋势前可能不同。", '100% / 20% 相对单只基金策略资金，不能直接套用到账户总资产。真实成交需自行核对份额、费用和到账时间。', '历史选参结果并非独立样本外业绩，不保证提高未来收益。']
+    if execution is not None:
+        from app.technical.execution import attach_execution
+        return attach_execution(signal, policy, ordered, fund_type, now, trading, execution)
     return signal

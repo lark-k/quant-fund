@@ -27,6 +27,8 @@ public class NavTechnicalService {
     private final QuantFundProperties properties;
     private final ObjectMapper json;
     private final JdbcTemplate jdbc;
+    @org.springframework.beans.factory.annotation.Autowired
+    private FundCashService fundCashService;
     private static final ZoneId ZONE = ZoneId.of("Asia/Shanghai");
 
     public NavTechnicalService(FundHoldingMapper holdings, FundQueryService funds, TradingCalendarService calendar,
@@ -71,6 +73,13 @@ public class NavTechnicalService {
         var dates = body.putArray("tradingDates");
         now.toLocalDate().minusYears(2).datesUntil(now.toLocalDate().plusDays(1))
                 .filter(calendar::isTradingDay).forEach(day -> dates.add(day.toString()));
+        if (fundCashService != null) {
+            var latest = owned(holdingId);
+            if (!Objects.equals(holding.getFundCode(), latest.getFundCode()) || !Objects.equals(holding.getAccountId(), latest.getAccountId()))
+                throw new BusinessException(ErrorCode.REPEAT_SUBMIT, "持仓所属基金或账户已变化，请重新打开后分析");
+            holding = latest;
+            body.set("execution", json.valueToTree(fundCashService.analysisContext(holding.getUserId(),holding.getAccountId(),holding.getFundCode())));
+        }
         return engine.navTechnical("analyze", body);
     }
 

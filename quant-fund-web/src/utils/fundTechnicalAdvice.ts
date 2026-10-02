@@ -3,6 +3,14 @@ export type TechnicalAction = 'BUY' | 'REDUCE' | 'HOLD' | 'WATCH' | 'UNAVAILABLE
 export interface TechnicalEvidence { label: string; value: string; explanation: string; tone: 'bull' | 'bear' | 'neutral' }
 export const currentTechnicalVersion = 'NAV-TA v3.1-trend' as const
 export const currentTechnicalRuleId = 'T70-B2-F20-S18-I3'
+export interface TechnicalExecution {
+  cashBalance: number; holdingShares: number; holdingAmount: number; referenceNav: number; navDate: string
+  strategyAssets: number; currentWeight: number | null; targetWeight: number; pendingTrades: number
+  lastTradeDate: string | null; observationsSinceTrade: number | null; requiredInterval: number
+  snapshotVersion: number; snapshotAt: string; suggestedAmount: number; suggestedShares: number
+  estimatedHoldingAfter: number; estimatedCashAfter: number; direction: 'BUY' | 'SELL' | 'NONE'
+  status: string; reason: string; sizingVersion: string
+}
 export interface TechnicalAdvice {
   ruleVersion?: string
   ruleId?: string
@@ -11,6 +19,7 @@ export interface TechnicalAdvice {
   executionReady?: boolean
   executionStatus?: string
   timingNotice?: string
+  execution?: TechnicalExecution
   action: TechnicalAction
   title: string
   explanation: string

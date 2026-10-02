@@ -40,7 +40,7 @@ class NavTechnicalServiceTest {
         return new NavBacktestRequest(LocalDate.of(2025,1,1), LocalDate.of(2025,12,31), new BigDecimal("10000"), new BigDecimal("25"), new BigDecimal("50"), new BigDecimal("0.15"), new BigDecimal("1.5"), new BigDecimal("0.5"), BigDecimal.ZERO,1,1,3,null,null);
     }
     void setupHolding() {
-        FundHolding h = new FundHolding(); h.setId(3L); h.setUserId(7L); h.setFundCode("021180"); h.setFundName("测试基金"); h.setHoldingShare(BigDecimal.TEN);
+        FundHolding h = new FundHolding(); h.setId(3L); h.setUserId(7L); h.setAccountId(12L); h.setFundCode("021180"); h.setFundName("测试基金"); h.setHoldingShare(BigDecimal.TEN);
         when(holdings.selectOne(any(LambdaQueryWrapper.class))).thenReturn(h);
         when(funds.getBasicInfo("021180")).thenReturn(new FundBasicInfoDTO("021180","测试基金","MIXED",true,null,null,null,null,null,"TEST"));
         when(funds.getHistoricalNav(anyString(),any(),any())).thenReturn(List.of());
@@ -95,6 +95,36 @@ class NavTechnicalServiceTest {
             assertThat(validator.validate(json.convertValue(approved, NavBacktestRequest.class))).isEmpty();
             ((ObjectNode) approved).put("ruleVersion", "NAV-TA v9");
             assertThat(validator.validate(json.convertValue(approved, NavBacktestRequest.class))).isNotEmpty();
+        }
+    }
+    @Test void analysisPassesOwnedFundSnapshotWithoutCallingAnyCashMutation() {
+        setupHolding();
+        var cash=mock(FundCashService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service,"fundCashService",cash);
+        when(cash.analysisContext(7L,12L,"021180")).thenReturn(new FundCashService.AnalysisContext(
+            new BigDecimal("123.45"),BigDecimal.TEN,new BigDecimal("20"),0,null,2,"2026-10-02T12:00:00"));
+        try(var context=mockStatic(UserContext.class)) {
+            context.when(UserContext::getUserId).thenReturn(7L);
+            when(engine.navTechnical(eq("analyze"),any())).thenReturn(json.createObjectNode());
+            service.analyze(3);
+            var body=ArgumentCaptor.forClass(Object.class);
+            verify(engine).navTechnical(eq("analyze"),body.capture());
+            assertThat(((ObjectNode)body.getValue()).path("execution").path("cashBalance").decimalValue()).isEqualByComparingTo("123.45");
+            verify(cash).analysisContext(7L,12L,"021180");
+            verifyNoMoreInteractions(cash);
+        }
+    }
+    @Test void fundChangedDuringNavFetchCannotMixItsCashWithOldFundPrices() {
+        setupHolding();
+        var cash=mock(FundCashService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service,"fundCashService",cash);
+        var initial=new FundHolding();initial.setId(3L);initial.setUserId(7L);initial.setAccountId(12L);initial.setFundCode("021180");
+        var changed=new FundHolding();changed.setId(3L);changed.setUserId(7L);changed.setAccountId(12L);changed.setFundCode("016874");
+        when(holdings.selectOne(any(LambdaQueryWrapper.class))).thenReturn(initial,changed);
+        try(var context=mockStatic(UserContext.class)) {
+            context.when(UserContext::getUserId).thenReturn(7L);
+            assertThatThrownBy(()->service.analyze(3)).isInstanceOf(BusinessException.class).hasMessageContaining("已变化");
+            verifyNoInteractions(cash,engine);
         }
     }
 }
