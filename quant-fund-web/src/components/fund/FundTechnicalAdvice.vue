@@ -57,11 +57,13 @@ onBeforeUnmount(stop)
       <div v-if="loading" class="technical-loading" role="status">正在读取正式净值，核对 MA70 趋势、回撤刹车与恢复条件…</div>
       <p v-else-if="error" class="technical-alert" role="alert">{{ error }}</p>
       <template v-else-if="advice">
-        <div class="technical-result" :data-action="expired ? 'UNAVAILABLE' : advice.action">
+        <div class="technical-result" :data-action="advice.action">
           <span class="technical-kicker">{{ advice.evaluatedAt.slice(0, 10) }} · {{ expired ? '结果待更新' : '技术规则参考 · 可查看历史回测' }}</span>
-          <h3>{{ expired ? '结果已过期，请重新分析' : advice.title }}</h3>
-          <p>{{ expired ? '结果已超过 15 分钟或日期已变化。点击重新分析，读取最新正式净值后再判断。' : advice.explanation }}</p>
+          <h3>{{ advice.title }}</h3>
+          <p>{{ advice.explanation }}</p>
         </div>
+        <p v-if="advice.timingNotice" class="technical-notes" role="note">{{ advice.timingNotice }}</p>
+        <p v-if="expired" class="technical-notes" role="note">结果生成已超过 15 分钟或日期已变化，仍可查看原分析；需要最新数据时请点击“重新分析”。</p>
         <div class="technical-meta"><span>规则 <b>{{ advice.ruleVersion || 'NAV-TA v1' }}</b></span><span v-if="advice.ruleId">{{ advice.ruleId }}</span><span>净值截至 <b>{{ advice.asOf }}</b></span><span>分析样本 <b>{{ advice.sampleCount }} 个净值点</b></span><span>生成于 {{ advice.evaluatedAt }}（北京时间）</span></div>
         <ul v-if="advice.blockers.length" class="technical-blockers"><li v-for="reason in advice.blockers" :key="reason">{{ reason }}</li></ul>
         <template v-else>

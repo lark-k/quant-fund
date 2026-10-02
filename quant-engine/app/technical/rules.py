@@ -24,7 +24,7 @@ def ema(values, period):
     return result
 
 
-def analyze(rows, fund_type, now, trading=True, rule_version=VERSION):
+def analyze(rows, fund_type, now, trading=True, rule_version=VERSION, *, enforce_timing=True):
     if rule_version not in (VERSION, BALANCED_VERSION):
         raise ValueError('未知技术规则版本')
     balanced = rule_version == BALANCED_VERSION
@@ -40,7 +40,7 @@ def analyze(rows, fund_type, now, trading=True, rule_version=VERSION):
         block(f'基金类型「{fund_type}」不适用当前权益趋势规则。')
     elif ft not in SUPPORTED and not any(x in ft for x in ['股票', '混合', '指数', '权益', 'QDII']):
         block(f'基金类型「{fund_type}」尚未识别，暂无法确认分析适用性。')
-    if not trading:
+    if enforce_timing and not trading:
         block('系统日历显示今日为 A 股非交易日，本功能暂停今日买卖建议。')
     seen = {}
     for row in rows:
@@ -71,7 +71,7 @@ def analyze(rows, fund_type, now, trading=True, rule_version=VERSION):
     lag = (today - date.fromisoformat(latest['date'])).days
     weekdays = sum((today - timedelta(days=i)).weekday() < 5 for i in range(max(0, min(lag, 7))))
     qdii_delay = balanced and 'QDII' in ft
-    if lag > (6 if qdii_delay else 4) or weekdays > (2 if qdii_delay else 1):
+    if enforce_timing and (lag > (6 if qdii_delay else 4) or weekdays > (2 if qdii_delay else 1)):
         block(f"最新净值为 {latest['date']}，超过本功能的新鲜度门槛；刷新后再分析。")
     if len(rows) < 120:
         block(f'仅有 {len(rows)} 个日净值点，至少需要 120 个用于均线、MACD 与周线分析。')

@@ -48,12 +48,12 @@ class Policy:
         self.last_trade = index
 
     def decide(self, rows, fund_type, now, trading, *, index, cash, units, eligible, unsettled,
-               known_price, buy_percent, sell_percent, fee_rate, holding_value=None):
+               known_price, buy_percent, sell_percent, fee_rate, holding_value=None, enforce_timing=True):
         c = self.config
         # Cache is owned by one fund/snapshot/delay research run; never shared across datasets.
-        key = (tuple((r.get('date'), r.get('nav'), r.get('dailyGrowthRate'), r.get('sourceName')) for r in rows), now, trading, fund_type)
+        key = (tuple((r.get('date'), r.get('nav'), r.get('dailyGrowthRate'), r.get('sourceName')) for r in rows), now, trading, fund_type, enforce_timing)
         if key not in self.cache:
-            quality = analyze(rows, fund_type, now, trading, rule_version=BALANCED_VERSION)
+            quality = analyze(rows, fund_type, now, trading, rule_version=BALANCED_VERSION, enforce_timing=enforce_timing)
             ordered = sorted({r['date']: r for r in rows}.values(), key=lambda r: r['date'])[-120:]
             values = [ordered[-1]['nav']] if ordered else []
             if quality['action'] != 'UNAVAILABLE':
@@ -121,6 +121,7 @@ class Policy:
 
 RULES = [
     'T70-B2-F20-S18-I3：最近 120 个正式净值点按日收益率前复权；不使用盘中估值。',
+    '技术分析可在非交易日查看，按最新已披露净值计算；净值日期较早仅作提示，不阻断查看。回测仍保留原成交日历与披露延迟约束。',
     '进攻：连续 3 点高于各自 MA70 的 102%，且 MA70 高于 5 点前，策略目标仓位 100%。',
     '防守：连续 3 点低于各自 MA70 的 98%，且 MA70 低于 5 点前，目标仓位 20%。',
     '回撤刹车：距最近 60 点最高值回撤至少 18%，且低于 MA20，转为 20%；刹车后恢复还需连续 3 点高于 MA20 且 MA20 高于 5 点前。',
@@ -139,7 +140,9 @@ def live_analysis(rows, fund_type, now, trading=True, has_holding=True, trading_
     observation lag as replay; current decision reads the latest received NAV.
     No fictional transaction is booked when the user requests a recommendation.
     """
-    quality = analyze(rows, fund_type, now, trading, rule_version=BALANCED_VERSION)
+    # Viewing an as-of NAV analysis is independent of today's execution calendar.
+    # Keep the real evaluation date: future records and other data errors still fail.
+    quality = analyze(rows, fund_type, now, trading, rule_version=BALANCED_VERSION, enforce_timing=False)
     quality.update(ruleVersion=APPROVED_VERSION, ruleId=APPROVED_CONFIG.name,
                    ruleParameters=asdict(APPROVED_CONFIG), rules=RULES, executionReady=False)
     if quality['action'] == 'UNAVAILABLE':
@@ -153,11 +156,17 @@ def live_analysis(rows, fund_type, now, trading=True, has_holding=True, trading_
         day = datetime.combine(datetime.fromisoformat(ordered[i]['date']).date(), time(10))
         policy.decide(ordered[:i-delay+1], fund_type, day, (ordered[i]['date'] in trading_dates if trading_dates is not None else day.weekday() < 5), index=i, **context)
         policy.cache.clear()
-    signal, plan = policy.decide(ordered, fund_type, now, trading, index=len(ordered), **context)
+    signal, plan = policy.decide(ordered, fund_type, now, trading, index=len(ordered), enforce_timing=False, **context)
     signal.update(ruleId=APPROVED_CONFIG.name, ruleParameters=asdict(APPROVED_CONFIG), rules=RULES,
                   executionReady=False, targetWeight=plan['targetWeight'], regime=plan['regime'],
                   stateStart=ordered[119]['date'], stateSamples=len(ordered),
                   executionStatus='MISSING_STRATEGY_LEDGER')
+    nav_age = (now.date() - datetime.fromisoformat(signal['asOf']).date()).days
+    signal['timingNotice'] = f"基于截至 {signal['asOf']} 的已披露净值分析（距查看日 {nav_age} 个自然日），不含此后的行情。"
+    if not trading:
+        signal['timingNotice'] += ' 当前为系统日历非交易日，可查看分析；申赎受理日以基金及平台为准。'
+    if 'QDII' in fund_type.upper():
+        signal['timingNotice'] += ' QDII 净值所属日期与公布日期可能不同。'
     state = signal['trendState']
     if policy.target == APPROVED_CONFIG.floor:
         signal.update(action='REDUCE' if has_holding else 'WATCH',

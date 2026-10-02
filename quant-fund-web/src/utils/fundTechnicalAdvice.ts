@@ -10,6 +10,7 @@ export interface TechnicalAdvice {
   targetWeight?: number
   executionReady?: boolean
   executionStatus?: string
+  timingNotice?: string
   action: TechnicalAction
   title: string
   explanation: string
